@@ -120,20 +120,36 @@ def test_stage0_failure_is_durable_and_uses_a_safe_error_summary(
     )
 
 
-def test_source_write_failure_is_durable_and_removes_partial_source(
+def test_temporary_source_write_failure_is_durable_and_removes_partial_artifact(
     service: PaperIngestionService,
     sample_pdf_bytes: bytes,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Breaks if source-write errors leak, leave work queued, or retain partial data."""
+    """Breaks if partial upload data is published or leaks local write details."""
     original_open = Path.open
 
-    def write_partial_source_then_fail(path: Path, *args, **kwargs):
-        with original_open(path, *args, **kwargs) as source_file:
-            source_file.write(b"partial PDF data")
-        raise OSError("C:/private/source-write-failure.pdf")
+    class PartialWriteFile:
+        def __init__(self, source_file) -> None:
+            self.source_file = source_file
 
-    monkeypatch.setattr(Path, "open", write_partial_source_then_fail)
+        def __enter__(self):
+            self.source_file.__enter__()
+            return self
+
+        def __exit__(self, *args) -> None:
+            self.source_file.__exit__(*args)
+
+        def write(self, _content: bytes) -> int:
+            self.source_file.write(b"partial PDF data")
+            raise OSError("C:/private/source-write-failure.pdf")
+
+    def write_partial_temporary_source_then_fail(path: Path, *args, **kwargs):
+        source_file = original_open(path, *args, **kwargs)
+        if path.suffix == ".tmp":
+            return PartialWriteFile(source_file)
+        return source_file
+
+    monkeypatch.setattr(Path, "open", write_partial_temporary_source_then_fail)
 
     paper = service.ingest(
         UploadPayload(
@@ -161,6 +177,43 @@ def test_source_write_failure_is_durable_and_removes_partial_source(
         ProcessingStatus.queued,
     )
     assert tuple((service.settings.data_dir / "papers").iterdir()) == ()
+
+
+def test_temporary_create_collision_does_not_delete_an_unowned_file(
+    service: PaperIngestionService,
+    sample_pdf_bytes: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Breaks if cleanup removes a file the failed upload never owned."""
+    papers_dir = service.settings.data_dir / "papers"
+    unrelated_file = papers_dir / "unrelated-upload.tmp"
+    unrelated_file.write_bytes(b"other upload")
+    original_open = Path.open
+
+    def reject_temporary_create(path: Path, *args, **kwargs):
+        mode = args[0] if args else kwargs.get("mode", "r")
+        if path.suffix == ".tmp" and "x" in mode:
+            raise FileExistsError("C:/private/temporary-file-collision.tmp")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", reject_temporary_create)
+
+    paper = service.ingest(
+        UploadPayload(
+            filename="paper.pdf",
+            content=sample_pdf_bytes,
+            media_type="application/pdf",
+        )
+    )
+
+    assert paper.status == ProcessingStatus.failed
+    assert paper.stage0_status == ProcessingStatus.failed
+    assert paper.stage1_status == ProcessingStatus.queued
+    assert paper.error == "The PDF source could not be stored."
+    assert "private" not in paper.error
+    assert service.repository.get_processing_error(paper.id) == paper.error
+    assert unrelated_file.read_bytes() == b"other upload"
+    assert not service.get_source_path(paper.id).exists()
 
 
 def test_stage1_failure_keeps_stage0_and_marks_paper_partial(

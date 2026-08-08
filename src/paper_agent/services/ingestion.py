@@ -42,14 +42,20 @@ class PaperIngestionService:
         )
 
         source_path = self.settings.data_dir / "papers" / stored_filename
-        source_existed = source_path.exists()
+        temporary_source_path = source_path.with_name(
+            f".{paper_id}-{uuid4()}.tmp"
+        )
+        temporary_source_owned = False
         try:
-            with source_path.open("xb") as source_file:
+            source_file = temporary_source_path.open("xb")
+            temporary_source_owned = True
+            with source_file:
                 source_file.write(upload.content)
+            temporary_source_path.replace(source_path)
         except OSError:
-            if not source_existed:
+            if temporary_source_owned:
                 try:
-                    source_path.unlink()
+                    temporary_source_path.unlink()
                 except OSError:
                     pass
             self.repository.record_processing_status(
