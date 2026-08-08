@@ -132,8 +132,8 @@ def initialize_database(database_url: str) -> Engine:
     engine = create_database_engine(database_url)
     metadata.create_all(engine)
     if database_url.startswith("sqlite"):
-        _migrate_legacy_papers(engine)
         _migrate_legacy_processing_runs(engine)
+        _migrate_legacy_papers(engine)
     return engine
 
 
@@ -146,6 +146,49 @@ def _migrate_legacy_papers(engine: Engine) -> None:
             connection.exec_driver_sql(
                 "ALTER TABLE papers ADD COLUMN source_published BOOLEAN NOT NULL DEFAULT 0"
             )
+            source_directory = _legacy_source_directory(engine)
+            if source_directory is None:
+                return
+            for paper_id, stored_filename, status in connection.exec_driver_sql(
+                "SELECT id, stored_filename, status FROM papers"
+            ):
+                if not _legacy_source_exists(source_directory, stored_filename):
+                    continue
+                processing_rows = connection.exec_driver_sql(
+                    "SELECT stage, status, error_summary FROM processing_runs WHERE paper_id = ?",
+                    (paper_id,),
+                )
+                stage0_started = False
+                source_storage_failed = False
+                for stage, run_status, error_summary in processing_rows:
+                    stage0_started = stage0_started or (
+                        stage == "stage0" and run_status in {"running", "completed"}
+                    )
+                    source_storage_failed = source_storage_failed or (
+                        error_summary == "The PDF source could not be stored."
+                    )
+                if not source_storage_failed and (
+                    status in {"running", "completed", "partial"} or stage0_started
+                ):
+                    connection.exec_driver_sql(
+                        "UPDATE papers SET source_published = 1 WHERE id = ?",
+                        (paper_id,),
+                    )
+
+
+def _legacy_source_directory(engine: Engine) -> Path | None:
+    database_path = engine.url.database
+    if database_path in (None, ":memory:"):
+        return None
+    return Path(database_path).parent / "papers"
+
+
+def _legacy_source_exists(source_directory: Path, stored_filename: str) -> bool:
+    filename = Path(stored_filename)
+    if filename.is_absolute() or filename.name != stored_filename:
+        return False
+    source_path = source_directory / filename
+    return source_path.is_file() and not source_path.is_symlink()
 
 
 def _migrate_legacy_processing_runs(engine: Engine) -> None:

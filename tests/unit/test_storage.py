@@ -350,6 +350,79 @@ def test_repository_migrates_legacy_processing_runs_and_appends_status(tmp_path:
     assert reopened.get_paper("legacy-paper").source_published is False
 
 
+@pytest.mark.parametrize(
+    ("paper_id", "paper_status", "stage0_status", "stage0_error", "expected_published"),
+    [
+        (
+            "legacy-success",
+            "completed",
+            "completed",
+            None,
+            True,
+        ),
+        (
+            "legacy-source-failure",
+            "failed",
+            "failed",
+            "The PDF source could not be stored.",
+            False,
+        ),
+    ],
+)
+def test_repository_migration_backfills_only_verified_legacy_sources(
+    tmp_path: Path,
+    paper_id: str,
+    paper_status: str,
+    stage0_status: str,
+    stage0_error: str | None,
+    expected_published: bool,
+):
+    """Breaks if a legacy source is hidden or a known failed source is exposed."""
+    database_path = tmp_path / "legacy-sources.db"
+    sources_dir = tmp_path / "papers"
+    sources_dir.mkdir()
+    (sources_dir / f"{paper_id}.pdf").write_bytes(b"%PDF-1.7\nlegacy source")
+    with sqlite3.connect(database_path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE papers (
+                id VARCHAR(36) PRIMARY KEY,
+                original_filename VARCHAR NOT NULL,
+                stored_filename VARCHAR NOT NULL,
+                status VARCHAR(16) NOT NULL
+            );
+            CREATE TABLE processing_runs (
+                id VARCHAR(36) PRIMARY KEY,
+                paper_id VARCHAR(36) NOT NULL,
+                sequence INTEGER NOT NULL,
+                stage VARCHAR(16),
+                status VARCHAR(16) NOT NULL,
+                error_summary VARCHAR,
+                FOREIGN KEY(paper_id) REFERENCES papers(id)
+            );
+            """
+        )
+        connection.execute(
+            "INSERT INTO papers VALUES (?, ?, ?, ?)",
+            (paper_id, f"{paper_id}.pdf", f"{paper_id}.pdf", paper_status),
+        )
+        connection.execute(
+            "INSERT INTO processing_runs VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                f"{paper_id}-stage0",
+                paper_id,
+                0,
+                "stage0",
+                stage0_status,
+                stage0_error,
+            ),
+        )
+
+    repository = PaperRepository(f"sqlite:///{database_path}")
+
+    assert repository.get_paper(paper_id).source_published is expected_published
+
+
 def test_repository_returns_latest_durable_stage_status(repository) -> None:
     """Breaks if public summaries cannot ask for one stage's newest durable state."""
     paper = repository.create_paper(
