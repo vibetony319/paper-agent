@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pymupdf
 import pytest
 from fastapi.testclient import TestClient
 
@@ -14,3 +15,42 @@ def client(tmp_path: Path) -> TestClient:
         database_url=f"sqlite:///{tmp_path / 'data' / 'paper-agent.db'}",
     )
     return TestClient(create_app(settings))
+
+
+@pytest.fixture
+def sample_pdf(tmp_path: Path) -> Path:
+    path = tmp_path / "sample.pdf"
+    document = pymupdf.open()
+    page = document.new_page(width=200, height=200)
+    page.insert_text((20, 20), "Introduction")
+    document.save(path)
+    document.close()
+    return path
+
+
+@pytest.fixture
+def visual_pdf(tmp_path: Path) -> Path:
+    path = tmp_path / "visuals.pdf"
+    document = pymupdf.open()
+    page = document.new_page(width=200, height=200)
+    pixmap = pymupdf.Pixmap(
+        pymupdf.csRGB, 10, 10, bytes([0, 0, 0] * 100), False
+    )
+    page.insert_image(pymupdf.Rect(20, 30, 60, 70), pixmap=pixmap)
+    page.draw_rect(pymupdf.Rect(100, 120, 160, 180))
+    document.save(path)
+    document.close()
+    return path
+
+
+@pytest.fixture
+def visual_pdf_with_empty_drawings(tmp_path: Path) -> Path:
+    path = tmp_path / "empty-visuals.pdf"
+    document = pymupdf.open()
+    page = document.new_page(width=200, height=200)
+    page.draw_rect(pymupdf.Rect(20, 30, 60, 70))
+    page.draw_rect(pymupdf.Rect(100, 120, 100, 180))
+    page.draw_rect(pymupdf.Rect(220, 120, 260, 180))
+    document.save(path)
+    document.close()
+    return path
