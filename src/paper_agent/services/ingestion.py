@@ -1,4 +1,5 @@
 from dataclasses import replace
+import os
 from pathlib import Path
 from uuid import uuid4
 
@@ -51,7 +52,7 @@ class PaperIngestionService:
             temporary_source_owned = True
             with source_file:
                 source_file.write(upload.content)
-            temporary_source_path.replace(source_path)
+            os.link(temporary_source_path, source_path)
         except OSError:
             if temporary_source_owned:
                 try:
@@ -69,6 +70,11 @@ class PaperIngestionService:
                 ProcessingStatus.failed,
                 error_summary="The PDF source could not be stored.",
             )
+
+        try:
+            temporary_source_path.unlink()
+        except OSError:
+            pass
 
         paper = self.repository.update_paper_status(paper.id, ProcessingStatus.running)
         self.repository.record_processing_status(paper.id, ProcessingStatus.running)

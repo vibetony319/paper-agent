@@ -1,7 +1,9 @@
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 
+import paper_agent.services.ingestion as ingestion_module
 from paper_agent.config import Settings
 from paper_agent.domain import ProcessingStatus
 from paper_agent.parsers.base import PdfParseError
@@ -214,6 +216,108 @@ def test_temporary_create_collision_does_not_delete_an_unowned_file(
     assert service.repository.get_processing_error(paper.id) == paper.error
     assert unrelated_file.read_bytes() == b"other upload"
     assert not service.get_source_path(paper.id).exists()
+
+
+def test_final_source_collision_preserves_existing_pdf_and_fails_safely(
+    service: PaperIngestionService,
+    sample_pdf_bytes: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Breaks if publishing a temporary source overwrites an existing final PDF."""
+    paper_id = UUID("00000000-0000-0000-0000-000000000101")
+    temporary_id = UUID("00000000-0000-0000-0000-000000000102")
+    uuid_values = iter((paper_id, temporary_id))
+    monkeypatch.setattr(ingestion_module, "uuid4", lambda: next(uuid_values))
+    papers_dir = service.settings.data_dir / "papers"
+    source_path = papers_dir / f"{paper_id}.pdf"
+    temporary_source_path = papers_dir / f".{paper_id}-{temporary_id}.tmp"
+    source_path.write_bytes(b"existing final PDF")
+
+    paper = service.ingest(
+        UploadPayload(
+            filename="paper.pdf",
+            content=sample_pdf_bytes,
+            media_type="application/pdf",
+        )
+    )
+
+    assert paper.id == str(paper_id)
+    assert paper.status == ProcessingStatus.failed
+    assert paper.stage0_status == ProcessingStatus.failed
+    assert paper.stage1_status == ProcessingStatus.queued
+    assert paper.error == "The PDF source could not be stored."
+    assert source_path.read_bytes() == b"existing final PDF"
+    assert not temporary_source_path.exists()
+
+
+def test_temporary_source_collision_preserves_unowned_file_and_fails_safely(
+    service: PaperIngestionService,
+    sample_pdf_bytes: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Breaks if a temporary-name collision replaces or deletes an unowned file."""
+    paper_id = UUID("00000000-0000-0000-0000-000000000201")
+    temporary_id = UUID("00000000-0000-0000-0000-000000000202")
+    uuid_values = iter((paper_id, temporary_id))
+    monkeypatch.setattr(ingestion_module, "uuid4", lambda: next(uuid_values))
+    papers_dir = service.settings.data_dir / "papers"
+    source_path = papers_dir / f"{paper_id}.pdf"
+    temporary_source_path = papers_dir / f".{paper_id}-{temporary_id}.tmp"
+    temporary_source_path.write_bytes(b"unowned temporary PDF")
+
+    paper = service.ingest(
+        UploadPayload(
+            filename="paper.pdf",
+            content=sample_pdf_bytes,
+            media_type="application/pdf",
+        )
+    )
+
+    assert paper.id == str(paper_id)
+    assert paper.status == ProcessingStatus.failed
+    assert paper.stage0_status == ProcessingStatus.failed
+    assert paper.stage1_status == ProcessingStatus.queued
+    assert paper.error == "The PDF source could not be stored."
+    assert temporary_source_path.read_bytes() == b"unowned temporary PDF"
+    assert not source_path.exists()
+
+
+def test_temporary_cleanup_failure_after_publish_keeps_paper_successful(
+    service: PaperIngestionService,
+    sample_pdf_bytes: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Breaks if cleanup of a published temporary link reverses a valid ingest."""
+    paper_id = UUID("00000000-0000-0000-0000-000000000301")
+    temporary_id = UUID("00000000-0000-0000-0000-000000000302")
+    uuid_values = iter((paper_id, temporary_id))
+    monkeypatch.setattr(ingestion_module, "uuid4", lambda: next(uuid_values))
+    papers_dir = service.settings.data_dir / "papers"
+    source_path = papers_dir / f"{paper_id}.pdf"
+    temporary_source_path = papers_dir / f".{paper_id}-{temporary_id}.tmp"
+    original_unlink = Path.unlink
+
+    def fail_temporary_cleanup(path: Path, *args, **kwargs) -> None:
+        if path == temporary_source_path:
+            raise OSError("C:/private/temporary-cleanup-failure.tmp")
+        original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_temporary_cleanup)
+
+    paper = service.ingest(
+        UploadPayload(
+            filename="paper.pdf",
+            content=sample_pdf_bytes,
+            media_type="application/pdf",
+        )
+    )
+
+    assert paper.status == ProcessingStatus.completed
+    assert paper.stage0_status == ProcessingStatus.completed
+    assert paper.stage1_status == ProcessingStatus.completed
+    assert source_path.read_bytes() == sample_pdf_bytes
+    assert temporary_source_path.read_bytes() == sample_pdf_bytes
+    assert source_path.samefile(temporary_source_path)
 
 
 def test_stage1_failure_keeps_stage0_and_marks_paper_partial(
