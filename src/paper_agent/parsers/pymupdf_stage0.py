@@ -51,6 +51,17 @@ def _visual_element(
 class PyMuPdfStage0Parser:
     """Extract source PDF geometry without assigning document semantics."""
 
+    def render_page_png(self, pdf_path: Path, page_number: int) -> bytes:
+        if page_number < 1:
+            raise ValueError("page number must be positive")
+        try:
+            with pymupdf.open(pdf_path) as document:
+                if page_number > document.page_count:
+                    raise ValueError("page number does not exist")
+                return document[page_number - 1].get_pixmap().tobytes("png")
+        except (OSError, pymupdf.FileDataError, pymupdf.mupdf.FzErrorBase) as error:
+            raise PdfParseError("PDF could not be opened or parsed") from error
+
     def parse(self, pdf_path: Path) -> Stage0Result:
         try:
             return self._parse(pdf_path)

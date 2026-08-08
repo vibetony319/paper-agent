@@ -4,7 +4,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from paper_agent.config import Settings
-from paper_agent.domain import DocumentElement, PaperDocument, ProcessingStatus
+from paper_agent.domain import DocumentElement, Note, PaperDocument, ProcessingStatus
 from paper_agent.parsers.base import PdfParseError
 from paper_agent.parsers.alignment import TextAligner
 from paper_agent.parsers.markitdown_stage1 import (
@@ -156,11 +156,54 @@ class PaperIngestionService:
             raise KeyError(paper_id)
         return document
 
+    def get_summary(self, paper_id: str) -> PaperSummary:
+        paper = self.repository.get_paper(paper_id)
+        if paper is None:
+            raise KeyError(paper_id)
+        return PaperSummary.from_paper(
+            paper, error=self.repository.get_processing_error(paper_id)
+        )
+
     def get_source_path(self, paper_id: str) -> Path:
         paper = self.repository.get_paper(paper_id)
         if paper is None:
             raise KeyError(paper_id)
         return self.settings.data_dir / "papers" / paper.stored_filename
+
+    def render_page_png(self, paper_id: str, page_number: int) -> bytes:
+        try:
+            return self.stage0_parser.render_page_png(
+                self.get_source_path(paper_id), page_number
+            )
+        except (PdfParseError, ValueError) as error:
+            raise KeyError(paper_id) from error
+
+    def create_note(
+        self,
+        paper_id: str,
+        *,
+        body: str,
+        element_id: str | None = None,
+        page_number: int | None = None,
+    ) -> Note:
+        document = self.get_document(paper_id)
+        if element_id is not None and not any(
+            element.id == element_id for element in document.elements
+        ):
+            raise ValueError("element target does not belong to paper")
+        if page_number is not None and not any(
+            page.number == page_number for page in document.pages
+        ):
+            raise ValueError("page target does not belong to paper")
+        return self.repository.create_note(
+            paper_id,
+            Note(body=body, element_id=element_id, page_number=page_number),
+        )
+
+    def get_notes(self, paper_id: str) -> tuple[Note, ...]:
+        if self.repository.get_paper(paper_id) is None:
+            raise KeyError(paper_id)
+        return self.repository.get_notes(paper_id)
 
     def _run_stage1(self, source_path: Path):
         return self.stage1_parser.parse(source_path)
