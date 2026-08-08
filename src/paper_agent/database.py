@@ -5,6 +5,7 @@ from sqlalchemy import (
     Column,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Integer,
     MetaData,
     String,
@@ -54,6 +55,7 @@ sections = Table(
     Column("title", String, nullable=False),
     Column("page_number", Integer),
     Column("order_index", Integer, nullable=False),
+    UniqueConstraint("paper_id", "id"),
     UniqueConstraint("paper_id", "order_index"),
 )
 
@@ -62,7 +64,7 @@ document_elements = Table(
     metadata,
     Column("id", String(36), primary_key=True),
     Column("paper_id", String(36), ForeignKey("papers.id"), nullable=False),
-    Column("section_id", String(36), ForeignKey("sections.id")),
+    Column("section_id", String(36)),
     Column("kind", String(64), nullable=False),
     Column("text", String, nullable=False),
     Column("page_number", Integer),
@@ -79,6 +81,16 @@ document_elements = Table(
         "AND bbox_x0 IS NOT NULL AND bbox_y0 IS NOT NULL AND bbox_x1 IS NOT NULL AND bbox_y1 IS NOT NULL)",
         name="document_element_location_consistency",
     ),
+    CheckConstraint(
+        "bbox_x0 IS NULL OR (0 <= bbox_x0 AND bbox_x0 <= bbox_x1 AND bbox_x1 <= 1 "
+        "AND 0 <= bbox_y0 AND bbox_y0 <= bbox_y1 AND bbox_y1 <= 1)",
+        name="document_element_bbox_normalized",
+    ),
+    ForeignKeyConstraint(
+        ["paper_id", "section_id"],
+        ["sections.paper_id", "sections.id"],
+    ),
+    UniqueConstraint("paper_id", "id"),
     UniqueConstraint("paper_id", "order_index"),
 )
 
@@ -87,10 +99,14 @@ notes = Table(
     metadata,
     Column("id", String(36), primary_key=True),
     Column("paper_id", String(36), ForeignKey("papers.id"), nullable=False),
-    Column("element_id", String(36), ForeignKey("document_elements.id")),
+    Column("element_id", String(36)),
     Column("page_number", Integer),
     Column("body", String, nullable=False),
     Column("order_index", Integer, nullable=False),
+    ForeignKeyConstraint(
+        ["paper_id", "element_id"],
+        ["document_elements.paper_id", "document_elements.id"],
+    ),
     UniqueConstraint("paper_id", "order_index"),
 )
 

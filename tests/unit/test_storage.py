@@ -4,7 +4,7 @@ import pytest
 from sqlalchemy import insert, select
 from sqlalchemy.exc import IntegrityError
 
-from paper_agent.database import document_elements
+from paper_agent.database import document_elements, notes, sections
 from paper_agent.domain import BoundingBox, DocumentElement, Note, Page, Section
 from paper_agent.storage import PaperRepository
 
@@ -107,6 +107,104 @@ def test_sqlite_rejects_unlocated_element_with_source_geometry(repository):
                     text="semantic only",
                     page_number=1,
                     location_status="unlocated",
+                    order_index=0,
+                )
+            )
+
+
+def test_sqlite_rejects_located_element_with_out_of_range_bbox(repository):
+    """Breaks if direct persistence can store geometry outside normalized bounds."""
+    paper = repository.create_paper(
+        original_filename="example.pdf", stored_filename="paper.pdf"
+    )
+
+    with pytest.raises(IntegrityError):
+        with repository.engine.begin() as connection:
+            connection.execute(
+                insert(document_elements).values(
+                    id="out-of-range-element",
+                    paper_id=paper.id,
+                    kind="paragraph",
+                    text="invalid geometry",
+                    page_number=1,
+                    bbox_x0=-0.1,
+                    bbox_y0=0,
+                    bbox_x1=1,
+                    bbox_y1=1,
+                    location_status="located",
+                    order_index=0,
+                )
+            )
+
+
+def test_sqlite_rejects_element_section_from_another_paper(repository):
+    """Breaks if direct persistence can attach an element to another paper's section."""
+    first = repository.create_paper(
+        original_filename="first.pdf", stored_filename="first.pdf"
+    )
+    second = repository.create_paper(
+        original_filename="second.pdf", stored_filename="second.pdf"
+    )
+    with repository.engine.begin() as connection:
+        connection.execute(
+            insert(sections).values(
+                id="second-section", paper_id=second.id, title="Other", order_index=0
+            )
+        )
+
+    with pytest.raises(IntegrityError):
+        with repository.engine.begin() as connection:
+            connection.execute(
+                insert(document_elements).values(
+                    id="cross-paper-element",
+                    paper_id=first.id,
+                    section_id="second-section",
+                    kind="paragraph",
+                    text="wrong section",
+                    page_number=1,
+                    bbox_x0=0,
+                    bbox_y0=0,
+                    bbox_x1=1,
+                    bbox_y1=1,
+                    location_status="located",
+                    order_index=0,
+                )
+            )
+
+
+def test_sqlite_rejects_note_element_from_another_paper(repository):
+    """Breaks if direct persistence can attach a note to another paper's element."""
+    first = repository.create_paper(
+        original_filename="first.pdf", stored_filename="first.pdf"
+    )
+    second = repository.create_paper(
+        original_filename="second.pdf", stored_filename="second.pdf"
+    )
+    with repository.engine.begin() as connection:
+        connection.execute(
+            insert(document_elements).values(
+                id="second-element",
+                paper_id=second.id,
+                kind="paragraph",
+                text="other paper",
+                page_number=1,
+                bbox_x0=0,
+                bbox_y0=0,
+                bbox_x1=1,
+                bbox_y1=1,
+                location_status="located",
+                order_index=0,
+            )
+        )
+
+    with pytest.raises(IntegrityError):
+        with repository.engine.begin() as connection:
+            connection.execute(
+                insert(notes).values(
+                    id="cross-paper-note",
+                    paper_id=first.id,
+                    element_id="second-element",
+                    body="wrong element",
                     order_index=0,
                 )
             )
