@@ -1,0 +1,23 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+coverage.xml
+htmlcov/
+
+# Local application data and uploaded papers
+var/
+data/
+
+# JavaScript tooling (introduced with the WebUI increment)
+node_modules/
+.next/
+dist/
+
+# Editor and operating-system files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
