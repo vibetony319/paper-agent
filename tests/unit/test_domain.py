@@ -128,3 +128,29 @@ def test_graph_records_reject_duplicate_or_empty_evidence_and_self_edges():
             stage=GraphStage.core,
             evidence_element_ids=("element-1",),
         )
+
+
+@pytest.mark.parametrize("evidence_element_ids", ("abc", ["element-1"]))
+def test_graph_nodes_require_tuple_evidence_ids(evidence_element_ids):
+    """Breaks if a string or list can pass through graph-node persistence."""
+    with pytest.raises(ValueError, match="evidence.*tuple"):
+        GraphNode(
+            node_type="method",
+            name="Router",
+            summary="Routes tokens.",
+            stage=GraphStage.core,
+            evidence_element_ids=evidence_element_ids,
+        )
+
+
+@pytest.mark.parametrize("evidence_element_ids", ("abc", ["element-1"]))
+def test_graph_edges_require_tuple_evidence_ids(evidence_element_ids):
+    """Breaks if a string or list can pass through graph-edge persistence."""
+    with pytest.raises(ValueError, match="evidence.*tuple"):
+        GraphEdge(
+            source_node_id="node-a",
+            target_node_id="node-b",
+            relation_type="uses",
+            stage=GraphStage.core,
+            evidence_element_ids=evidence_element_ids,
+        )

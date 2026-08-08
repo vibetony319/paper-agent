@@ -46,6 +46,8 @@ def _require_nonempty_trimmed(value: str, label: str) -> None:
 
 
 def _require_evidence_ids(evidence_element_ids: tuple[str, ...]) -> None:
+    if not isinstance(evidence_element_ids, tuple):
+        raise ValueError("evidence element IDs must be a tuple")
     if not evidence_element_ids:
         raise ValueError("evidence element IDs are required")
     if any(

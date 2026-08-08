@@ -686,6 +686,40 @@ def test_repository_rejects_unlocated_graph_evidence(repository):
         repository.replace_graph_stage(paper.id, GraphStage.core, (node,), ())
 
 
+def test_repository_rejects_edge_evidence_from_another_paper(repository):
+    """Breaks if a graph relation can cite source evidence from another paper."""
+    first, first_element = _paper_with_located_element(repository, "first")
+    _, second_element = _paper_with_located_element(repository, "second")
+    nodes = (
+        GraphNode(
+            id="first-node",
+            node_type="method",
+            name="Router",
+            summary="Routes tokens.",
+            stage=GraphStage.core,
+            evidence_element_ids=(first_element.id,),
+        ),
+        GraphNode(
+            id="second-node",
+            node_type="claim",
+            name="Efficiency",
+            summary="Improves efficiency.",
+            stage=GraphStage.core,
+            evidence_element_ids=(first_element.id,),
+        ),
+    )
+    edge = GraphEdge(
+        source_node_id="first-node",
+        target_node_id="second-node",
+        relation_type="supports",
+        stage=GraphStage.core,
+        evidence_element_ids=(second_element.id,),
+    )
+
+    with pytest.raises(GraphReferenceError, match="evidence"):
+        repository.replace_graph_stage(first.id, GraphStage.core, nodes, (edge,))
+
+
 def test_core_replacement_rolls_back_and_preserves_existing_graph(repository):
     """Breaks if a failed core replacement deletes a prior deep graph."""
     paper, element = _paper_with_located_element(repository, "paper")
