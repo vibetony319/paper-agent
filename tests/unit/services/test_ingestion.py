@@ -389,6 +389,27 @@ def test_stage1_failure_keeps_stage0_and_marks_paper_partial(
     )
 
 
+def test_stage1_unexpected_value_error_propagates(
+    service: PaperIngestionService,
+    sample_pdf_bytes: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Breaks if a Stage 1 implementation defect is hidden as a conversion failure."""
+    def fail_stage1(*_args, **_kwargs):
+        raise ValueError("unexpected stage1 defect")
+
+    monkeypatch.setattr(service, "_run_stage1", fail_stage1)
+
+    with pytest.raises(ValueError, match="unexpected stage1 defect"):
+        service.ingest(
+            UploadPayload(
+                filename="paper.pdf",
+                content=sample_pdf_bytes,
+                media_type="application/pdf",
+            )
+        )
+
+
 def test_stage1_alignment_value_error_keeps_stage0_and_marks_paper_partial(
     service: PaperIngestionService,
     sample_pdf_bytes: bytes,

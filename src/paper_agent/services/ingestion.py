@@ -140,23 +140,21 @@ class PaperIngestionService:
 
         try:
             stage1 = self._run_stage1(source_path)
+        except MarkdownParseError:
+            return self._finish_stage1_failure(paper)
+
+        try:
             elements = tuple(
                 replace(element, order=None)
                 for element in self.aligner.align(stage1.paragraphs, stage0.text_blocks)
             )
+        except ValueError:
+            return self._finish_stage1_failure(paper)
+
+        try:
             self.repository.save_stage1_document(paper.id, stage1.sections, elements)
-        except (MarkdownParseError, ValueError, SQLAlchemyError):
-            self.repository.record_processing_status(
-                paper.id,
-                ProcessingStatus.failed,
-                stage="stage1",
-                error_summary="The PDF could not be converted.",
-            )
-            return self._finish(
-                paper,
-                ProcessingStatus.partial,
-                error_summary="The PDF could not be converted.",
-            )
+        except SQLAlchemyError:
+            return self._finish_stage1_failure(paper)
 
         self.repository.record_processing_status(
             paper.id, ProcessingStatus.completed, stage="stage1"
@@ -221,6 +219,19 @@ class PaperIngestionService:
 
     def _run_stage1(self, source_path: Path):
         return self.stage1_parser.parse(source_path)
+
+    def _finish_stage1_failure(self, paper) -> PaperSummary:
+        self.repository.record_processing_status(
+            paper.id,
+            ProcessingStatus.failed,
+            stage="stage1",
+            error_summary="The PDF could not be converted.",
+        )
+        return self._finish(
+            paper,
+            ProcessingStatus.partial,
+            error_summary="The PDF could not be converted.",
+        )
 
     @staticmethod
     def _validate_upload(upload: UploadPayload) -> None:
