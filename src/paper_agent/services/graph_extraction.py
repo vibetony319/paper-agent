@@ -37,17 +37,29 @@ class EdgeCandidate:
     evidence_element_ids: tuple[str, ...]
 
 
-_NonblankText = Annotated[str, Field(min_length=1, pattern=r".*\S.*")]
+_NonblankText = Annotated[str, Field(min_length=1, pattern=r"^\S(?:.*\S)?$")]
+_EvidenceElementIds = Annotated[
+    list[_NonblankText], Field(min_length=1, json_schema_extra={"uniqueItems": True})
+]
+_SupportedNodeType = Annotated[
+    _NonblankText,
+    Field(json_schema_extra={"enum": sorted(CORE_NODE_TYPES | DEEP_NODE_TYPES)}),
+]
+_SupportedRelationType = Annotated[
+    _NonblankText,
+    Field(json_schema_extra={"enum": sorted(RELATION_TYPES)}),
+]
+_INVALID_CANDIDATE_RESPONSE_MESSAGE = "invalid graph candidate response"
 
 
 class _CandidateNode(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     local_id: _NonblankText
-    node_type: _NonblankText
+    node_type: _SupportedNodeType
     name: _NonblankText
     summary: _NonblankText
-    evidence_element_ids: list[_NonblankText]
+    evidence_element_ids: _EvidenceElementIds
 
     @field_validator("local_id", "node_type", "name", "summary")
     @classmethod
@@ -79,8 +91,8 @@ class _CandidateEdge(BaseModel):
 
     source_node_id: _NonblankText
     target_node_id: _NonblankText
-    relation_type: _NonblankText
-    evidence_element_ids: list[_NonblankText]
+    relation_type: _SupportedRelationType
+    evidence_element_ids: _EvidenceElementIds
 
     @field_validator("source_node_id", "target_node_id", "relation_type")
     @classmethod
@@ -112,7 +124,7 @@ def parse_node_candidates(
 ) -> tuple[NodeCandidate, ...]:
     """Parse only evidence-backed node candidates for the requested graph stage."""
     _require_stage(stage)
-    response = _validate_payload(_NodeCandidateResponse, payload, "node")
+    response = _validate_payload(_NodeCandidateResponse, payload)
     allowed_node_types = (
         CORE_NODE_TYPES if stage is GraphStage.core else DEEP_NODE_TYPES
     )
@@ -144,7 +156,7 @@ def parse_edge_candidates(
 ) -> tuple[EdgeCandidate, ...]:
     """Parse only edges whose endpoints and evidence were supplied to the model."""
     _require_stage(stage)
-    response = _validate_payload(_EdgeCandidateResponse, payload, "edge")
+    response = _validate_payload(_EdgeCandidateResponse, payload)
     allowed_nodes = set(allowed_node_ids)
     allowed_evidence = set(allowed_evidence_ids)
 
@@ -220,12 +232,11 @@ def edge_output_schema() -> dict[str, object]:
 def _validate_payload(
     model: type[_NodeCandidateResponse] | type[_EdgeCandidateResponse],
     payload: dict,
-    kind: str,
 ) -> _NodeCandidateResponse | _EdgeCandidateResponse:
     try:
         return model.model_validate(payload)
-    except ValidationError as error:
-        raise GraphExtractionError(f"invalid {kind} candidate response: {error}") from error
+    except ValidationError:
+        raise GraphExtractionError(_INVALID_CANDIDATE_RESPONSE_MESSAGE) from None
 
 
 def _require_stage(stage: GraphStage) -> None:

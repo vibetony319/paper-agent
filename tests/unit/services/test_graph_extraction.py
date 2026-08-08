@@ -158,10 +158,84 @@ def test_output_schemas_match_the_strict_parser_boundary() -> None:
     """Breaks if model output schemas allow fields the parser rejects."""
     node_schema = node_output_schema()
     edge_schema = edge_output_schema()
+    node = node_schema["properties"]["nodes"]["items"]
+    edge = edge_schema["properties"]["edges"]["items"]
 
     assert node_schema["additionalProperties"] is False
     assert node_schema["required"] == ["nodes"]
-    assert node_schema["properties"]["nodes"]["items"]["additionalProperties"] is False
+    assert node["additionalProperties"] is False
     assert edge_schema["additionalProperties"] is False
     assert edge_schema["required"] == ["edges"]
-    assert edge_schema["properties"]["edges"]["items"]["additionalProperties"] is False
+    assert edge["additionalProperties"] is False
+    for candidate_schema in (node, edge):
+        evidence_schema = candidate_schema["properties"]["evidence_element_ids"]
+        assert evidence_schema["minItems"] == 1
+        assert evidence_schema["uniqueItems"] is True
+        assert evidence_schema["items"] == {
+            "minLength": 1,
+            "pattern": r"^\S(?:.*\S)?$",
+            "type": "string",
+        }
+
+    for field_name in ("local_id", "name", "summary"):
+        assert node["properties"][field_name]["pattern"] == r"^\S(?:.*\S)?$"
+    for field_name in ("source_node_id", "target_node_id"):
+        assert edge["properties"][field_name]["pattern"] == r"^\S(?:.*\S)?$"
+
+    assert node["properties"]["node_type"]["enum"] == [
+        "ablation",
+        "claim",
+        "component",
+        "concept",
+        "contribution",
+        "dataset",
+        "experiment",
+        "limitation",
+        "method",
+        "metric",
+        "problem",
+        "result",
+    ]
+    assert edge["properties"]["relation_type"]["enum"] == [
+        "addresses",
+        "compares_with",
+        "contradicts",
+        "defines",
+        "evaluated_on",
+        "illustrates",
+        "measured_by",
+        "part_of",
+        "produces",
+        "related_to",
+        "supports",
+        "tests",
+        "uses",
+    ]
+
+
+def test_payload_validation_errors_are_safe_and_do_not_expose_model_values() -> None:
+    """Breaks if invalid model data leaks through Pydantic error details."""
+    sensitive_value = "sensitive-model-output-1c1c4d31"
+    payload = {
+        "nodes": [
+            {
+                "local_id": "n1",
+                "node_type": "method",
+                "name": "Router",
+                "summary": "Routes tokens.",
+                "evidence_element_ids": ["e1"],
+                "untrusted_detail": sensitive_value,
+            }
+        ]
+    }
+
+    with pytest.raises(GraphExtractionError) as captured:
+        parse_node_candidates(
+            payload,
+            stage=GraphStage.core,
+            allowed_evidence_ids=frozenset({"e1"}),
+        )
+
+    assert str(captured.value) == "invalid graph candidate response"
+    assert sensitive_value not in str(captured.value)
+    assert captured.value.__cause__ is None
