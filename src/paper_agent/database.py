@@ -146,34 +146,34 @@ def _migrate_legacy_papers(engine: Engine) -> None:
             connection.exec_driver_sql(
                 "ALTER TABLE papers ADD COLUMN source_published BOOLEAN NOT NULL DEFAULT 0"
             )
-            source_directory = _legacy_source_directory(engine)
-            if source_directory is None:
-                return
-            for paper_id, stored_filename, status in connection.exec_driver_sql(
-                "SELECT id, stored_filename, status FROM papers"
+        source_directory = _legacy_source_directory(engine)
+        if source_directory is None:
+            return
+        for paper_id, stored_filename, status in connection.exec_driver_sql(
+            "SELECT id, stored_filename, status FROM papers WHERE source_published = 0"
+        ):
+            if not _legacy_source_exists(source_directory, stored_filename):
+                continue
+            processing_rows = connection.exec_driver_sql(
+                "SELECT stage, status, error_summary FROM processing_runs WHERE paper_id = ?",
+                (paper_id,),
+            )
+            stage0_started = False
+            source_storage_failed = False
+            for stage, run_status, error_summary in processing_rows:
+                stage0_started = stage0_started or (
+                    stage == "stage0" and run_status in {"running", "completed"}
+                )
+                source_storage_failed = source_storage_failed or (
+                    error_summary == "The PDF source could not be stored."
+                )
+            if not source_storage_failed and (
+                status in {"running", "completed", "partial"} or stage0_started
             ):
-                if not _legacy_source_exists(source_directory, stored_filename):
-                    continue
-                processing_rows = connection.exec_driver_sql(
-                    "SELECT stage, status, error_summary FROM processing_runs WHERE paper_id = ?",
+                connection.exec_driver_sql(
+                    "UPDATE papers SET source_published = 1 WHERE id = ?",
                     (paper_id,),
                 )
-                stage0_started = False
-                source_storage_failed = False
-                for stage, run_status, error_summary in processing_rows:
-                    stage0_started = stage0_started or (
-                        stage == "stage0" and run_status in {"running", "completed"}
-                    )
-                    source_storage_failed = source_storage_failed or (
-                        error_summary == "The PDF source could not be stored."
-                    )
-                if not source_storage_failed and (
-                    status in {"running", "completed", "partial"} or stage0_started
-                ):
-                    connection.exec_driver_sql(
-                        "UPDATE papers SET source_published = 1 WHERE id = ?",
-                        (paper_id,),
-                    )
 
 
 def _legacy_source_directory(engine: Engine) -> Path | None:

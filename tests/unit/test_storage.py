@@ -465,6 +465,53 @@ def test_repository_migrates_old_processing_runs_before_backfilling_source(
     )
 
 
+def test_repository_backfills_existing_unpublished_legacy_source(tmp_path: Path):
+    """Breaks if a prior default-false migration can never be repaired."""
+    database_path = tmp_path / "already-migrated.db"
+    sources_dir = tmp_path / "papers"
+    sources_dir.mkdir()
+    (sources_dir / "already-migrated.pdf").write_bytes(b"%PDF-1.7\nlegacy source")
+    with sqlite3.connect(database_path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE papers (
+                id VARCHAR(36) PRIMARY KEY,
+                original_filename VARCHAR NOT NULL,
+                stored_filename VARCHAR NOT NULL,
+                status VARCHAR(16) NOT NULL,
+                source_published BOOLEAN NOT NULL DEFAULT 0
+            );
+            CREATE TABLE processing_runs (
+                id VARCHAR(36) PRIMARY KEY,
+                paper_id VARCHAR(36) NOT NULL,
+                sequence INTEGER NOT NULL,
+                stage VARCHAR(16),
+                status VARCHAR(16) NOT NULL,
+                error_summary VARCHAR,
+                FOREIGN KEY(paper_id) REFERENCES papers(id)
+            );
+            """
+        )
+        connection.execute(
+            "INSERT INTO papers VALUES (?, ?, ?, ?, ?)",
+            (
+                "already-migrated",
+                "already-migrated.pdf",
+                "already-migrated.pdf",
+                "completed",
+                False,
+            ),
+        )
+        connection.execute(
+            "INSERT INTO processing_runs VALUES (?, ?, ?, ?, ?, ?)",
+            ("already-migrated-run", "already-migrated", 0, "stage0", "completed", None),
+        )
+
+    repository = PaperRepository(f"sqlite:///{database_path}")
+
+    assert repository.get_paper("already-migrated").source_published is True
+
+
 def test_repository_returns_latest_durable_stage_status(repository) -> None:
     """Breaks if public summaries cannot ask for one stage's newest durable state."""
     paper = repository.create_paper(
