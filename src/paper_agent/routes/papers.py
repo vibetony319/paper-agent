@@ -67,10 +67,14 @@ def get_source(paper_id: str, request: Request) -> FileResponse:
 
 
 @router.get("/{paper_id}/pages/{page_number}/image")
-def get_page_image(paper_id: str, page_number: int, request: Request) -> Response:
+def get_page_image(paper_id: str, page_number: str, request: Request) -> Response:
+    try:
+        parsed_page_number = int(page_number)
+    except ValueError as error:
+        raise _not_found() from error
     try:
         return Response(
-            content=_service(request).render_page_png(paper_id, page_number),
+            content=_service(request).render_page_png(paper_id, parsed_page_number),
             media_type="image/png",
         )
     except KeyError as error:

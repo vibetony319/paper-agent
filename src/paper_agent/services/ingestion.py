@@ -16,6 +16,16 @@ from paper_agent.schemas import PaperSummary, UploadPayload
 from paper_agent.storage import PaperRepository
 
 
+SAFE_PROCESSING_ERROR_SUMMARIES = frozenset(
+    {
+        "The PDF source could not be stored.",
+        "The PDF could not be parsed.",
+        "The PDF could not be converted.",
+    }
+)
+PUBLIC_PROCESSING_ERROR = "The paper could not be processed."
+
+
 class PaperIngestionService:
     def __init__(self, *, settings: Settings, repository: PaperRepository) -> None:
         self.settings = settings
@@ -160,8 +170,9 @@ class PaperIngestionService:
         paper = self.repository.get_paper(paper_id)
         if paper is None:
             raise KeyError(paper_id)
+        error_summary = self.repository.get_processing_error(paper_id)
         return PaperSummary.from_paper(
-            paper, error=self.repository.get_processing_error(paper_id)
+            paper, error=self._public_error_summary(error_summary)
         )
 
     def get_source_path(self, paper_id: str) -> Path:
@@ -214,6 +225,12 @@ class PaperIngestionService:
             b"%PDF-"
         ):
             raise ValueError("upload must be a valid PDF upload")
+
+    @staticmethod
+    def _public_error_summary(error_summary: str | None) -> str | None:
+        if error_summary is None or error_summary in SAFE_PROCESSING_ERROR_SUMMARIES:
+            return error_summary
+        return PUBLIC_PROCESSING_ERROR
 
     def _finish(
         self,

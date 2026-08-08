@@ -3,6 +3,8 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from paper_agent.domain import ProcessingStatus
+
 
 def _upload_pdf(client: TestClient, sample_pdf: Path, filename: str = "paper.pdf") -> dict:
     response = client.post(
@@ -83,6 +85,18 @@ def test_invalid_upload_and_unknown_resources_are_mapped_to_safe_http_errors(
     assert client.get("/api/papers/missing/pages/0/image").status_code == 404
 
 
+def test_page_image_invalid_page_paths_are_not_found_after_upload(
+    client: TestClient, sample_pdf: Path
+) -> None:
+    """Breaks if invalid page paths bypass the page-image not-found contract."""
+    paper_id = _upload_pdf(client, sample_pdf)["id"]
+
+    for page_number in ("0", "2", "not-a-page"):
+        response = client.get(f"/api/papers/{paper_id}/pages/{page_number}/image")
+
+        assert response.status_code == 404
+
+
 def test_notes_accept_same_paper_element_and_reject_cross_paper_element(
     client: TestClient, sample_pdf: Path
 ) -> None:
@@ -110,3 +124,48 @@ def test_notes_accept_same_paper_element_and_reject_cross_paper_element(
     assert created.json()["page_number"] is None
     assert client.get(f"/api/papers/{first_id}/notes").json() == [created.json()]
     assert cross_paper.status_code == 422
+
+
+def test_notes_accept_same_paper_page_and_reject_nonexistent_page(
+    client: TestClient, sample_pdf: Path
+) -> None:
+    """Breaks if page-targeted notes do not enforce paper page ownership."""
+    paper_id = _upload_pdf(client, sample_pdf)["id"]
+
+    created = client.post(
+        f"/api/papers/{paper_id}/notes",
+        json={"body": "Review this page.", "page_number": 1},
+    )
+    invalid_page = client.post(
+        f"/api/papers/{paper_id}/notes",
+        json={"body": "This page does not exist.", "page_number": 2},
+    )
+
+    assert created.status_code == 201
+    assert created.json()["page_number"] == 1
+    assert client.get(f"/api/papers/{paper_id}/notes").json() == [created.json()]
+    assert invalid_page.status_code == 422
+
+
+def test_paper_summary_maps_unknown_persisted_error_to_safe_message(
+    client: TestClient,
+) -> None:
+    """Breaks if public summaries expose arbitrary persisted processing errors."""
+    repository = client.app.state.paper_ingestion_service.repository
+    paper = repository.create_paper(
+        original_filename="failed.pdf",
+        stored_filename="failed.pdf",
+        status=ProcessingStatus.failed,
+    )
+    unsafe_error = "Conversion failed for C:\\Users\\Admin\\secret.pdf"
+    repository.record_processing_status(
+        paper.id, ProcessingStatus.failed, error_summary=unsafe_error
+    )
+
+    response = client.get(f"/api/papers/{paper.id}")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "failed"
+    assert response.json()["error"] == "The paper could not be processed."
+    assert unsafe_error not in response.text
+    assert "C:\\Users\\Admin\\secret.pdf" not in response.text
