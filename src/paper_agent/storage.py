@@ -25,6 +25,10 @@ from paper_agent.domain import (
 )
 
 
+class PageReferenceError(ValueError):
+    """Raised when a write references a page not owned by its paper."""
+
+
 class PaperRepository:
     def __init__(self, database_url: str) -> None:
         self.engine: Engine = initialize_database(database_url)
@@ -149,6 +153,56 @@ class PaperRepository:
                 select(pages).where(pages.c.paper_id == paper_id).order_by(pages.c.number, pages.c.id)
             ).mappings()
             return tuple(Page(id=row["id"], number=row["number"], width=row["width"], height=row["height"]) for row in rows)
+
+    def save_stage0_document(
+        self,
+        paper_id: str,
+        stage0_pages: tuple[Page, ...],
+        stage0_elements: tuple[DocumentElement, ...],
+    ) -> None:
+        next_order = self._next_order(document_elements, paper_id)
+        persisted_elements = tuple(
+            replace(element, order=next_order + index)
+            for index, element in enumerate(stage0_elements)
+        )
+        with self.engine.begin() as connection:
+            if stage0_pages:
+                connection.execute(
+                    insert(pages),
+                    [
+                        {
+                            "id": page.id,
+                            "paper_id": paper_id,
+                            "number": page.number,
+                            "width": page.width,
+                            "height": page.height,
+                        }
+                        for page in stage0_pages
+                    ],
+                )
+            for element in persisted_elements:
+                self._require_owned_page(connection, paper_id, element.page_number)
+            if persisted_elements:
+                connection.execute(
+                    insert(document_elements),
+                    [
+                        {
+                            "id": element.id,
+                            "paper_id": paper_id,
+                            "section_id": element.section_id,
+                            "kind": element.kind,
+                            "text": element.text,
+                            "page_number": element.page_number,
+                            "bbox_x0": None if element.bbox is None else element.bbox.x0,
+                            "bbox_y0": None if element.bbox is None else element.bbox.y0,
+                            "bbox_x1": None if element.bbox is None else element.bbox.x1,
+                            "bbox_y1": None if element.bbox is None else element.bbox.y1,
+                            "location_status": element.location_status,
+                            "order_index": element.order,
+                        }
+                        for element in persisted_elements
+                    ],
+                )
 
     def save_section(self, paper_id: str, section: Section) -> Section:
         with self.engine.begin() as connection:
@@ -340,7 +394,7 @@ class PaperRepository:
             .where(pages.c.number == page_number)
         ).scalar_one_or_none()
         if page_id is None:
-            raise ValueError("page target does not belong to paper")
+            raise PageReferenceError("page target does not belong to paper")
 
     @staticmethod
     def _paper_from_row(row) -> Paper:

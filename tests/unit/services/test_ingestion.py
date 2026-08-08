@@ -491,3 +491,39 @@ def test_stage1_persistence_failure_rolls_back_sections_and_paragraphs(
     assert any(element.kind == "text_block" for element in document.elements)
     assert document.sections == ()
     assert not [element for element in document.elements if element.kind == "paragraph"]
+
+
+def test_stage0_second_element_persistence_failure_is_atomic_and_durable(
+    service: PaperIngestionService,
+    visual_pdf: Path,
+) -> None:
+    """Breaks if an SQLite Stage 0 write failure leaves source rows or running state."""
+    with service.repository.engine.begin() as connection:
+        connection.exec_driver_sql(
+            """
+            CREATE TRIGGER fail_stage0_drawing
+            BEFORE INSERT ON document_elements
+            WHEN NEW.kind = 'drawing'
+            BEGIN
+                SELECT RAISE(FAIL, 'stage0 drawing insert failed');
+            END;
+            """
+        )
+
+    source = visual_pdf.read_bytes()
+    paper = service.ingest(
+        UploadPayload(
+            filename="visuals.pdf",
+            content=source,
+            media_type="application/pdf",
+        )
+    )
+
+    assert paper.status == ProcessingStatus.failed
+    assert paper.stage0_status == ProcessingStatus.failed
+    assert paper.stage1_status == ProcessingStatus.queued
+    assert paper.error == "The PDF could not be parsed."
+    assert service.repository.get_pages(paper.id) == ()
+    assert service.repository.get_elements(paper.id) == ()
+    assert service.get_source_path(paper.id).read_bytes() == source
+    assert service.repository.get_paper(paper.id).source_published is True

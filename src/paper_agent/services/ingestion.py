@@ -15,7 +15,7 @@ from paper_agent.parsers.markitdown_stage1 import (
 )
 from paper_agent.parsers.pymupdf_stage0 import PyMuPdfStage0Parser
 from paper_agent.schemas import PaperSummary, UploadPayload
-from paper_agent.storage import PaperRepository
+from paper_agent.storage import PageReferenceError, PaperRepository
 
 
 SAFE_PROCESSING_ERROR_SUMMARIES = frozenset(
@@ -98,39 +98,30 @@ class PaperIngestionService:
         try:
             stage0 = self.stage0_parser.parse(source_path)
         except PdfParseError:
-            self.repository.record_processing_status(
-                paper.id,
-                ProcessingStatus.failed,
-                stage="stage0",
-                error_summary="The PDF could not be parsed.",
+            return self._finish_stage0_failure(paper)
+        source_elements = tuple(
+            DocumentElement(
+                kind="text_block",
+                text=block.text,
+                page_number=block.page_number,
+                bbox=block.bbox,
             )
-            return self._finish(
-                paper,
-                ProcessingStatus.failed,
-                error_summary="The PDF could not be parsed.",
+            for block in stage0.text_blocks
+        ) + tuple(
+            DocumentElement(
+                kind=visual.kind,
+                text=visual.caption or "",
+                page_number=visual.page_number,
+                bbox=visual.bbox,
             )
-        for page in stage0.pages:
-            self.repository.save_page(paper.id, page)
-        for block in stage0.text_blocks:
-            self.repository.save_element(
-                paper.id,
-                DocumentElement(
-                    kind="text_block",
-                    text=block.text,
-                    page_number=block.page_number,
-                    bbox=block.bbox,
-                ),
+            for visual in stage0.visual_elements
+        )
+        try:
+            self.repository.save_stage0_document(
+                paper.id, stage0.pages, source_elements
             )
-        for visual in stage0.visual_elements:
-            self.repository.save_element(
-                paper.id,
-                DocumentElement(
-                    kind=visual.kind,
-                    text=visual.caption or "",
-                    page_number=visual.page_number,
-                    bbox=visual.bbox,
-                ),
-            )
+        except (SQLAlchemyError, PageReferenceError):
+            return self._finish_stage0_failure(paper)
         self.repository.record_processing_status(
             paper.id, ProcessingStatus.completed, stage="stage0"
         )
@@ -154,7 +145,7 @@ class PaperIngestionService:
 
         try:
             self.repository.save_stage1_document(paper.id, stage1.sections, elements)
-        except SQLAlchemyError:
+        except (SQLAlchemyError, PageReferenceError):
             return self._finish_stage1_failure(paper)
 
         self.repository.record_processing_status(
@@ -225,6 +216,19 @@ class PaperIngestionService:
 
     def _run_stage1(self, source_path: Path):
         return self.stage1_parser.parse(source_path)
+
+    def _finish_stage0_failure(self, paper) -> PaperSummary:
+        self.repository.record_processing_status(
+            paper.id,
+            ProcessingStatus.failed,
+            stage="stage0",
+            error_summary="The PDF could not be parsed.",
+        )
+        return self._finish(
+            paper,
+            ProcessingStatus.failed,
+            error_summary="The PDF could not be parsed.",
+        )
 
     def _finish_stage1_failure(self, paper) -> PaperSummary:
         self.repository.record_processing_status(

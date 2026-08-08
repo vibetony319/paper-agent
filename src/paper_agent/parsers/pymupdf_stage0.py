@@ -15,7 +15,9 @@ from paper_agent.parsers.base import (
 
 
 def _normalized_candidate_bbox(
-    rect: Iterable[float], page_width: float, page_height: float
+    rect: Iterable[float],
+    page_rect: pymupdf.Rect,
+    rotation_matrix: pymupdf.Matrix,
 ) -> BoundingBox | None:
     try:
         coordinates = tuple(float(value) for value in rect)
@@ -29,7 +31,10 @@ def _normalized_candidate_bbox(
     if x1 <= x0 or y1 <= y0:
         return None
 
-    bbox = BoundingBox.from_page_rect(coordinates, page_width, page_height)
+    displayed_rect = pymupdf.Rect(coordinates) * rotation_matrix
+    bbox = BoundingBox.from_page_rect(
+        tuple(displayed_rect), page_rect.width, page_rect.height
+    )
     if bbox.x1 <= bbox.x0 or bbox.y1 <= bbox.y0:
         return None
     return bbox
@@ -39,10 +44,10 @@ def _visual_element(
     kind: VisualKind,
     page_number: int,
     rect: Iterable[float],
-    page_width: float,
-    page_height: float,
+    page_rect: pymupdf.Rect,
+    rotation_matrix: pymupdf.Matrix,
 ) -> VisualElement | None:
-    bbox = _normalized_candidate_bbox(rect, page_width, page_height)
+    bbox = _normalized_candidate_bbox(rect, page_rect, rotation_matrix)
     if bbox is None:
         return None
     return VisualElement(kind=kind, page_number=page_number, bbox=bbox)
@@ -81,7 +86,8 @@ class PyMuPdfStage0Parser:
             if document.needs_pass:
                 raise PdfParseError("PDF requires authentication")
             for page_number, page in enumerate(document, start=1):
-                page_rect = page.mediabox
+                page_rect = page.rect
+                rotation_matrix = page.rotation_matrix
                 pages.append(
                     Page(
                         number=page_number,
@@ -93,13 +99,16 @@ class PyMuPdfStage0Parser:
                     text = block[4].strip()
                     if not text:
                         continue
+                    bbox = _normalized_candidate_bbox(
+                        block[:4], page_rect, rotation_matrix
+                    )
+                    if bbox is None:
+                        continue
                     text_blocks.append(
                         TextBlock(
                             text=text,
                             page_number=page_number,
-                            bbox=BoundingBox.from_page_rect(
-                                block[:4], page_rect.width, page_rect.height
-                            ),
+                            bbox=bbox,
                             order=order,
                         )
                     )
@@ -109,8 +118,8 @@ class PyMuPdfStage0Parser:
                         "image",
                         page_number,
                         image.get("bbox", ()),
-                        page_rect.width,
-                        page_rect.height,
+                        page_rect,
+                        rotation_matrix,
                     )
                     if visual is not None:
                         visual_elements.append(visual)
@@ -120,8 +129,8 @@ class PyMuPdfStage0Parser:
                         "drawing",
                         page_number,
                         drawing.get("rect", ()),
-                        page_rect.width,
-                        page_rect.height,
+                        page_rect,
+                        rotation_matrix,
                     )
                     if visual is not None:
                         visual_elements.append(visual)

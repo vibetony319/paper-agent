@@ -135,6 +135,47 @@ def test_stage1_batch_write_rolls_back_sections_and_paragraphs_on_persistence_er
     assert repository.get_elements(paper.id) == ()
 
 
+def test_stage0_batch_write_rolls_back_pages_and_elements_on_second_element_failure(
+    repository,
+):
+    """Breaks if a failed Stage 0 element write leaves earlier source rows durable."""
+    paper = repository.create_paper(
+        original_filename="example.pdf", stored_filename="paper.pdf"
+    )
+    pages_to_save = (Page(number=1, width=200, height=300),)
+    elements_to_save = (
+        DocumentElement(
+            kind="image",
+            text="",
+            page_number=1,
+            bbox=BoundingBox(0, 0, 0.2, 0.2),
+        ),
+        DocumentElement(
+            kind="drawing",
+            text="",
+            page_number=1,
+            bbox=BoundingBox(0.2, 0.2, 0.4, 0.4),
+        ),
+    )
+    with repository.engine.begin() as connection:
+        connection.exec_driver_sql(
+            """
+            CREATE TRIGGER fail_stage0_drawing
+            BEFORE INSERT ON document_elements
+            WHEN NEW.kind = 'drawing'
+            BEGIN
+                SELECT RAISE(FAIL, 'stage0 drawing insert failed');
+            END;
+            """
+        )
+
+    with pytest.raises(IntegrityError, match="stage0 drawing insert failed"):
+        repository.save_stage0_document(paper.id, pages_to_save, elements_to_save)
+
+    assert repository.get_pages(paper.id) == ()
+    assert repository.get_elements(paper.id) == ()
+
+
 def test_sqlite_rejects_unlocated_element_with_source_geometry(repository):
     """Breaks if direct persistence can create a false source location."""
     paper = repository.create_paper(
@@ -356,8 +397,9 @@ def test_repository_rejects_non_owned_page_references(repository, target: str, p
             paper.id, Note(body="Invalid", page_number=page_number)
         )
 
-    with pytest.raises(ValueError, match="page target does not belong to paper"):
+    with pytest.raises(ValueError, match="page target does not belong to paper") as error:
         operation()
+    assert type(error.value).__name__ == "PageReferenceError"
 
 
 def test_repository_allows_owned_and_null_page_references(repository) -> None:

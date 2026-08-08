@@ -70,3 +70,17 @@ def visual_pdf_with_empty_drawings(tmp_path: Path) -> Path:
     document.save(path)
     document.close()
     return path
+
+
+@pytest.fixture
+def rotated_cropped_pdf(tmp_path: Path) -> Path:
+    path = tmp_path / "rotated-cropped.pdf"
+    document = pymupdf.open()
+    page = document.new_page(width=400, height=300)
+    page.set_cropbox(pymupdf.Rect(50, 30, 350, 260))
+    page.insert_text((100, 100), "Crop rotated text")
+    page.draw_rect(pymupdf.Rect(250, 180, 300, 220))
+    page.set_rotation(90)
+    document.save(path)
+    document.close()
+    return path
