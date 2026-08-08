@@ -1,3 +1,4 @@
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -5,7 +6,14 @@ from sqlalchemy import insert, select
 from sqlalchemy.exc import IntegrityError
 
 from paper_agent.database import document_elements, notes, sections
-from paper_agent.domain import BoundingBox, DocumentElement, Note, Page, Section
+from paper_agent.domain import (
+    BoundingBox,
+    DocumentElement,
+    Note,
+    Page,
+    ProcessingStatus,
+    Section,
+)
 from paper_agent.storage import PaperRepository
 
 
@@ -208,3 +216,57 @@ def test_sqlite_rejects_note_element_from_another_paper(repository):
                     order_index=0,
                 )
             )
+
+
+def test_repository_migrates_legacy_processing_runs_and_appends_status(tmp_path: Path):
+    """Breaks if a Task 2 database cannot load or extend processing history."""
+    database_path = tmp_path / "legacy.db"
+    with sqlite3.connect(database_path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE papers (
+                id VARCHAR(36) PRIMARY KEY,
+                original_filename VARCHAR NOT NULL,
+                stored_filename VARCHAR NOT NULL,
+                status VARCHAR(16) NOT NULL
+            );
+            CREATE TABLE processing_runs (
+                id VARCHAR(36) PRIMARY KEY,
+                paper_id VARCHAR(36) NOT NULL,
+                status VARCHAR(16) NOT NULL,
+                FOREIGN KEY(paper_id) REFERENCES papers(id)
+            );
+            """
+        )
+        connection.execute(
+            "INSERT INTO papers VALUES (?, ?, ?, ?)",
+            ("legacy-paper", "legacy.pdf", "legacy.pdf", "running"),
+        )
+        connection.executemany(
+            "INSERT INTO processing_runs VALUES (?, ?, ?)",
+            [
+                ("legacy-run-1", "legacy-paper", "queued"),
+                ("legacy-run-2", "legacy-paper", "running"),
+            ],
+        )
+
+    repository = PaperRepository(f"sqlite:///{database_path}")
+
+    assert repository.get_processing_statuses("legacy-paper") == (
+        ProcessingStatus.queued,
+        ProcessingStatus.running,
+    )
+    repository.record_processing_status("legacy-paper", ProcessingStatus.completed)
+    assert repository.get_processing_statuses("legacy-paper") == (
+        ProcessingStatus.queued,
+        ProcessingStatus.running,
+        ProcessingStatus.completed,
+    )
+    reopened = PaperRepository(f"sqlite:///{database_path}")
+    reopened.record_processing_status("legacy-paper", ProcessingStatus.partial)
+    assert reopened.get_processing_statuses("legacy-paper") == (
+        ProcessingStatus.queued,
+        ProcessingStatus.running,
+        ProcessingStatus.completed,
+        ProcessingStatus.partial,
+    )

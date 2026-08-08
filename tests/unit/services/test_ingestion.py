@@ -120,6 +120,49 @@ def test_stage0_failure_is_durable_and_uses_a_safe_error_summary(
     )
 
 
+def test_source_write_failure_is_durable_and_removes_partial_source(
+    service: PaperIngestionService,
+    sample_pdf_bytes: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Breaks if source-write errors leak, leave work queued, or retain partial data."""
+    original_open = Path.open
+
+    def write_partial_source_then_fail(path: Path, *args, **kwargs):
+        with original_open(path, *args, **kwargs) as source_file:
+            source_file.write(b"partial PDF data")
+        raise OSError("C:/private/source-write-failure.pdf")
+
+    monkeypatch.setattr(Path, "open", write_partial_source_then_fail)
+
+    paper = service.ingest(
+        UploadPayload(
+            filename="paper.pdf",
+            content=sample_pdf_bytes,
+            media_type="application/pdf",
+        )
+    )
+
+    assert paper.status == ProcessingStatus.failed
+    assert paper.stage0_status == ProcessingStatus.failed
+    assert paper.stage1_status == ProcessingStatus.queued
+    assert paper.error == "The PDF source could not be stored."
+    assert "private" not in paper.error
+    assert service.repository.get_processing_error(paper.id) == paper.error
+    assert service.repository.get_processing_statuses(paper.id) == (
+        ProcessingStatus.queued,
+        ProcessingStatus.failed,
+    )
+    assert service.repository.get_stage_statuses(paper.id, "stage0") == (
+        ProcessingStatus.queued,
+        ProcessingStatus.failed,
+    )
+    assert service.repository.get_stage_statuses(paper.id, "stage1") == (
+        ProcessingStatus.queued,
+    )
+    assert tuple((service.settings.data_dir / "papers").iterdir()) == ()
+
+
 def test_stage1_failure_keeps_stage0_and_marks_paper_partial(
     service: PaperIngestionService,
     sample_pdf_bytes: bytes,

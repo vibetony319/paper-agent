@@ -129,7 +129,52 @@ def create_database_engine(database_url: str) -> Engine:
 def initialize_database(database_url: str) -> Engine:
     engine = create_database_engine(database_url)
     metadata.create_all(engine)
+    if database_url.startswith("sqlite"):
+        _migrate_legacy_processing_runs(engine)
     return engine
+
+
+def _migrate_legacy_processing_runs(engine: Engine) -> None:
+    with engine.begin() as connection:
+        columns = {
+            row[1]
+            for row in connection.exec_driver_sql("PRAGMA table_info(processing_runs)")
+        }
+        missing_columns = {"sequence", "stage", "error_summary"} - columns
+        if not missing_columns:
+            return
+
+        if "sequence" in missing_columns:
+            connection.exec_driver_sql(
+                "ALTER TABLE processing_runs ADD COLUMN sequence INTEGER"
+            )
+        if "stage" in missing_columns:
+            connection.exec_driver_sql(
+                "ALTER TABLE processing_runs ADD COLUMN stage VARCHAR(16)"
+            )
+        if "error_summary" in missing_columns:
+            connection.exec_driver_sql(
+                "ALTER TABLE processing_runs ADD COLUMN error_summary VARCHAR"
+            )
+
+        if "sequence" in missing_columns:
+            sequences: dict[str, int] = {}
+            rows = connection.exec_driver_sql(
+                "SELECT rowid, paper_id FROM processing_runs ORDER BY paper_id, rowid"
+            )
+            for rowid, paper_id in rows:
+                sequence = sequences.get(paper_id, 0)
+                connection.exec_driver_sql(
+                    "UPDATE processing_runs SET sequence = ? WHERE rowid = ?",
+                    (sequence, rowid),
+                )
+                sequences[paper_id] = sequence + 1
+
+        connection.exec_driver_sql(
+            "CREATE UNIQUE INDEX IF NOT EXISTS "
+            "processing_runs_paper_id_sequence_unique "
+            "ON processing_runs (paper_id, sequence)"
+        )
 
 
 def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record) -> None:

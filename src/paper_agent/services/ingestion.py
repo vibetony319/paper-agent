@@ -42,8 +42,27 @@ class PaperIngestionService:
         )
 
         source_path = self.settings.data_dir / "papers" / stored_filename
-        with source_path.open("xb") as source_file:
-            source_file.write(upload.content)
+        source_existed = source_path.exists()
+        try:
+            with source_path.open("xb") as source_file:
+                source_file.write(upload.content)
+        except OSError:
+            if not source_existed:
+                try:
+                    source_path.unlink()
+                except OSError:
+                    pass
+            self.repository.record_processing_status(
+                paper.id,
+                ProcessingStatus.failed,
+                stage="stage0",
+                error_summary="The PDF source could not be stored.",
+            )
+            return self._finish(
+                paper,
+                ProcessingStatus.failed,
+                error_summary="The PDF source could not be stored.",
+            )
 
         paper = self.repository.update_paper_status(paper.id, ProcessingStatus.running)
         self.repository.record_processing_status(paper.id, ProcessingStatus.running)
