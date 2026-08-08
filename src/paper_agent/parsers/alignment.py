@@ -7,32 +7,15 @@ from paper_agent.parsers.base import TextBlock
 from paper_agent.parsers.markitdown_stage1 import MarkdownParagraph
 
 
-_PUNCTUATION_TRANSLATION = str.maketrans(
-    {
-        "\u2010": "-",
-        "\u2011": "-",
-        "\u2012": "-",
-        "\u2013": "-",
-        "\u2014": "-",
-        "\u2015": "-",
-        "\u2212": "-",
-        "\u2018": "'",
-        "\u2019": "'",
-        "\u201a": "'",
-        "\u201b": "'",
-        "\u201c": '"',
-        "\u201d": '"',
-        "\u201e": '"',
-        "\u201f": '"',
-        "\u2026": "...",
-    }
-)
 _MIN_CONTAINMENT_LENGTH = 40
 
 
 def _normalize_text(text: str) -> str:
     normalized = unicodedata.normalize("NFKC", text.replace("\u00ad", ""))
-    normalized = normalized.translate(_PUNCTUATION_TRANSLATION).lower()
+    normalized = "".join(
+        " " if unicodedata.category(character).startswith("P") else character
+        for character in normalized
+    ).lower()
     return re.sub(r"\s+", " ", normalized).strip()
 
 

@@ -26,6 +26,25 @@ def test_aligner_ignores_whitespace_and_unicode_punctuation():
     assert aligned[0].bbox == BOX
 
 
+def test_aligner_ignores_unicode_punctuation_variants_beyond_dashes():
+    """Breaks if punctuation outside the finite dash/quote mapping blocks alignment."""
+    blocks = [
+        TextBlock(
+            text="We compare methods、then report results.",
+            page_number=3,
+            bbox=BOX,
+            order=0,
+        )
+    ]
+    paragraphs = [MarkdownParagraph(text="We compare methods, then report results.")]
+
+    aligned = TextAligner().align(paragraphs, blocks)
+
+    assert aligned[0].location_status == "located"
+    assert aligned[0].page_number == 3
+    assert aligned[0].bbox == BOX
+
+
 def test_aligner_leaves_repeated_text_unlocated():
     """Breaks if an ambiguous exact match borrows either source location."""
     repeated = "Repeated evidence text " * 3
