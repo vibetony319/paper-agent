@@ -46,6 +46,10 @@ uvicorn paper_agent.app:create_app --factory --reload
 The service listens on `http://127.0.0.1:8000` by default. `GET /health`
 returns `{"status":"ok"}` when it is running.
 
+```bash
+curl http://127.0.0.1:8000/health
+```
+
 ## Minimal upload and read workflow
 
 With the server running, upload a local PDF:
