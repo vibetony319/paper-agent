@@ -103,3 +103,22 @@ def test_aligner_uses_a_unique_long_containment_match():
     assert element.bbox == BOX
     assert element.section_id == "methods"
     assert element.order == 7
+
+
+def test_aligner_leaves_a_unique_short_containment_candidate_unlocated():
+    """Breaks if short containment matches borrow an unsupported source location."""
+    paragraph_text = "Unique short evidence"
+    blocks = [
+        TextBlock(
+            text=f"Prefix {paragraph_text} suffix",
+            page_number=4,
+            bbox=BOX,
+            order=3,
+        )
+    ]
+
+    element = TextAligner().align([MarkdownParagraph(text=paragraph_text)], blocks)[0]
+
+    assert element.location_status == "unlocated"
+    assert element.page_number is None
+    assert element.bbox is None

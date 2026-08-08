@@ -8,7 +8,7 @@ from paper_agent.schemas import (
     PaperSummaryResponse,
     UploadPayload,
 )
-from paper_agent.services.ingestion import PaperIngestionService
+from paper_agent.services.ingestion import InvalidUploadError, PaperIngestionService
 
 
 router = APIRouter(prefix="/api/papers", tags=["papers"])
@@ -32,7 +32,7 @@ async def upload_paper(request: Request, file: UploadFile = File(...)) -> PaperS
                 media_type=file.content_type,
             )
         )
-    except ValueError as error:
+    except InvalidUploadError as error:
         raise HTTPException(status_code=422, detail="Invalid PDF upload.") from error
     return PaperSummaryResponse.from_summary(summary)
 

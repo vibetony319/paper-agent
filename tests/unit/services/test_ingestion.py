@@ -399,6 +399,11 @@ def test_stage1_unexpected_value_error_propagates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Breaks if a Stage 1 implementation defect is hidden as a conversion failure."""
+    paper_id = UUID("00000000-0000-0000-0000-000000000501")
+    temporary_id = UUID("00000000-0000-0000-0000-000000000502")
+    uuid_values = iter((paper_id, temporary_id))
+    monkeypatch.setattr(ingestion_module, "uuid4", lambda: next(uuid_values))
+
     def fail_stage1(*_args, **_kwargs):
         raise ValueError("unexpected stage1 defect")
 
@@ -412,6 +417,12 @@ def test_stage1_unexpected_value_error_propagates(
                 media_type="application/pdf",
             )
         )
+
+    paper = service.get_summary(str(paper_id))
+    assert paper.status == ProcessingStatus.partial
+    assert paper.stage0_status == ProcessingStatus.completed
+    assert paper.stage1_status == ProcessingStatus.failed
+    assert paper.error == "The PDF could not be converted."
 
 
 def test_stage1_alignment_value_error_keeps_stage0_and_marks_paper_partial(

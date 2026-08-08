@@ -28,6 +28,10 @@ SAFE_PROCESSING_ERROR_SUMMARIES = frozenset(
 PUBLIC_PROCESSING_ERROR = "The paper could not be processed."
 
 
+class InvalidUploadError(ValueError):
+    """Raised only when an upload fails filename or signature preflight."""
+
+
 class PaperIngestionService:
     def __init__(self, *, settings: Settings, repository: PaperRepository) -> None:
         self.settings = settings
@@ -134,6 +138,9 @@ class PaperIngestionService:
             stage1 = self._run_stage1(source_path)
         except MarkdownParseError:
             return self._finish_stage1_failure(paper)
+        except Exception:
+            self._finish_stage1_failure(paper)
+            raise
 
         try:
             elements = tuple(
@@ -142,11 +149,17 @@ class PaperIngestionService:
             )
         except ValueError:
             return self._finish_stage1_failure(paper)
+        except Exception:
+            self._finish_stage1_failure(paper)
+            raise
 
         try:
             self.repository.save_stage1_document(paper.id, stage1.sections, elements)
         except (SQLAlchemyError, PageReferenceError):
             return self._finish_stage1_failure(paper)
+        except Exception:
+            self._finish_stage1_failure(paper)
+            raise
 
         self.repository.record_processing_status(
             paper.id, ProcessingStatus.completed, stage="stage1"
@@ -248,7 +261,7 @@ class PaperIngestionService:
         if not upload.filename.lower().endswith(".pdf") or not upload.content.startswith(
             b"%PDF-"
         ):
-            raise ValueError("upload must be a valid PDF upload")
+            raise InvalidUploadError("upload must be a valid PDF upload")
 
     @staticmethod
     def _public_error_summary(error_summary: str | None) -> str | None:

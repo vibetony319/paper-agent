@@ -131,6 +131,7 @@ class PaperRepository:
                 .where(processing_runs.c.stage.is_(None))
                 .where(processing_runs.c.error_summary.is_not(None))
                 .order_by(processing_runs.c.sequence.desc())
+                .limit(1)
             ).scalar_one_or_none()
 
     def get_paper(self, paper_id: str) -> Paper | None:

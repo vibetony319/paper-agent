@@ -367,6 +367,21 @@ def test_repository_returns_latest_durable_stage_status(repository) -> None:
     assert repository.get_latest_stage_status(paper.id, "missing") is None
 
 
+def test_repository_returns_newest_aggregate_processing_error(repository) -> None:
+    """Breaks if multiple aggregate failures raise instead of returning the newest error."""
+    paper = repository.create_paper(
+        original_filename="example.pdf", stored_filename="paper.pdf"
+    )
+    repository.record_processing_status(
+        paper.id, ProcessingStatus.failed, error_summary="older processing error"
+    )
+    repository.record_processing_status(
+        paper.id, ProcessingStatus.partial, error_summary="newer processing error"
+    )
+
+    assert repository.get_processing_error(paper.id) == "newer processing error"
+
+
 @pytest.mark.parametrize("target", ("section", "element", "note"))
 @pytest.mark.parametrize("page_owner", ("missing", "other"))
 def test_repository_rejects_non_owned_page_references(repository, target: str, page_owner: str) -> None:

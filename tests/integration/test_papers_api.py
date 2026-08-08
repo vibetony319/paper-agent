@@ -87,6 +87,44 @@ def test_invalid_upload_and_unknown_resources_are_mapped_to_safe_http_errors(
     assert client.get("/api/papers/missing/pages/0/image").status_code == 404
 
 
+def test_unexpected_stage1_error_is_a_safe_500_with_durable_partial_state(
+    client: TestClient, sample_pdf: Path, monkeypatch
+) -> None:
+    """Breaks if a Stage 1 defect is reported as invalid upload or loses its safe state."""
+    paper_id = UUID("00000000-0000-0000-0000-000000000601")
+    temporary_id = UUID("00000000-0000-0000-0000-000000000602")
+    uuid_values = iter((paper_id, temporary_id))
+    service = client.app.state.paper_ingestion_service
+    monkeypatch.setattr(ingestion_module, "uuid4", lambda: next(uuid_values))
+    monkeypatch.setattr(
+        service,
+        "_run_stage1",
+        lambda _path: (_ for _ in ()).throw(ValueError("unexpected stage1 defect")),
+    )
+
+    safe_client = TestClient(client.app, raise_server_exceptions=False)
+    try:
+        response = safe_client.post(
+            "/api/papers",
+            files={"file": ("paper.pdf", sample_pdf.read_bytes(), "application/pdf")},
+        )
+    finally:
+        safe_client.close()
+
+    assert response.status_code == 500
+    assert "unexpected stage1 defect" not in response.text
+    summary = client.get(f"/api/papers/{paper_id}")
+    assert summary.status_code == 200
+    assert summary.json() == {
+        "id": str(paper_id),
+        "original_filename": "paper.pdf",
+        "status": "partial",
+        "stage0_status": "completed",
+        "stage1_status": "failed",
+        "error": "The PDF could not be converted.",
+    }
+
+
 def test_page_image_invalid_page_paths_are_not_found_after_upload(
     client: TestClient, sample_pdf: Path
 ) -> None:
