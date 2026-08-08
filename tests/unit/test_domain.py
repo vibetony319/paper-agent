@@ -1,6 +1,13 @@
 import pytest
 
-from paper_agent.domain import BoundingBox, DocumentElement, ProcessingStatus
+from paper_agent.domain import (
+    BoundingBox,
+    DocumentElement,
+    GraphEdge,
+    GraphNode,
+    GraphStage,
+    ProcessingStatus,
+)
 
 
 def test_bounding_box_is_normalized_and_clamped():
@@ -40,3 +47,84 @@ def test_processing_status_exposes_persisted_state_values():
         "partial",
         "failed",
     ]
+
+
+def test_graph_records_require_allowed_types_and_source_evidence():
+    """Breaks if graph values can be created without grounded evidence or valid vocabulary."""
+    with pytest.raises(ValueError, match="evidence"):
+        GraphNode(
+            node_type="method",
+            name="Router",
+            summary="Routes tokens.",
+            stage=GraphStage.core,
+            evidence_element_ids=(),
+        )
+
+    with pytest.raises(ValueError, match="relation"):
+        GraphEdge(
+            source_node_id="a",
+            target_node_id="b",
+            relation_type="improves",
+            stage=GraphStage.core,
+            evidence_element_ids=("element-1",),
+        )
+
+
+def test_graph_nodes_enforce_stage_vocabulary_and_nonempty_trimmed_values():
+    """Breaks if invalid model output can create ambiguous graph nodes."""
+    with pytest.raises(ValueError, match="node type"):
+        GraphNode(
+            node_type="component",
+            name="Router",
+            summary="Routes tokens.",
+            stage=GraphStage.core,
+            evidence_element_ids=("element-1",),
+        )
+
+    with pytest.raises(ValueError, match="name"):
+        GraphNode(
+            node_type="method",
+            name=" Router ",
+            summary="Routes tokens.",
+            stage=GraphStage.core,
+            evidence_element_ids=("element-1",),
+        )
+
+    with pytest.raises(ValueError, match="summary"):
+        GraphNode(
+            node_type="method",
+            name="Router",
+            summary=" ",
+            stage=GraphStage.core,
+            evidence_element_ids=("element-1",),
+        )
+
+
+def test_graph_records_reject_duplicate_or_empty_evidence_and_self_edges():
+    """Breaks if evidence can be duplicated, blank, or edge endpoints collapse."""
+    with pytest.raises(ValueError, match="evidence"):
+        GraphNode(
+            node_type="method",
+            name="Router",
+            summary="Routes tokens.",
+            stage=GraphStage.core,
+            evidence_element_ids=("element-1", "element-1"),
+        )
+
+    with pytest.raises(ValueError, match="evidence"):
+        GraphEdge(
+            source_node_id="a",
+            target_node_id="b",
+            relation_type="uses",
+            stage=GraphStage.core,
+            evidence_element_ids=(" ",),
+        )
+
+    with pytest.raises(ValueError, match="different"):
+        GraphEdge(
+            source_node_id="node-1",
+            target_node_id="node-1",
+            relation_type="uses",
+            stage=GraphStage.core,
+            evidence_element_ids=("element-1",),
+        )

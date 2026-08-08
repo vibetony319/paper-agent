@@ -5,16 +5,20 @@ import pytest
 from sqlalchemy import insert, select
 from sqlalchemy.exc import IntegrityError
 
-from paper_agent.database import document_elements, notes, sections
+from paper_agent.database import document_elements, graph_nodes, notes, sections
 from paper_agent.domain import (
     BoundingBox,
     DocumentElement,
+    GraphEdge,
+    GraphNode,
+    GraphStage,
     Note,
     Page,
+    PaperGraph,
     ProcessingStatus,
     Section,
 )
-from paper_agent.storage import PaperRepository
+from paper_agent.storage import GraphReferenceError, PaperRepository
 
 
 @pytest.fixture
@@ -596,3 +600,213 @@ def test_repository_allows_owned_and_null_page_references(repository) -> None:
     )
     repository.create_note(paper.id, Note(body="Located", page_number=1))
     repository.create_note(paper.id, Note(body="Unlocated"))
+
+
+def _paper_with_located_element(repository: PaperRepository, name: str):
+    paper = repository.create_paper(
+        original_filename=f"{name}.pdf", stored_filename=f"{name}.pdf"
+    )
+    repository.save_page(paper.id, Page(number=1, width=200, height=300))
+    element = repository.save_element(
+        paper.id,
+        DocumentElement.paragraph(
+            f"{name} evidence", page_number=1, bbox=BoundingBox(0, 0, 1, 0.1)
+        ),
+    )
+    return paper, element
+
+
+def _deep_nodes(element_id: str) -> tuple[GraphNode, ...]:
+    return (
+        GraphNode(
+            id="old-deep-node",
+            node_type="component",
+            name="Encoder",
+            summary="Encodes inputs.",
+            stage=GraphStage.deep,
+            evidence_element_ids=(element_id,),
+        ),
+    )
+
+
+def _duplicate_nodes(element_id: str) -> tuple[GraphNode, ...]:
+    return (
+        GraphNode(
+            id="duplicate-one",
+            node_type="method",
+            name="Router",
+            summary="Routes tokens.",
+            stage=GraphStage.core,
+            evidence_element_ids=(element_id,),
+        ),
+        GraphNode(
+            id="duplicate-two",
+            node_type="method",
+            name="router",
+            summary="Routes inputs.",
+            stage=GraphStage.core,
+            evidence_element_ids=(element_id,),
+        ),
+    )
+
+
+def test_repository_rejects_graph_evidence_from_another_paper(repository):
+    """Breaks if graph claims can cite a source element from another paper."""
+    first, _ = _paper_with_located_element(repository, "first")
+    _, second_element = _paper_with_located_element(repository, "second")
+    node = GraphNode(
+        node_type="method",
+        name="Router",
+        summary="Routes tokens.",
+        stage=GraphStage.core,
+        evidence_element_ids=(second_element.id,),
+    )
+
+    with pytest.raises(GraphReferenceError, match="evidence"):
+        repository.replace_graph_stage(first.id, GraphStage.core, (node,), ())
+
+
+def test_repository_rejects_unlocated_graph_evidence(repository):
+    """Breaks if a graph can cite semantic content without a source location."""
+    paper = repository.create_paper(
+        original_filename="paper.pdf", stored_filename="paper.pdf"
+    )
+    element = repository.save_element(
+        paper.id, DocumentElement.paragraph("semantic only", location_status="unlocated")
+    )
+    node = GraphNode(
+        node_type="method",
+        name="Router",
+        summary="Routes tokens.",
+        stage=GraphStage.core,
+        evidence_element_ids=(element.id,),
+    )
+
+    with pytest.raises(GraphReferenceError, match="evidence"):
+        repository.replace_graph_stage(paper.id, GraphStage.core, (node,), ())
+
+
+def test_core_replacement_rolls_back_and_preserves_existing_graph(repository):
+    """Breaks if a failed core replacement deletes a prior deep graph."""
+    paper, element = _paper_with_located_element(repository, "paper")
+    old = _deep_nodes(element.id)
+    repository.replace_graph_stage(paper.id, GraphStage.deep, old, ())
+
+    with pytest.raises(IntegrityError):
+        repository.replace_graph_stage(
+            paper.id, GraphStage.core, _duplicate_nodes(element.id), ()
+        )
+
+    assert repository.get_graph(paper.id).nodes == old
+
+
+def test_graph_replacement_normalizes_names_and_respects_stage_dependencies(repository):
+    """Breaks if case variants coexist or stage replacement clears the wrong records."""
+    paper, element = _paper_with_located_element(repository, "paper")
+    core = GraphNode(
+        id="core-method",
+        node_type="method",
+        name="Router",
+        summary="Routes tokens.",
+        stage=GraphStage.core,
+        evidence_element_ids=(element.id,),
+    )
+    deep = _deep_nodes(element.id)
+    repository.replace_graph_stage(paper.id, GraphStage.core, (core,), ())
+    repository.replace_graph_stage(paper.id, GraphStage.deep, deep, ())
+
+    with repository.engine.connect() as connection:
+        assert connection.execute(
+            select(graph_nodes.c.normalized_name).where(graph_nodes.c.id == core.id)
+        ).scalar_one() == "router"
+
+    replacement = GraphNode(
+        id="replacement-component",
+        node_type="component",
+        name="Decoder",
+        summary="Decodes outputs.",
+        stage=GraphStage.deep,
+        evidence_element_ids=(element.id,),
+    )
+    repository.replace_graph_stage(paper.id, GraphStage.deep, (replacement,), ())
+    assert repository.get_graph(paper.id).nodes == (core, replacement)
+
+    replacement_core = GraphNode(
+        id="replacement-method",
+        node_type="method",
+        name="Retriever",
+        summary="Retrieves context.",
+        stage=GraphStage.core,
+        evidence_element_ids=(element.id,),
+    )
+    assert repository.replace_graph_stage(
+        paper.id, GraphStage.core, (replacement_core,), ()
+    ).nodes == (replacement_core,)
+    assert repository.get_graph(paper.id).nodes == (replacement_core,)
+
+
+def test_repository_reads_graph_nodes_neighbors_subgraphs_and_directed_paths(repository):
+    """Breaks if graph reads or traversal omit reachable same-paper records."""
+    paper, element = _paper_with_located_element(repository, "paper")
+    nodes = (
+        GraphNode(
+            id="node-a",
+            node_type="method",
+            name="Router",
+            summary="Routes tokens.",
+            stage=GraphStage.core,
+            evidence_element_ids=(element.id,),
+        ),
+        GraphNode(
+            id="node-b",
+            node_type="claim",
+            name="Efficiency",
+            summary="Improves efficiency.",
+            stage=GraphStage.core,
+            evidence_element_ids=(element.id,),
+        ),
+        GraphNode(
+            id="node-c",
+            node_type="experiment",
+            name="Benchmark",
+            summary="Tests the method.",
+            stage=GraphStage.core,
+            evidence_element_ids=(element.id,),
+        ),
+    )
+    edges = (
+        GraphEdge(
+            id="edge-a-b",
+            source_node_id="node-a",
+            target_node_id="node-b",
+            relation_type="supports",
+            stage=GraphStage.core,
+            evidence_element_ids=(element.id,),
+        ),
+        GraphEdge(
+            id="edge-b-c",
+            source_node_id="node-b",
+            target_node_id="node-c",
+            relation_type="tests",
+            stage=GraphStage.core,
+            evidence_element_ids=(element.id,),
+        ),
+    )
+    repository.replace_graph_stage(paper.id, GraphStage.core, nodes, edges)
+
+    assert repository.get_graph_node(paper.id, "missing") is None
+    assert repository.get_graph_node(paper.id, "node-b") == nodes[1]
+    assert repository.get_graph_neighbors(paper.id, "node-b") == PaperGraph(
+        nodes=nodes,
+        edges=edges,
+    )
+    assert repository.get_graph_subgraph(paper.id, ("node-a",), depth=1) == PaperGraph(
+        nodes=nodes[:2], edges=edges[:1]
+    )
+    assert repository.get_graph_subgraph(paper.id, ("node-a",), depth=2) == PaperGraph(
+        nodes=nodes, edges=edges
+    )
+    assert repository.find_graph_paths(paper.id, "node-a", "node-c", max_depth=2) == (
+        ("node-a", "node-b", "node-c"),
+    )
+    assert repository.find_graph_paths(paper.id, "node-c", "node-a", max_depth=2) == ()
