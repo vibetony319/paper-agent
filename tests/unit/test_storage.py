@@ -27,6 +27,7 @@ def test_repository_round_trips_locatable_and_unlocated_elements(repository):
     paper = repository.create_paper(
         original_filename="example.pdf", stored_filename="paper.pdf"
     )
+    repository.save_page(paper.id, Page(number=1, width=200, height=300))
     located = DocumentElement.paragraph(
         "Located", page_number=1, bbox=BoundingBox(0, 0, 1, 0.1)
     )
@@ -79,6 +80,7 @@ def test_repository_persists_bbox_as_four_real_columns(repository):
     paper = repository.create_paper(
         original_filename="example.pdf", stored_filename="paper.pdf"
     )
+    repository.save_page(paper.id, Page(number=1, width=200, height=300))
     repository.save_element(
         paper.id,
         DocumentElement.paragraph(
@@ -104,6 +106,7 @@ def test_stage1_batch_write_rolls_back_sections_and_paragraphs_on_persistence_er
     paper = repository.create_paper(
         original_filename="example.pdf", stored_filename="paper.pdf"
     )
+    repository.save_page(paper.id, Page(number=1, width=200, height=300))
     section = Section(title="Introduction", order=0)
     duplicate_id = "duplicate-stage1-paragraph"
     elements = (
@@ -303,3 +306,74 @@ def test_repository_migrates_legacy_processing_runs_and_appends_status(tmp_path:
         ProcessingStatus.completed,
         ProcessingStatus.partial,
     )
+    assert reopened.get_paper("legacy-paper").source_published is False
+
+
+def test_repository_returns_latest_durable_stage_status(repository) -> None:
+    """Breaks if public summaries cannot ask for one stage's newest durable state."""
+    paper = repository.create_paper(
+        original_filename="example.pdf",
+        stored_filename="paper.pdf",
+        status=ProcessingStatus.running,
+    )
+    repository.record_processing_status(paper.id, ProcessingStatus.queued, stage="stage0")
+    repository.record_processing_status(paper.id, ProcessingStatus.completed, stage="stage0")
+    repository.record_processing_status(paper.id, ProcessingStatus.queued, stage="stage1")
+    repository.record_processing_status(paper.id, ProcessingStatus.running, stage="stage1")
+
+    assert repository.get_latest_stage_status(paper.id, "stage0") == ProcessingStatus.completed
+    assert repository.get_latest_stage_status(paper.id, "stage1") == ProcessingStatus.running
+    assert repository.get_latest_stage_status(paper.id, "missing") is None
+
+
+@pytest.mark.parametrize("target", ("section", "element", "note"))
+@pytest.mark.parametrize("page_owner", ("missing", "other"))
+def test_repository_rejects_non_owned_page_references(repository, target: str, page_owner: str) -> None:
+    """Breaks if repository writes can point at missing or another paper's page."""
+    paper = repository.create_paper(
+        original_filename="first.pdf", stored_filename="first.pdf"
+    )
+    other_paper = repository.create_paper(
+        original_filename="second.pdf", stored_filename="second.pdf"
+    )
+    page_number = 1
+    if page_owner == "other":
+        repository.save_page(other_paper.id, Page(number=page_number, width=200, height=300))
+
+    if target == "section":
+        operation = lambda: repository.save_section(
+            paper.id, Section(title="Invalid", order=0, page_number=page_number)
+        )
+    elif target == "element":
+        operation = lambda: repository.save_element(
+            paper.id,
+            DocumentElement.paragraph(
+                "Invalid", page_number=page_number, bbox=BoundingBox(0, 0, 1, 0.1)
+            ),
+        )
+    else:
+        operation = lambda: repository.create_note(
+            paper.id, Note(body="Invalid", page_number=page_number)
+        )
+
+    with pytest.raises(ValueError, match="page target does not belong to paper"):
+        operation()
+
+
+def test_repository_allows_owned_and_null_page_references(repository) -> None:
+    """Breaks if repository page ownership validation rejects allowed references."""
+    paper = repository.create_paper(
+        original_filename="example.pdf", stored_filename="paper.pdf"
+    )
+    repository.save_page(paper.id, Page(number=1, width=200, height=300))
+
+    repository.save_section(paper.id, Section(title="Located", order=0, page_number=1))
+    repository.save_section(paper.id, Section(title="Unlocated", order=1))
+    repository.save_element(
+        paper.id,
+        DocumentElement.paragraph(
+            "Located", page_number=1, bbox=BoundingBox(0, 0, 1, 0.1)
+        ),
+    )
+    repository.create_note(paper.id, Note(body="Located", page_number=1))
+    repository.create_note(paper.id, Note(body="Unlocated"))

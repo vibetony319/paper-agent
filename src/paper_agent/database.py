@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     Column,
     Float,
@@ -26,6 +27,7 @@ papers = Table(
     Column("original_filename", String, nullable=False),
     Column("stored_filename", String, nullable=False),
     Column("status", String(16), nullable=False),
+    Column("source_published", Boolean, nullable=False, server_default="0"),
 )
 
 processing_runs = Table(
@@ -130,8 +132,20 @@ def initialize_database(database_url: str) -> Engine:
     engine = create_database_engine(database_url)
     metadata.create_all(engine)
     if database_url.startswith("sqlite"):
+        _migrate_legacy_papers(engine)
         _migrate_legacy_processing_runs(engine)
     return engine
+
+
+def _migrate_legacy_papers(engine: Engine) -> None:
+    with engine.begin() as connection:
+        columns = {
+            row[1] for row in connection.exec_driver_sql("PRAGMA table_info(papers)")
+        }
+        if "source_published" not in columns:
+            connection.exec_driver_sql(
+                "ALTER TABLE papers ADD COLUMN source_published BOOLEAN NOT NULL DEFAULT 0"
+            )
 
 
 def _migrate_legacy_processing_runs(engine: Engine) -> None:

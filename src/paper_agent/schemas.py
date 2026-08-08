@@ -31,7 +31,12 @@ class PaperSummary:
 
     @classmethod
     def from_paper(
-        cls, paper: Paper, *, error: str | None = None
+        cls,
+        paper: Paper,
+        *,
+        stage0_status: ProcessingStatus | None = None,
+        stage1_status: ProcessingStatus | None = None,
+        error: str | None = None,
     ) -> "PaperSummary":
         stage_statuses = {
             ProcessingStatus.queued: (ProcessingStatus.queued, ProcessingStatus.queued),
@@ -43,13 +48,13 @@ class PaperSummary:
             ProcessingStatus.partial: (ProcessingStatus.completed, ProcessingStatus.failed),
             ProcessingStatus.failed: (ProcessingStatus.failed, ProcessingStatus.queued),
         }
-        stage0_status, stage1_status = stage_statuses[paper.status]
+        fallback_stage0_status, fallback_stage1_status = stage_statuses[paper.status]
         return cls(
             id=paper.id,
             original_filename=paper.original_filename,
             status=paper.status,
-            stage0_status=stage0_status,
-            stage1_status=stage1_status,
+            stage0_status=fallback_stage0_status if stage0_status is None else stage0_status,
+            stage1_status=fallback_stage1_status if stage1_status is None else stage1_status,
             error=error,
         )
 

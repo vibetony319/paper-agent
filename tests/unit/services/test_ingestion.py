@@ -63,6 +63,7 @@ def test_ingestion_persists_source_geometry_and_document(
         paragraph.bbox.y1,
     ) == pytest.approx((0.1, 0.040875, 0.387375, 0.116445))
     assert service.get_source_path(paper.id).read_bytes() == sample_pdf_bytes
+    assert service.repository.get_paper(paper.id).source_published is True
     assert service.repository.get_processing_statuses(paper.id) == (
         ProcessingStatus.queued,
         ProcessingStatus.running,
@@ -247,7 +248,9 @@ def test_temporary_create_collision_does_not_delete_an_unowned_file(
     assert "private" not in paper.error
     assert service.repository.get_processing_error(paper.id) == paper.error
     assert unrelated_file.read_bytes() == b"other upload"
-    assert not service.get_source_path(paper.id).exists()
+    with pytest.raises(KeyError):
+        service.get_source_path(paper.id)
+    assert not (papers_dir / f"{paper.id}.pdf").exists()
 
 
 def test_final_source_collision_preserves_existing_pdf_and_fails_safely(
@@ -280,6 +283,7 @@ def test_final_source_collision_preserves_existing_pdf_and_fails_safely(
     assert paper.error == "The PDF source could not be stored."
     assert source_path.read_bytes() == b"existing final PDF"
     assert not temporary_source_path.exists()
+    assert service.repository.get_paper(paper.id).source_published is False
 
 
 def test_temporary_source_collision_preserves_unowned_file_and_fails_safely(

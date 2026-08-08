@@ -65,6 +65,7 @@ class PaperIngestionService:
             with source_file:
                 source_file.write(upload.content)
             os.link(temporary_source_path, source_path)
+            self.repository.mark_source_published(paper.id)
         except OSError:
             if temporary_source_owned:
                 try:
@@ -173,12 +174,17 @@ class PaperIngestionService:
             raise KeyError(paper_id)
         error_summary = self.repository.get_processing_error(paper_id)
         return PaperSummary.from_paper(
-            paper, error=self._public_error_summary(error_summary)
+            paper,
+            stage0_status=self.repository.get_latest_stage_status(paper_id, "stage0"),
+            stage1_status=self.repository.get_latest_stage_status(paper_id, "stage1"),
+            error=self._public_error_summary(error_summary),
         )
 
     def get_source_path(self, paper_id: str) -> Path:
         paper = self.repository.get_paper(paper_id)
         if paper is None:
+            raise KeyError(paper_id)
+        if not paper.source_published:
             raise KeyError(paper_id)
         return self.settings.data_dir / "papers" / paper.stored_filename
 
@@ -257,4 +263,4 @@ class PaperIngestionService:
         self.repository.record_processing_status(
             paper.id, status, error_summary=error_summary
         )
-        return PaperSummary.from_paper(paper, error=error_summary)
+        return self.get_summary(paper.id)

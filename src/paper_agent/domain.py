@@ -50,6 +50,7 @@ class Paper:
     original_filename: str
     stored_filename: str
     status: ProcessingStatus = ProcessingStatus.queued
+    source_published: bool = False
 
 
 @dataclass(frozen=True)

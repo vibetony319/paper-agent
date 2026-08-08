@@ -1,9 +1,11 @@
 import json
 from pathlib import Path
+from uuid import UUID
 
 from fastapi.testclient import TestClient
 
 from paper_agent.domain import ProcessingStatus
+import paper_agent.services.ingestion as ingestion_module
 
 
 def _upload_pdf(client: TestClient, sample_pdf: Path, filename: str = "paper.pdf") -> dict:
@@ -187,3 +189,53 @@ def test_paper_summary_maps_unknown_persisted_error_to_safe_message(
     assert response.json()["error"] == "The paper could not be processed."
     assert unsafe_error not in response.text
     assert "C:\\Users\\Admin\\secret.pdf" not in response.text
+
+
+def test_public_summary_uses_latest_durable_status_for_each_stage(client: TestClient) -> None:
+    """Breaks if a running paper makes Stage 0 look running and Stage 1 queued."""
+    repository = client.app.state.paper_ingestion_service.repository
+    paper = repository.create_paper(
+        original_filename="running.pdf",
+        stored_filename="running.pdf",
+        status=ProcessingStatus.running,
+    )
+    repository.record_processing_status(paper.id, ProcessingStatus.running)
+    repository.record_processing_status(paper.id, ProcessingStatus.completed, stage="stage0")
+    repository.record_processing_status(paper.id, ProcessingStatus.running, stage="stage1")
+
+    response = client.get(f"/api/papers/{paper.id}")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "id": paper.id,
+        "original_filename": "running.pdf",
+        "status": "running",
+        "stage0_status": "completed",
+        "stage1_status": "running",
+        "error": None,
+    }
+
+
+def test_final_source_collision_never_serves_unowned_existing_pdf(
+    client: TestClient, sample_pdf: Path, monkeypatch
+) -> None:
+    """Breaks if source/page routes use a collision's pre-existing bytes as this paper's source."""
+    paper_id = UUID("00000000-0000-0000-0000-000000000401")
+    temporary_id = UUID("00000000-0000-0000-0000-000000000402")
+    uuid_values = iter((paper_id, temporary_id))
+    monkeypatch.setattr(ingestion_module, "uuid4", lambda: next(uuid_values))
+    papers_dir = client.app.state.settings.data_dir / "papers"
+    source_path = papers_dir / f"{paper_id}.pdf"
+    source_path.write_bytes(b"existing final PDF")
+
+    uploaded = client.post(
+        "/api/papers",
+        files={"file": ("paper.pdf", sample_pdf.read_bytes(), "application/pdf")},
+    )
+
+    assert uploaded.status_code == 201
+    assert uploaded.json()["id"] == str(paper_id)
+    assert uploaded.json()["status"] == "failed"
+    assert source_path.read_bytes() == b"existing final PDF"
+    assert client.get(f"/api/papers/{paper_id}/source").status_code == 404
+    assert client.get(f"/api/papers/{paper_id}/pages/1/image").status_code == 404

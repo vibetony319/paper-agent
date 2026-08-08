@@ -50,6 +50,7 @@ class PaperRepository:
                     original_filename=paper.original_filename,
                     stored_filename=paper.stored_filename,
                     status=paper.status.value,
+                    source_published=paper.source_published,
                 )
             )
         return paper
@@ -93,6 +94,31 @@ class PaperRepository:
     ) -> tuple[ProcessingStatus, ...]:
         return self._get_processing_statuses(paper_id, stage=stage)
 
+    def get_latest_stage_status(
+        self, paper_id: str, stage: str
+    ) -> ProcessingStatus | None:
+        with self.engine.connect() as connection:
+            status = connection.execute(
+                select(processing_runs.c.status)
+                .where(processing_runs.c.paper_id == paper_id)
+                .where(processing_runs.c.stage == stage)
+                .order_by(processing_runs.c.sequence.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+        return None if status is None else ProcessingStatus(status)
+
+    def mark_source_published(self, paper_id: str) -> Paper:
+        with self.engine.begin() as connection:
+            connection.execute(
+                update(papers)
+                .where(papers.c.id == paper_id)
+                .values(source_published=True)
+            )
+        paper = self.get_paper(paper_id)
+        if paper is None:
+            raise KeyError(paper_id)
+        return paper
+
     def get_processing_error(self, paper_id: str) -> str | None:
         with self.engine.connect() as connection:
             return connection.execute(
@@ -126,6 +152,7 @@ class PaperRepository:
 
     def save_section(self, paper_id: str, section: Section) -> Section:
         with self.engine.begin() as connection:
+            self._require_owned_page(connection, paper_id, section.page_number)
             connection.execute(
                 insert(sections).values(
                     id=section.id,
@@ -152,6 +179,10 @@ class PaperRepository:
             for index, element in enumerate(stage1_elements)
         )
         with self.engine.begin() as connection:
+            for section in stage1_sections:
+                self._require_owned_page(connection, paper_id, section.page_number)
+            for element in persisted_elements:
+                self._require_owned_page(connection, paper_id, element.page_number)
             if stage1_sections:
                 connection.execute(
                     insert(sections),
@@ -203,6 +234,7 @@ class PaperRepository:
         persisted = replace(element, order=order)
         bbox = persisted.bbox
         with self.engine.begin() as connection:
+            self._require_owned_page(connection, paper_id, persisted.page_number)
             connection.execute(
                 insert(document_elements).values(
                     id=persisted.id,
@@ -233,6 +265,7 @@ class PaperRepository:
     def create_note(self, paper_id: str, note: Note) -> Note:
         order = self._next_order(notes, paper_id)
         with self.engine.begin() as connection:
+            self._require_owned_page(connection, paper_id, note.page_number)
             connection.execute(
                 insert(notes).values(
                     id=note.id,
@@ -298,12 +331,25 @@ class PaperRepository:
         return tuple(ProcessingStatus(row.status) for row in rows)
 
     @staticmethod
+    def _require_owned_page(connection, paper_id: str, page_number: int | None) -> None:
+        if page_number is None:
+            return
+        page_id = connection.execute(
+            select(pages.c.id)
+            .where(pages.c.paper_id == paper_id)
+            .where(pages.c.number == page_number)
+        ).scalar_one_or_none()
+        if page_id is None:
+            raise ValueError("page target does not belong to paper")
+
+    @staticmethod
     def _paper_from_row(row) -> Paper:
         return Paper(
             id=row["id"],
             original_filename=row["original_filename"],
             stored_filename=row["stored_filename"],
             status=ProcessingStatus(row["status"]),
+            source_published=bool(row["source_published"]),
         )
 
     @staticmethod
