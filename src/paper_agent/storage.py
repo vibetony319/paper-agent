@@ -1,7 +1,7 @@
 from dataclasses import replace
 from uuid import uuid4
 
-from sqlalchemy import func, insert, select
+from sqlalchemy import func, insert, select, update
 from sqlalchemy.engine import Engine
 
 from paper_agent.database import (
@@ -10,6 +10,7 @@ from paper_agent.database import (
     notes,
     pages,
     papers,
+    processing_runs,
     sections,
 )
 from paper_agent.domain import (
@@ -34,9 +35,10 @@ class PaperRepository:
         original_filename: str,
         stored_filename: str,
         status: ProcessingStatus = ProcessingStatus.queued,
+        paper_id: str | None = None,
     ) -> Paper:
         paper = Paper(
-            id=str(uuid4()),
+            id=paper_id or str(uuid4()),
             original_filename=original_filename,
             stored_filename=stored_filename,
             status=status,
@@ -51,6 +53,55 @@ class PaperRepository:
                 )
             )
         return paper
+
+    def update_paper_status(self, paper_id: str, status: ProcessingStatus) -> Paper:
+        with self.engine.begin() as connection:
+            connection.execute(
+                update(papers).where(papers.c.id == paper_id).values(status=status.value)
+            )
+        paper = self.get_paper(paper_id)
+        if paper is None:
+            raise KeyError(paper_id)
+        return paper
+
+    def record_processing_status(
+        self,
+        paper_id: str,
+        status: ProcessingStatus,
+        *,
+        stage: str | None = None,
+        error_summary: str | None = None,
+    ) -> None:
+        sequence = self._next_processing_sequence(paper_id)
+        with self.engine.begin() as connection:
+            connection.execute(
+                insert(processing_runs).values(
+                    id=str(uuid4()),
+                    paper_id=paper_id,
+                    sequence=sequence,
+                    stage=stage,
+                    status=status.value,
+                    error_summary=error_summary,
+                )
+            )
+
+    def get_processing_statuses(self, paper_id: str) -> tuple[ProcessingStatus, ...]:
+        return self._get_processing_statuses(paper_id, stage=None)
+
+    def get_stage_statuses(
+        self, paper_id: str, stage: str
+    ) -> tuple[ProcessingStatus, ...]:
+        return self._get_processing_statuses(paper_id, stage=stage)
+
+    def get_processing_error(self, paper_id: str) -> str | None:
+        with self.engine.connect() as connection:
+            return connection.execute(
+                select(processing_runs.c.error_summary)
+                .where(processing_runs.c.paper_id == paper_id)
+                .where(processing_runs.c.stage.is_(None))
+                .where(processing_runs.c.error_summary.is_not(None))
+                .order_by(processing_runs.c.sequence.desc())
+            ).scalar_one_or_none()
 
     def get_paper(self, paper_id: str) -> Paper | None:
         with self.engine.connect() as connection:
@@ -171,6 +222,29 @@ class PaperRepository:
                 select(func.max(table.c.order_index)).where(table.c.paper_id == paper_id)
             ).scalar_one()
         return 0 if current is None else current + 1
+
+    def _next_processing_sequence(self, paper_id: str) -> int:
+        with self.engine.connect() as connection:
+            current = connection.execute(
+                select(func.max(processing_runs.c.sequence)).where(
+                    processing_runs.c.paper_id == paper_id
+                )
+            ).scalar_one()
+        return 0 if current is None else current + 1
+
+    def _get_processing_statuses(
+        self, paper_id: str, *, stage: str | None
+    ) -> tuple[ProcessingStatus, ...]:
+        statement = select(processing_runs.c.status).where(
+            processing_runs.c.paper_id == paper_id
+        )
+        if stage is None:
+            statement = statement.where(processing_runs.c.stage.is_(None))
+        else:
+            statement = statement.where(processing_runs.c.stage == stage)
+        with self.engine.connect() as connection:
+            rows = connection.execute(statement.order_by(processing_runs.c.sequence))
+        return tuple(ProcessingStatus(row.status) for row in rows)
 
     @staticmethod
     def _paper_from_row(row) -> Paper:

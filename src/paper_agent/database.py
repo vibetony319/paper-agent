@@ -33,7 +33,11 @@ processing_runs = Table(
     metadata,
     Column("id", String(36), primary_key=True),
     Column("paper_id", String(36), ForeignKey("papers.id"), nullable=False),
+    Column("sequence", Integer, nullable=False),
+    Column("stage", String(16)),
     Column("status", String(16), nullable=False),
+    Column("error_summary", String),
+    UniqueConstraint("paper_id", "sequence"),
 )
 
 pages = Table(

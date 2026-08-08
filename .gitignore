@@ -9,6 +9,7 @@ coverage.xml
 htmlcov/
 
 # Local application data and uploaded papers
+.paper-agent/
 var/
 data/
 
