@@ -97,6 +97,24 @@ def test_page_image_invalid_page_paths_are_not_found_after_upload(
         assert response.status_code == 404
 
 
+def test_encrypted_pdf_upload_is_persisted_as_stage0_failure_not_invalid_upload(
+    client: TestClient, encrypted_pdf: Path
+) -> None:
+    """Breaks if a syntactically valid encrypted PDF receives the upload 422 path."""
+    response = client.post(
+        "/api/papers",
+        files={"file": ("locked.pdf", encrypted_pdf.read_bytes(), "application/pdf")},
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["status"] == "failed"
+    assert body["stage0_status"] == "failed"
+    assert body["stage1_status"] == "queued"
+    assert body["error"] == "The PDF could not be parsed."
+    assert client.get(f"/api/papers/{body['id']}/pages/1/image").status_code == 404
+
+
 def test_notes_accept_same_paper_element_and_reject_cross_paper_element(
     client: TestClient, sample_pdf: Path
 ) -> None:

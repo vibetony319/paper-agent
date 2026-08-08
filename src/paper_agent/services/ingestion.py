@@ -3,6 +3,8 @@ import os
 from pathlib import Path
 from uuid import uuid4
 
+from sqlalchemy.exc import SQLAlchemyError
+
 from paper_agent.config import Settings
 from paper_agent.domain import DocumentElement, Note, PaperDocument, ProcessingStatus
 from paper_agent.parsers.base import PdfParseError
@@ -138,7 +140,12 @@ class PaperIngestionService:
 
         try:
             stage1 = self._run_stage1(source_path)
-        except MarkdownParseError:
+            elements = tuple(
+                replace(element, order=None)
+                for element in self.aligner.align(stage1.paragraphs, stage0.text_blocks)
+            )
+            self.repository.save_stage1_document(paper.id, stage1.sections, elements)
+        except (MarkdownParseError, ValueError, SQLAlchemyError):
             self.repository.record_processing_status(
                 paper.id,
                 ProcessingStatus.failed,
@@ -150,10 +157,6 @@ class PaperIngestionService:
                 ProcessingStatus.partial,
                 error_summary="The PDF could not be converted.",
             )
-        for section in stage1.sections:
-            self.repository.save_section(paper.id, section)
-        for element in self.aligner.align(stage1.paragraphs, stage0.text_blocks):
-            self.repository.save_element(paper.id, replace(element, order=None))
 
         self.repository.record_processing_status(
             paper.id, ProcessingStatus.completed, stage="stage1"

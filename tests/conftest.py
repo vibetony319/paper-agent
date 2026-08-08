@@ -29,6 +29,22 @@ def sample_pdf(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
+def encrypted_pdf(tmp_path: Path) -> Path:
+    path = tmp_path / "encrypted.pdf"
+    document = pymupdf.open()
+    page = document.new_page(width=200, height=200)
+    page.insert_text((20, 20), "Locked content")
+    document.save(
+        path,
+        encryption=pymupdf.PDF_ENCRYPT_AES_256,
+        owner_pw="owner-password",
+        user_pw="user-password",
+    )
+    document.close()
+    return path
+
+
+@pytest.fixture
 def visual_pdf(tmp_path: Path) -> Path:
     path = tmp_path / "visuals.pdf"
     document = pymupdf.open()

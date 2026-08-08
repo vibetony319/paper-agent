@@ -44,3 +44,9 @@ def test_stage0_rejects_a_malformed_pdf(tmp_path):
 
     with pytest.raises(PdfParseError, match="could not be opened"):
         PyMuPdfStage0Parser().parse(broken)
+
+
+def test_stage0_rejects_authentication_required_pdf(encrypted_pdf):
+    """Breaks if encrypted sources leak PyMuPDF authentication errors."""
+    with pytest.raises(PdfParseError, match="requires authentication"):
+        PyMuPdfStage0Parser().parse(encrypted_pdf)

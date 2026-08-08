@@ -56,6 +56,8 @@ class PyMuPdfStage0Parser:
             raise ValueError("page number must be positive")
         try:
             with pymupdf.open(pdf_path) as document:
+                if document.needs_pass:
+                    raise PdfParseError("PDF requires authentication")
                 if page_number > document.page_count:
                     raise ValueError("page number does not exist")
                 return document[page_number - 1].get_pixmap().tobytes("png")
@@ -76,6 +78,8 @@ class PyMuPdfStage0Parser:
         visual_elements: list[VisualElement] = []
 
         with pymupdf.open(pdf_path) as document:
+            if document.needs_pass:
+                raise PdfParseError("PDF requires authentication")
             for page_number, page in enumerate(document, start=1):
                 page_rect = page.mediabox
                 pages.append(

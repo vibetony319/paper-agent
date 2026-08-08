@@ -99,6 +99,39 @@ def test_repository_persists_bbox_as_four_real_columns(repository):
     assert tuple(row) == pytest.approx((0.1, 0.2, 0.7, 0.8))
 
 
+def test_stage1_batch_write_rolls_back_sections_and_paragraphs_on_persistence_error(repository):
+    """Breaks if one Stage 1 transaction leaves earlier semantic rows durable."""
+    paper = repository.create_paper(
+        original_filename="example.pdf", stored_filename="paper.pdf"
+    )
+    section = Section(title="Introduction", order=0)
+    duplicate_id = "duplicate-stage1-paragraph"
+    elements = (
+        DocumentElement(
+            kind="paragraph",
+            text="First paragraph",
+            page_number=1,
+            bbox=BoundingBox(0, 0, 1, 0.1),
+            section_id=section.id,
+            id=duplicate_id,
+        ),
+        DocumentElement(
+            kind="paragraph",
+            text="Second paragraph",
+            page_number=1,
+            bbox=BoundingBox(0, 0.2, 1, 0.3),
+            section_id=section.id,
+            id=duplicate_id,
+        ),
+    )
+
+    with pytest.raises(IntegrityError):
+        repository.save_stage1_document(paper.id, (section,), elements)
+
+    assert repository.get_sections(paper.id) == ()
+    assert repository.get_elements(paper.id) == ()
+
+
 def test_sqlite_rejects_unlocated_element_with_source_geometry(repository):
     """Breaks if direct persistence can create a false source location."""
     paper = repository.create_paper(

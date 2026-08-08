@@ -137,6 +137,57 @@ class PaperRepository:
             )
         return section
 
+    def save_stage1_document(
+        self,
+        paper_id: str,
+        stage1_sections: tuple[Section, ...],
+        stage1_elements: tuple[DocumentElement, ...],
+    ) -> None:
+        next_order = self._next_order(document_elements, paper_id)
+        persisted_elements = tuple(
+            replace(
+                element,
+                order=element.order if element.order is not None else next_order + index,
+            )
+            for index, element in enumerate(stage1_elements)
+        )
+        with self.engine.begin() as connection:
+            if stage1_sections:
+                connection.execute(
+                    insert(sections),
+                    [
+                        {
+                            "id": section.id,
+                            "paper_id": paper_id,
+                            "title": section.title,
+                            "page_number": section.page_number,
+                            "order_index": section.order,
+                        }
+                        for section in stage1_sections
+                    ],
+                )
+            if persisted_elements:
+                connection.execute(
+                    insert(document_elements),
+                    [
+                        {
+                            "id": element.id,
+                            "paper_id": paper_id,
+                            "section_id": element.section_id,
+                            "kind": element.kind,
+                            "text": element.text,
+                            "page_number": element.page_number,
+                            "bbox_x0": None if element.bbox is None else element.bbox.x0,
+                            "bbox_y0": None if element.bbox is None else element.bbox.y0,
+                            "bbox_x1": None if element.bbox is None else element.bbox.x1,
+                            "bbox_y1": None if element.bbox is None else element.bbox.y1,
+                            "location_status": element.location_status,
+                            "order_index": element.order,
+                        }
+                        for element in persisted_elements
+                    ],
+                )
+
     def get_sections(self, paper_id: str) -> tuple[Section, ...]:
         with self.engine.connect() as connection:
             rows = connection.execute(
