@@ -68,3 +68,44 @@ interpreter lacks `pytest`; all test evidence above uses the repository's
 - No material implementation concerns. A separate code-review agent was not
   available in this environment; the change received manual requirement
   review, `git diff --check`, focused tests, and the full test suite instead.
+
+## Fix round 1
+
+### Fix
+
+- Added a runtime tuple check at the shared graph-evidence validation boundary.
+  `GraphNode` and `GraphEdge` now reject strings, lists, and every other
+  non-tuple value before any evidence-ID iteration or persistence can occur.
+- Added an edge-specific foreign-paper evidence regression. It verifies that
+  `replace_graph_stage` rejects a relation whose evidence element belongs to a
+  different paper.
+- No API or routing changes were made; the reviewer item owned by Task 5 was
+  intentionally left out of scope.
+
+### TDD evidence
+
+- Root cause reproduction: `GraphNode` accepted the string `"abc"`, and
+  `GraphEdge` accepted the list `["abc"]`, because validation iterated values
+  before checking the container type.
+- Red: after adding the four domain cases (string and list for each graph
+  record), `.\\.venv\\Scripts\\python.exe -m pytest tests/unit/test_domain.py
+  -v` produced 4 expected failures: each non-tuple value did not raise.
+- Green: the minimal shared type guard made the same command pass all 11
+  domain tests.
+- The new edge foreign-paper test passed on its first run because the existing
+  unified repository evidence check already evaluated edge evidence. It is a
+  focused regression test for that previously untested path, not a production
+  behavior change.
+
+### Test results
+
+- `.\\.venv\\Scripts\\python.exe -m pytest tests/unit/test_domain.py -v` —
+  PASS, 11 passed.
+- `.\\.venv\\Scripts\\python.exe -m pytest tests/unit/test_storage.py -v` —
+  PASS, 29 passed.
+- `.\\.venv\\Scripts\\python.exe -m pytest tests/unit/test_domain.py
+  tests/unit/test_storage.py -v` — PASS, 40 passed.
+
+### Commit evidence
+
+- `a59c26b fix: reject non-tuple graph evidence IDs`
