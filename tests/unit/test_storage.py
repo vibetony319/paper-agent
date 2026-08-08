@@ -423,6 +423,48 @@ def test_repository_migration_backfills_only_verified_legacy_sources(
     assert repository.get_paper(paper_id).source_published is expected_published
 
 
+def test_repository_migrates_old_processing_runs_before_backfilling_source(
+    tmp_path: Path,
+):
+    """Breaks if source backfill reads columns before their legacy migration."""
+    database_path = tmp_path / "oldest-legacy.db"
+    sources_dir = tmp_path / "papers"
+    sources_dir.mkdir()
+    (sources_dir / "oldest-legacy.pdf").write_bytes(b"%PDF-1.7\nlegacy source")
+    with sqlite3.connect(database_path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE papers (
+                id VARCHAR(36) PRIMARY KEY,
+                original_filename VARCHAR NOT NULL,
+                stored_filename VARCHAR NOT NULL,
+                status VARCHAR(16) NOT NULL
+            );
+            CREATE TABLE processing_runs (
+                id VARCHAR(36) PRIMARY KEY,
+                paper_id VARCHAR(36) NOT NULL,
+                status VARCHAR(16) NOT NULL,
+                FOREIGN KEY(paper_id) REFERENCES papers(id)
+            );
+            """
+        )
+        connection.execute(
+            "INSERT INTO papers VALUES (?, ?, ?, ?)",
+            ("oldest-legacy", "oldest-legacy.pdf", "oldest-legacy.pdf", "completed"),
+        )
+        connection.execute(
+            "INSERT INTO processing_runs VALUES (?, ?, ?)",
+            ("oldest-legacy-run", "oldest-legacy", "completed"),
+        )
+
+    repository = PaperRepository(f"sqlite:///{database_path}")
+
+    assert repository.get_paper("oldest-legacy").source_published is True
+    assert repository.get_processing_statuses("oldest-legacy") == (
+        ProcessingStatus.completed,
+    )
+
+
 def test_repository_returns_latest_durable_stage_status(repository) -> None:
     """Breaks if public summaries cannot ask for one stage's newest durable state."""
     paper = repository.create_paper(
