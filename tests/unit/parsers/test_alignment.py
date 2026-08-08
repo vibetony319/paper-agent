@@ -45,6 +45,25 @@ def test_aligner_ignores_unicode_punctuation_variants_beyond_dashes():
     assert aligned[0].bbox == BOX
 
 
+def test_aligner_maps_unicode_minus_sign_to_ascii_hyphen():
+    """Breaks if the prior U+2212 compatibility is lost by generic P* handling."""
+    blocks = [
+        TextBlock(
+            text="Signal\u2212to noise is measurable.",
+            page_number=5,
+            bbox=BOX,
+            order=0,
+        )
+    ]
+    paragraphs = [MarkdownParagraph(text="Signal - to noise is measurable.")]
+
+    aligned = TextAligner().align(paragraphs, blocks)
+
+    assert aligned[0].location_status == "located"
+    assert aligned[0].page_number == 5
+    assert aligned[0].bbox == BOX
+
+
 def test_aligner_leaves_repeated_text_unlocated():
     """Breaks if an ambiguous exact match borrows either source location."""
     repeated = "Repeated evidence text " * 3

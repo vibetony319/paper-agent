@@ -11,7 +11,9 @@ _MIN_CONTAINMENT_LENGTH = 40
 
 
 def _normalize_text(text: str) -> str:
-    normalized = unicodedata.normalize("NFKC", text.replace("\u00ad", ""))
+    normalized = unicodedata.normalize(
+        "NFKC", text.replace("\u00ad", "").replace("\u2212", "-")
+    )
     normalized = "".join(
         " " if unicodedata.category(character).startswith("P") else character
         for character in normalized
