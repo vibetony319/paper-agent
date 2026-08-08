@@ -91,7 +91,7 @@ def test_page_image_invalid_page_paths_are_not_found_after_upload(
     """Breaks if invalid page paths bypass the page-image not-found contract."""
     paper_id = _upload_pdf(client, sample_pdf)["id"]
 
-    for page_number in ("0", "2", "not-a-page"):
+    for page_number in ("0", "-1", "2", "not-a-page"):
         response = client.get(f"/api/papers/{paper_id}/pages/{page_number}/image")
 
         assert response.status_code == 404
