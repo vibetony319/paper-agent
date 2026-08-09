@@ -182,6 +182,48 @@ notes = Table(
     UniqueConstraint("paper_id", "order_index"),
 )
 
+conversations = Table(
+    "conversations",
+    metadata,
+    Column("id", String(36), primary_key=True),
+    Column("paper_id", String(36), ForeignKey("papers.id"), nullable=False),
+    Column("mode", String(32), nullable=False),
+    UniqueConstraint("paper_id", "id"),
+)
+
+conversation_messages = Table(
+    "conversation_messages",
+    metadata,
+    Column("id", String(36), primary_key=True),
+    Column("conversation_id", String(36), nullable=False),
+    Column("paper_id", String(36), nullable=False),
+    Column("role", String(16), nullable=False),
+    Column("content", String, nullable=False),
+    Column("sequence", Integer, nullable=False),
+    ForeignKeyConstraint(
+        ["paper_id", "conversation_id"],
+        ["conversations.paper_id", "conversations.id"],
+    ),
+    UniqueConstraint("paper_id", "id"),
+    UniqueConstraint("conversation_id", "sequence"),
+)
+
+conversation_message_citations = Table(
+    "conversation_message_citations",
+    metadata,
+    Column("paper_id", String(36), primary_key=True),
+    Column("message_id", String(36), primary_key=True),
+    Column("element_id", String(36), primary_key=True),
+    ForeignKeyConstraint(
+        ["paper_id", "message_id"],
+        ["conversation_messages.paper_id", "conversation_messages.id"],
+    ),
+    ForeignKeyConstraint(
+        ["paper_id", "element_id"],
+        ["document_elements.paper_id", "document_elements.id"],
+    ),
+)
+
 
 def database_url_for(data_dir: Path) -> str:
     return f"sqlite:///{data_dir / 'paper-agent.db'}"

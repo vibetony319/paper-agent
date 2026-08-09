@@ -7,7 +7,11 @@ from sqlalchemy.exc import IntegrityError
 
 from paper_agent.database import document_elements, graph_nodes, notes, sections
 from paper_agent.domain import (
+    AgentMessageRole,
+    AgentMode,
     BoundingBox,
+    Conversation,
+    ConversationMessage,
     DocumentElement,
     GraphEdge,
     GraphNode,
@@ -18,7 +22,7 @@ from paper_agent.domain import (
     ProcessingStatus,
     Section,
 )
-from paper_agent.storage import GraphReferenceError, PaperRepository
+from paper_agent.storage import ConversationReferenceError, GraphReferenceError, PaperRepository
 
 
 @pytest.fixture
@@ -614,6 +618,121 @@ def _paper_with_located_element(repository: PaperRepository, name: str):
         ),
     )
     return paper, element
+
+
+def _conversation_for_paper(repository: PaperRepository):
+    paper, element = _paper_with_located_element(repository, "conversation")
+    conversation = repository.create_conversation(
+        Conversation(paper_id=paper.id, mode=AgentMode.paper_only)
+    )
+    return paper, element, conversation
+
+
+def _user_message(conversation, content: str, citation_element_ids: tuple[str, ...] = ()):
+    return ConversationMessage(
+        conversation_id=conversation.id,
+        paper_id=conversation.paper_id,
+        role=AgentMessageRole.user,
+        content=content,
+        citation_element_ids=citation_element_ids,
+    )
+
+
+def _assistant_message(
+    conversation, content: str, citation_element_ids: tuple[str, ...] = ()
+):
+    return ConversationMessage(
+        conversation_id=conversation.id,
+        paper_id=conversation.paper_id,
+        role=AgentMessageRole.assistant,
+        content=content,
+        citation_element_ids=citation_element_ids,
+    )
+
+
+def test_repository_round_trips_paper_conversations_and_located_message_citations(repository):
+    """Breaks if conversation reads lose their mode, messages, or source-element citations."""
+    paper, element, conversation = _conversation_for_paper(repository)
+    user = repository.append_conversation_message(_user_message(conversation, "Explain it."))
+    assistant = repository.append_conversation_message(
+        _assistant_message(conversation, "It routes tokens.", (element.id,))
+    )
+
+    assert repository.get_conversation(paper.id, conversation.id) == conversation
+    assert repository.get_conversation("another-paper", conversation.id) is None
+    assert repository.get_conversation_messages(paper.id, conversation.id) == (user, assistant)
+
+
+def test_repository_returns_messages_in_durable_sequence_order(repository):
+    """Breaks if a conversation reload uses unstable SQLite insertion order."""
+    paper, _, conversation = _conversation_for_paper(repository)
+    first = repository.append_conversation_message(_user_message(conversation, "First"))
+    second = repository.append_conversation_message(_assistant_message(conversation, "Second"))
+
+    messages = repository.get_conversation_messages(paper.id, conversation.id)
+
+    assert [message.id for message in messages] == [first.id, second.id]
+    assert [message.sequence for message in messages] == [0, 1]
+
+
+def test_repository_rejects_user_message_citations(repository):
+    """Breaks if untrusted user text can be persisted as a sourced paper claim."""
+    _, element, conversation = _conversation_for_paper(repository)
+
+    with pytest.raises(ConversationReferenceError, match="user"):
+        repository.append_conversation_message(
+            _user_message(conversation, "This is sourced.", (element.id,))
+        )
+
+
+@pytest.mark.parametrize("conversation_id", ("missing-conversation", "other-conversation"))
+def test_repository_rejects_unknown_or_mismatched_message_conversations(
+    repository, conversation_id: str
+):
+    """Breaks if a message can be appended without an owned conversation."""
+    paper, _, conversation = _conversation_for_paper(repository)
+    if conversation_id == "other-conversation":
+        _, _, other_conversation = _conversation_for_paper(repository)
+        message = ConversationMessage(
+            conversation_id=other_conversation.id,
+            paper_id=paper.id,
+            role=AgentMessageRole.user,
+            content="Wrong paper conversation.",
+        )
+    else:
+        message = ConversationMessage(
+            conversation_id=conversation_id,
+            paper_id=conversation.paper_id,
+            role=AgentMessageRole.user,
+            content="Unknown conversation.",
+        )
+
+    with pytest.raises(ConversationReferenceError, match="conversation"):
+        repository.append_conversation_message(message)
+
+
+def test_repository_rejects_a_message_citation_from_another_paper(repository):
+    """Breaks if a paper answer can cite an element from a different paper."""
+    _, _, conversation = _conversation_for_paper(repository)
+    _, second_element = _paper_with_located_element(repository, "second-citation")
+
+    with pytest.raises(ConversationReferenceError, match="citation"):
+        repository.append_conversation_message(
+            _assistant_message(conversation, "A grounded answer.", (second_element.id,))
+        )
+
+
+def test_repository_rejects_unlocated_message_citations(repository):
+    """Breaks if a citation can point at semantic text without a source location."""
+    paper, _, conversation = _conversation_for_paper(repository)
+    unlocated = repository.save_element(
+        paper.id, DocumentElement.paragraph("semantic only", location_status="unlocated")
+    )
+
+    with pytest.raises(ConversationReferenceError, match="citation"):
+        repository.append_conversation_message(
+            _assistant_message(conversation, "A grounded answer.", (unlocated.id,))
+        )
 
 
 def _deep_nodes(element_id: str) -> tuple[GraphNode, ...]:
