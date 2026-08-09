@@ -4,6 +4,9 @@ from pydantic import BaseModel, ConfigDict
 
 from paper_agent.domain import (
     DocumentElement,
+    GraphEdge,
+    GraphNode,
+    PaperGraph,
     Note,
     Page,
     Paper,
@@ -27,6 +30,8 @@ class PaperSummary:
     status: ProcessingStatus
     stage0_status: ProcessingStatus
     stage1_status: ProcessingStatus
+    stage2_status: ProcessingStatus | None = None
+    stage3_status: ProcessingStatus | None = None
     error: str | None = None
 
     @classmethod
@@ -36,6 +41,8 @@ class PaperSummary:
         *,
         stage0_status: ProcessingStatus | None = None,
         stage1_status: ProcessingStatus | None = None,
+        stage2_status: ProcessingStatus | None = None,
+        stage3_status: ProcessingStatus | None = None,
         error: str | None = None,
     ) -> "PaperSummary":
         stage_statuses = {
@@ -55,6 +62,8 @@ class PaperSummary:
             status=paper.status,
             stage0_status=fallback_stage0_status if stage0_status is None else stage0_status,
             stage1_status=fallback_stage1_status if stage1_status is None else stage1_status,
+            stage2_status=stage2_status,
+            stage3_status=stage3_status,
             error=error,
         )
 
@@ -65,6 +74,8 @@ class PaperSummaryResponse(BaseModel):
     status: ProcessingStatus
     stage0_status: ProcessingStatus
     stage1_status: ProcessingStatus
+    stage2_status: ProcessingStatus | None = None
+    stage3_status: ProcessingStatus | None = None
     error: str | None = None
 
     @classmethod
@@ -75,8 +86,70 @@ class PaperSummaryResponse(BaseModel):
             status=summary.status,
             stage0_status=summary.stage0_status,
             stage1_status=summary.stage1_status,
+            stage2_status=summary.stage2_status,
+            stage3_status=summary.stage3_status,
             error=summary.error,
         )
+
+
+class GraphNodeResponse(BaseModel):
+    id: str
+    node_type: str
+    name: str
+    summary: str
+    stage: str
+    evidence_element_ids: list[str]
+
+    @classmethod
+    def from_node(cls, node: GraphNode) -> "GraphNodeResponse":
+        return cls(
+            id=node.id,
+            node_type=node.node_type,
+            name=node.name,
+            summary=node.summary,
+            stage=node.stage.value,
+            evidence_element_ids=list(node.evidence_element_ids),
+        )
+
+
+class GraphEdgeResponse(BaseModel):
+    id: str
+    source_node_id: str
+    target_node_id: str
+    relation_type: str
+    stage: str
+    evidence_element_ids: list[str]
+
+    @classmethod
+    def from_edge(cls, edge: GraphEdge) -> "GraphEdgeResponse":
+        return cls(
+            id=edge.id,
+            source_node_id=edge.source_node_id,
+            target_node_id=edge.target_node_id,
+            relation_type=edge.relation_type,
+            stage=edge.stage.value,
+            evidence_element_ids=list(edge.evidence_element_ids),
+        )
+
+
+class PaperGraphResponse(BaseModel):
+    nodes: list[GraphNodeResponse]
+    edges: list[GraphEdgeResponse]
+
+    @classmethod
+    def from_graph(cls, graph: PaperGraph) -> "PaperGraphResponse":
+        return cls(
+            nodes=[GraphNodeResponse.from_node(node) for node in graph.nodes],
+            edges=[GraphEdgeResponse.from_edge(edge) for edge in graph.edges],
+        )
+
+
+class GraphPathsResponse(BaseModel):
+    paths: list[list[str]]
+
+    @classmethod
+    def from_paths(cls, paths: tuple[tuple[str, ...], ...]) -> "GraphPathsResponse":
+        return cls(paths=[list(path) for path in paths])
 
 
 class PaperResponse(BaseModel):
