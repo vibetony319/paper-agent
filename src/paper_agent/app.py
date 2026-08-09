@@ -3,8 +3,11 @@ from dataclasses import replace
 from fastapi import FastAPI
 
 from paper_agent.config import Settings, get_settings
-from paper_agent.models.vllm import VllmStructuredClient
-from paper_agent.routes import graph_router, health_router, papers_router
+from paper_agent.models.vllm import VllmStructuredClient, VllmToolCallingClient
+from paper_agent.routes import agent_router, graph_router, health_router, papers_router
+from paper_agent.services.agent_runtime import PaperAgentRuntime
+from paper_agent.services.agent_tools import PaperToolRegistry
+from paper_agent.services.citation_guard import CitationGuard
 from paper_agent.services.graph_construction import GraphConstructionService
 from paper_agent.services.ingestion import PaperIngestionService
 from paper_agent.storage import PaperRepository
@@ -25,6 +28,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings or get_settings()
     repository = PaperRepository(app.state.settings.database_url)
     app.state.paper_repository = repository
+    app.state.paper_tool_registry = PaperToolRegistry(repository)
+    app.state.citation_guard = CitationGuard()
+    app.state.paper_agent_runtime = PaperAgentRuntime(
+        repository=repository,
+        tools=app.state.paper_tool_registry,
+        client=(
+            None
+            if app.state.settings.reasoning_model is None
+            else VllmToolCallingClient(app.state.settings.reasoning_model)
+        ),
+        guard=app.state.citation_guard,
+    )
     app.state.paper_ingestion_service = _GraphAwarePaperIngestionService(
         settings=app.state.settings,
         repository=repository,
@@ -40,4 +55,5 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health_router)
     app.include_router(papers_router)
     app.include_router(graph_router)
+    app.include_router(agent_router)
     return app
