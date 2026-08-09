@@ -329,6 +329,57 @@ class PaperRepository:
             ).mappings()
             return tuple(self._element_from_row(row) for row in rows)
 
+    def get_located_graph_source_elements(
+        self, paper_id: str
+    ) -> tuple[DocumentElement, ...]:
+        """Return only located source records that can support graph evidence."""
+        with self.engine.connect() as connection:
+            rows = connection.execute(
+                select(document_elements)
+                .where(document_elements.c.paper_id == paper_id)
+                .where(document_elements.c.location_status == "located")
+                .where(document_elements.c.kind.in_(("paragraph", "text_block")))
+                .order_by(document_elements.c.order_index, document_elements.c.id)
+            ).mappings()
+            return tuple(self._element_from_row(row) for row in rows)
+
+    def record_graph_stage_failure(
+        self, paper_id: str, *, stage: str, error_summary: str
+    ) -> None:
+        """Durably finish a failed graph build without exposing its internal error."""
+        with self.engine.begin() as connection:
+            current = connection.execute(
+                select(func.max(processing_runs.c.sequence)).where(
+                    processing_runs.c.paper_id == paper_id
+                )
+            ).scalar_one()
+            sequence = 0 if current is None else current + 1
+            connection.execute(
+                insert(processing_runs).values(
+                    id=str(uuid4()),
+                    paper_id=paper_id,
+                    sequence=sequence,
+                    stage=stage,
+                    status=ProcessingStatus.failed.value,
+                    error_summary=error_summary,
+                )
+            )
+            connection.execute(
+                update(papers)
+                .where(papers.c.id == paper_id)
+                .values(status=ProcessingStatus.partial.value)
+            )
+            connection.execute(
+                insert(processing_runs).values(
+                    id=str(uuid4()),
+                    paper_id=paper_id,
+                    sequence=sequence + 1,
+                    stage=None,
+                    status=ProcessingStatus.partial.value,
+                    error_summary=error_summary,
+                )
+            )
+
     def replace_graph_stage(
         self,
         paper_id: str,
