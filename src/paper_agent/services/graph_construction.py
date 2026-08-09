@@ -74,9 +74,9 @@ class GraphConstructionService:
         return self._build(paper_id, GraphStage.deep)
 
     def _build(self, paper_id: str, stage: GraphStage) -> PaperGraph:
+        self._require_prerequisites(paper_id, stage)
         if self.client is None:
             raise GraphBuildUnavailableError("Reasoning model configuration is unavailable.")
-        self._require_prerequisites(paper_id, stage)
         stage_name = stage.value
         try:
             self.repository.record_processing_status(

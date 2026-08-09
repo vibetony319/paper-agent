@@ -150,6 +150,33 @@ def test_core_graph_build_without_vllm_configuration_is_safe_503(
 
     assert response.status_code == 503
     assert response.json() == {"detail": "Reasoning model is not configured."}
+    assert (
+        client.app.state.paper_ingestion_service.repository.get_stage_statuses(
+            paper_id, "stage2"
+        )
+        == ()
+    )
+
+
+def test_incomplete_graph_build_without_vllm_is_409_without_processing_rows(
+    client: TestClient, sample_pdf: Path
+) -> None:
+    """Breaks if missing model configuration masks graph prerequisite failures."""
+    repository = client.app.state.paper_ingestion_service.repository
+    stage1_incomplete = repository.create_paper(
+        original_filename="incomplete.pdf",
+        stored_filename="incomplete.pdf",
+        status=ProcessingStatus.queued,
+    )
+    stage2_incomplete = _upload_paper(client, sample_pdf)
+
+    core_response = client.post(f"/api/papers/{stage1_incomplete.id}/graph/core")
+    deep_response = client.post(f"/api/papers/{stage2_incomplete['id']}/graph/deep")
+
+    assert core_response.status_code == 409
+    assert deep_response.status_code == 409
+    assert repository.get_stage_statuses(stage1_incomplete.id, "stage2") == ()
+    assert repository.get_stage_statuses(stage2_incomplete["id"], "stage3") == ()
 
 
 def test_graph_routes_map_unknown_resources_invalid_parameters_and_prerequisites(
