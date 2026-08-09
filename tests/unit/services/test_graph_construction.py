@@ -1,6 +1,7 @@
 import json
 
 import pytest
+from sqlalchemy import event
 from sqlalchemy.exc import SQLAlchemyError
 
 from paper_agent.domain import (
@@ -254,6 +255,117 @@ def test_deep_build_failure_keeps_completed_core_graph_and_marks_only_stage3_fai
     assert repository.get_latest_stage_status(paper.id, "stage3") == ProcessingStatus.failed
     assert repository.get_graph(paper.id).nodes[0].id == "core-node"
     assert repository.get_paper(paper.id).status == ProcessingStatus.partial
+
+
+def test_final_completion_failure_rolls_back_core_rebuild_and_preserves_prior_graph(
+    repository: PaperRepository,
+) -> None:
+    """Breaks if final completion can commit a replacement graph before it fails."""
+    paper, _, paragraph = _paper_with_completed_core_graph(repository)
+    client = FakeStructuredClient(
+        [
+            {"nodes": [_node("n1", "claim", "Replacement claim", [paragraph.id])]},
+            {"edges": []},
+            {"edges": []},
+        ]
+    )
+    failed = False
+
+    def fail_completed_processing_run(
+        connection, cursor, statement, parameters, context, executemany
+    ) -> None:
+        nonlocal failed
+        if (
+            not failed
+            and "INSERT INTO processing_runs" in statement
+            and "completed" in parameters
+        ):
+            failed = True
+            raise SQLAlchemyError("final completion write failed")
+
+    event.listen(repository.engine, "before_cursor_execute", fail_completed_processing_run)
+    try:
+        with pytest.raises(SQLAlchemyError, match="final completion write failed"):
+            GraphConstructionService(repository=repository, client=client).build_core(
+                paper.id
+            )
+    finally:
+        event.remove(
+            repository.engine, "before_cursor_execute", fail_completed_processing_run
+        )
+
+    assert failed
+    assert [node.id for node in repository.get_graph(paper.id).nodes] == ["core-node"]
+    assert repository.get_latest_stage_status(paper.id, "stage2") == ProcessingStatus.failed
+    assert repository.get_paper(paper.id).status == ProcessingStatus.partial
+
+
+def test_successful_core_retry_recovers_aggregate_status_and_error(
+    repository: PaperRepository,
+) -> None:
+    """Breaks if a completed retry remains publicly partial after an earlier failure."""
+    paper, _, paragraph = _paper_with_stage1_source(repository)
+
+    with pytest.raises(VllmResponseError):
+        GraphConstructionService(
+            repository=repository,
+            client=FakeStructuredClient([VllmResponseError("unavailable")]),
+        ).build_core(paper.id)
+
+    GraphConstructionService(
+        repository=repository,
+        client=FakeStructuredClient(
+            [
+                {"nodes": [_node("n1", "method", "Token Router", [paragraph.id])]},
+                {"edges": []},
+                {"edges": []},
+            ]
+        ),
+    ).build_core(paper.id)
+
+    assert repository.get_latest_stage_status(paper.id, "stage2") == ProcessingStatus.completed
+    assert repository.get_paper(paper.id).status == ProcessingStatus.completed
+    assert repository.get_processing_error(paper.id) is None
+
+
+def test_successful_core_rebuild_invalidates_completed_deep_stage(
+    repository: PaperRepository,
+) -> None:
+    """Breaks if a rebuilt core graph leaves removed deep data marked completed."""
+    paper, _, paragraph = _paper_with_completed_core_graph(repository)
+    repository.replace_graph_stage(
+        paper.id,
+        GraphStage.deep,
+        (
+            GraphNode(
+                id="deep-node",
+                node_type="component",
+                name="Expert selector",
+                summary="Selects an expert for each token.",
+                stage=GraphStage.deep,
+                evidence_element_ids=(paragraph.id,),
+            ),
+        ),
+        (),
+    )
+    repository.record_processing_status(
+        paper.id, ProcessingStatus.completed, stage="stage3"
+    )
+
+    graph = GraphConstructionService(
+        repository=repository,
+        client=FakeStructuredClient(
+            [
+                {"nodes": [_node("n1", "claim", "Coverage improves", [paragraph.id])]},
+                {"edges": []},
+                {"edges": []},
+            ]
+        ),
+    ).build_core(paper.id)
+
+    assert {node.id for node in graph.nodes} != {"core-node", "deep-node"}
+    assert all(node.stage is GraphStage.core for node in graph.nodes)
+    assert repository.get_latest_stage_status(paper.id, "stage3") == ProcessingStatus.queued
 
 
 @pytest.mark.parametrize("method_name", ("build_core", "build_deep"))

@@ -88,9 +88,8 @@ class GraphConstructionService:
             scopes = self._source_scopes(paper_id)
             nodes = self._extract_nodes(stage, scopes)
             edges = self._extract_edges(stage, scopes, nodes)
-            graph = self.repository.replace_graph_stage(paper_id, stage, nodes, edges)
-            self.repository.record_processing_status(
-                paper_id, ProcessingStatus.completed, stage=stage_name
+            graph = self.repository.replace_graph_stage_and_complete(
+                paper_id, stage, nodes, edges
             )
             return graph
         except (

@@ -89,17 +89,13 @@ class PaperRepository:
         stage: str | None = None,
         error_summary: str | None = None,
     ) -> None:
-        sequence = self._next_processing_sequence(paper_id)
         with self.engine.begin() as connection:
-            connection.execute(
-                insert(processing_runs).values(
-                    id=str(uuid4()),
-                    paper_id=paper_id,
-                    sequence=sequence,
-                    stage=stage,
-                    status=status.value,
-                    error_summary=error_summary,
-                )
+            self._record_processing_status(
+                connection,
+                paper_id,
+                status,
+                stage=stage,
+                error_summary=error_summary,
             )
 
     def get_processing_statuses(self, paper_id: str) -> tuple[ProcessingStatus, ...]:
@@ -141,7 +137,6 @@ class PaperRepository:
                 select(processing_runs.c.error_summary)
                 .where(processing_runs.c.paper_id == paper_id)
                 .where(processing_runs.c.stage.is_(None))
-                .where(processing_runs.c.error_summary.is_not(None))
                 .order_by(processing_runs.c.sequence.desc())
                 .limit(1)
             ).scalar_one_or_none()
@@ -348,36 +343,23 @@ class PaperRepository:
     ) -> None:
         """Durably finish a failed graph build without exposing its internal error."""
         with self.engine.begin() as connection:
-            current = connection.execute(
-                select(func.max(processing_runs.c.sequence)).where(
-                    processing_runs.c.paper_id == paper_id
-                )
-            ).scalar_one()
-            sequence = 0 if current is None else current + 1
-            connection.execute(
-                insert(processing_runs).values(
-                    id=str(uuid4()),
-                    paper_id=paper_id,
-                    sequence=sequence,
-                    stage=stage,
-                    status=ProcessingStatus.failed.value,
-                    error_summary=error_summary,
-                )
+            self._record_processing_status(
+                connection,
+                paper_id,
+                ProcessingStatus.failed,
+                stage=stage,
+                error_summary=error_summary,
             )
             connection.execute(
                 update(papers)
                 .where(papers.c.id == paper_id)
                 .values(status=ProcessingStatus.partial.value)
             )
-            connection.execute(
-                insert(processing_runs).values(
-                    id=str(uuid4()),
-                    paper_id=paper_id,
-                    sequence=sequence + 1,
-                    stage=None,
-                    status=ProcessingStatus.partial.value,
-                    error_summary=error_summary,
-                )
+            self._record_processing_status(
+                connection,
+                paper_id,
+                ProcessingStatus.partial,
+                error_summary=error_summary,
             )
 
     def replace_graph_stage(
@@ -387,95 +369,44 @@ class PaperRepository:
         nodes: tuple[GraphNode, ...],
         edges: tuple[GraphEdge, ...],
     ) -> PaperGraph:
-        if not isinstance(stage, GraphStage):
-            raise ValueError("stage must be a GraphStage")
-        if any(node.stage is not stage for node in nodes):
-            raise ValueError("node stage must match replacement stage")
-        if any(edge.stage is not stage for edge in edges):
-            raise ValueError("edge stage must match replacement stage")
+        self._require_graph_stage_replacement(stage, nodes, edges)
 
         with self.engine.begin() as connection:
-            self._require_located_graph_evidence(
-                connection,
-                paper_id,
-                tuple(
-                    element_id
-                    for record in (*nodes, *edges)
-                    for element_id in record.evidence_element_ids
-                ),
+            return self._replace_graph_stage(connection, paper_id, stage, nodes, edges)
+
+    def replace_graph_stage_and_complete(
+        self,
+        paper_id: str,
+        stage: GraphStage,
+        nodes: tuple[GraphNode, ...],
+        edges: tuple[GraphEdge, ...],
+    ) -> PaperGraph:
+        """Atomically replace a graph stage and durably publish its success."""
+        self._require_graph_stage_replacement(stage, nodes, edges)
+
+        with self.engine.begin() as connection:
+            invalidates_deep_stage = (
+                stage is GraphStage.core
+                and self._graph_stage_has_data(connection, paper_id, GraphStage.deep)
             )
-            self._delete_graph_stages(
-                connection,
-                paper_id,
-                (GraphStage.deep, GraphStage.core)
-                if stage is GraphStage.core
-                else (GraphStage.deep,),
+            graph = self._replace_graph_stage(connection, paper_id, stage, nodes, edges)
+            self._record_processing_status(
+                connection, paper_id, ProcessingStatus.completed, stage=stage.value
             )
-            if nodes:
-                connection.execute(
-                    insert(graph_nodes),
-                    [
-                        {
-                            "id": node.id,
-                            "paper_id": paper_id,
-                            "node_type": node.node_type,
-                            "normalized_name": node.name.casefold(),
-                            "name": node.name,
-                            "summary": node.summary,
-                            "stage": node.stage.value,
-                        }
-                        for node in nodes
-                    ],
+            if invalidates_deep_stage:
+                self._record_processing_status(
+                    connection,
+                    paper_id,
+                    ProcessingStatus.queued,
+                    stage=GraphStage.deep.value,
                 )
-                connection.execute(
-                    insert(graph_node_evidence),
-                    [
-                        {
-                            "paper_id": paper_id,
-                            "node_id": node.id,
-                            "element_id": element_id,
-                        }
-                        for node in nodes
-                        for element_id in node.evidence_element_ids
-                    ],
-                )
-            self._require_owned_graph_nodes(
-                connection,
-                paper_id,
-                tuple(
-                    node_id
-                    for edge in edges
-                    for node_id in (edge.source_node_id, edge.target_node_id)
-                ),
+            connection.execute(
+                update(papers)
+                .where(papers.c.id == paper_id)
+                .values(status=ProcessingStatus.completed.value)
             )
-            if edges:
-                connection.execute(
-                    insert(graph_edges),
-                    [
-                        {
-                            "id": edge.id,
-                            "paper_id": paper_id,
-                            "source_node_id": edge.source_node_id,
-                            "target_node_id": edge.target_node_id,
-                            "relation_type": edge.relation_type,
-                            "stage": edge.stage.value,
-                        }
-                        for edge in edges
-                    ],
-                )
-                connection.execute(
-                    insert(graph_edge_evidence),
-                    [
-                        {
-                            "paper_id": paper_id,
-                            "edge_id": edge.id,
-                            "element_id": element_id,
-                        }
-                        for edge in edges
-                        for element_id in edge.evidence_element_ids
-                    ],
-                )
-            return self._get_graph(connection, paper_id)
+            self._record_processing_status(connection, paper_id, ProcessingStatus.completed)
+            return graph
 
     def get_graph(self, paper_id: str) -> PaperGraph:
         with self.engine.connect() as connection:
@@ -639,6 +570,147 @@ class PaperRepository:
         )
         if found != expected:
             raise GraphReferenceError("graph edge endpoint does not belong to paper")
+
+    @staticmethod
+    def _record_processing_status(
+        connection,
+        paper_id: str,
+        status: ProcessingStatus,
+        *,
+        stage: str | None = None,
+        error_summary: str | None = None,
+    ) -> None:
+        current = connection.execute(
+            select(func.max(processing_runs.c.sequence)).where(
+                processing_runs.c.paper_id == paper_id
+            )
+        ).scalar_one()
+        sequence = 0 if current is None else current + 1
+        connection.execute(
+            insert(processing_runs).values(
+                id=str(uuid4()),
+                paper_id=paper_id,
+                sequence=sequence,
+                stage=stage,
+                status=status.value,
+                error_summary=error_summary,
+            )
+        )
+
+    @staticmethod
+    def _require_graph_stage_replacement(
+        stage: GraphStage,
+        nodes: tuple[GraphNode, ...],
+        edges: tuple[GraphEdge, ...],
+    ) -> None:
+        if not isinstance(stage, GraphStage):
+            raise ValueError("stage must be a GraphStage")
+        if any(node.stage is not stage for node in nodes):
+            raise ValueError("node stage must match replacement stage")
+        if any(edge.stage is not stage for edge in edges):
+            raise ValueError("edge stage must match replacement stage")
+
+    def _replace_graph_stage(
+        self,
+        connection,
+        paper_id: str,
+        stage: GraphStage,
+        nodes: tuple[GraphNode, ...],
+        edges: tuple[GraphEdge, ...],
+    ) -> PaperGraph:
+        self._require_located_graph_evidence(
+            connection,
+            paper_id,
+            tuple(
+                element_id
+                for record in (*nodes, *edges)
+                for element_id in record.evidence_element_ids
+            ),
+        )
+        self._delete_graph_stages(
+            connection,
+            paper_id,
+            (GraphStage.deep, GraphStage.core)
+            if stage is GraphStage.core
+            else (GraphStage.deep,),
+        )
+        if nodes:
+            connection.execute(
+                insert(graph_nodes),
+                [
+                    {
+                        "id": node.id,
+                        "paper_id": paper_id,
+                        "node_type": node.node_type,
+                        "normalized_name": node.name.casefold(),
+                        "name": node.name,
+                        "summary": node.summary,
+                        "stage": node.stage.value,
+                    }
+                    for node in nodes
+                ],
+            )
+            connection.execute(
+                insert(graph_node_evidence),
+                [
+                    {
+                        "paper_id": paper_id,
+                        "node_id": node.id,
+                        "element_id": element_id,
+                    }
+                    for node in nodes
+                    for element_id in node.evidence_element_ids
+                ],
+            )
+        self._require_owned_graph_nodes(
+            connection,
+            paper_id,
+            tuple(
+                node_id
+                for edge in edges
+                for node_id in (edge.source_node_id, edge.target_node_id)
+            ),
+        )
+        if edges:
+            connection.execute(
+                insert(graph_edges),
+                [
+                    {
+                        "id": edge.id,
+                        "paper_id": paper_id,
+                        "source_node_id": edge.source_node_id,
+                        "target_node_id": edge.target_node_id,
+                        "relation_type": edge.relation_type,
+                        "stage": edge.stage.value,
+                    }
+                    for edge in edges
+                ],
+            )
+            connection.execute(
+                insert(graph_edge_evidence),
+                [
+                    {
+                        "paper_id": paper_id,
+                        "edge_id": edge.id,
+                        "element_id": element_id,
+                    }
+                    for edge in edges
+                    for element_id in edge.evidence_element_ids
+                ],
+            )
+        return self._get_graph(connection, paper_id)
+
+    @staticmethod
+    def _graph_stage_has_data(connection, paper_id: str, stage: GraphStage) -> bool:
+        return (
+            connection.execute(
+                select(graph_nodes.c.id)
+                .where(graph_nodes.c.paper_id == paper_id)
+                .where(graph_nodes.c.stage == stage.value)
+                .limit(1)
+            ).scalar_one_or_none()
+            is not None
+        )
 
     @staticmethod
     def _delete_graph_stages(connection, paper_id: str, stages: tuple[GraphStage, ...]) -> None:
