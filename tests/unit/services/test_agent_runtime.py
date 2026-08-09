@@ -134,6 +134,14 @@ class ExplodingToolRegistry:
         raise RuntimeError("raw-tool-execution-secret")
 
 
+class FailingDefinitionsToolRegistry:
+    def definitions(self) -> tuple[dict[str, object], ...]:
+        raise RuntimeError("raw-tool-definitions-secret")
+
+    def execute(self, **_kwargs: object):
+        raise AssertionError("tool execution must not run after definitions fail")
+
+
 def _paper_with_stage1_document(
     repository: PaperRepository, name: str = "paper"
 ) -> PreparedPaper:
@@ -664,6 +672,24 @@ def test_runtime_sanitizes_tool_execution_failure_after_persisting_only_the_user
 
     assert str(error.value) == "Reasoning model could not complete the request."
     assert "raw-tool-execution-secret" not in str(error.value)
+    assert error.value.__cause__ is None
+    assert _all_durable_rows(repository) == [("user", "Question")]
+
+
+def test_runtime_sanitizes_tool_definition_failure_after_persisting_only_the_user(
+    repository,
+):
+    """Breaks if tool-schema construction leaks raw errors after user persistence."""
+    paper = _paper_with_stage1_document(repository)
+
+    with pytest.raises(AgentRuntimeResponseError) as error:
+        _runtime(repository, FakeAgentClient(), tools=FailingDefinitionsToolRegistry()).ask(
+            paper_id=paper.id,
+            question=AgentQuestion(content="Question", mode=AgentMode.paper_only),
+        )
+
+    assert str(error.value) == "Reasoning model could not complete the request."
+    assert "raw-tool-definitions-secret" not in str(error.value)
     assert error.value.__cause__ is None
     assert _all_durable_rows(repository) == [("user", "Question")]
 

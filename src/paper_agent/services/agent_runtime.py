@@ -89,7 +89,10 @@ class PaperAgentRuntime:
             conversation=conversation,
         )
         allowed_evidence_ids: set[str] = set()
-        tool_definitions = self.tools.definitions()
+        try:
+            tool_definitions = self.tools.definitions()
+        except Exception:
+            raise AgentRuntimeResponseError(_RESPONSE_ERROR) from None
 
         for tool_turn_index in range(MAX_TOOL_TURNS):
             try:
@@ -109,11 +112,10 @@ class PaperAgentRuntime:
                     arguments=call.arguments,
                 )
                 tool_result_messages = _tool_result_messages(turn, call, execution)
+                allowed_evidence_ids.update(execution.evidence_element_ids)
+                messages.extend(tool_result_messages)
             except Exception:
                 raise AgentRuntimeResponseError(_RESPONSE_ERROR) from None
-
-            allowed_evidence_ids.update(execution.evidence_element_ids)
-            messages.extend(tool_result_messages)
 
         try:
             payload = client.generate_json_messages(
