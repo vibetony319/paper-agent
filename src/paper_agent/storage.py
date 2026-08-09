@@ -387,7 +387,9 @@ class PaperRepository:
         with self.engine.begin() as connection:
             invalidates_deep_stage = (
                 stage is GraphStage.core
-                and self._graph_stage_has_data(connection, paper_id, GraphStage.deep)
+                and self._stage_has_processing_state(
+                    connection, paper_id, GraphStage.deep.value
+                )
             )
             graph = self._replace_graph_stage(connection, paper_id, stage, nodes, edges)
             self._record_processing_status(
@@ -701,12 +703,14 @@ class PaperRepository:
         return self._get_graph(connection, paper_id)
 
     @staticmethod
-    def _graph_stage_has_data(connection, paper_id: str, stage: GraphStage) -> bool:
+    def _stage_has_processing_state(
+        connection, paper_id: str, stage: str
+    ) -> bool:
         return (
             connection.execute(
-                select(graph_nodes.c.id)
-                .where(graph_nodes.c.paper_id == paper_id)
-                .where(graph_nodes.c.stage == stage.value)
+                select(processing_runs.c.id)
+                .where(processing_runs.c.paper_id == paper_id)
+                .where(processing_runs.c.stage == stage)
                 .limit(1)
             ).scalar_one_or_none()
             is not None

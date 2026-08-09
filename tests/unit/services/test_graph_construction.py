@@ -139,6 +139,7 @@ def test_core_build_persists_deduplicated_nodes_edges_and_exact_evidence(
     ]
     assert all(node.id not in {"n1", "n2", "n3"} for node in graph.nodes)
     assert repository.get_latest_stage_status(paper.id, "stage2") == ProcessingStatus.completed
+    assert repository.get_latest_stage_status(paper.id, "stage3") is None
     assert [request["schema_name"] for request in client.requests] == [
         "paper_graph_nodes",
         "paper_graph_edges",
@@ -365,6 +366,30 @@ def test_successful_core_rebuild_invalidates_completed_deep_stage(
 
     assert {node.id for node in graph.nodes} != {"core-node", "deep-node"}
     assert all(node.stage is GraphStage.core for node in graph.nodes)
+    assert repository.get_latest_stage_status(paper.id, "stage3") == ProcessingStatus.queued
+
+
+def test_successful_core_rebuild_invalidates_completed_empty_deep_stage(
+    repository: PaperRepository,
+) -> None:
+    """Breaks if empty but completed deep output survives a changed core input."""
+    paper, _, paragraph = _paper_with_completed_core_graph(repository)
+    repository.replace_graph_stage(paper.id, GraphStage.deep, (), ())
+    repository.record_processing_status(
+        paper.id, ProcessingStatus.completed, stage="stage3"
+    )
+
+    GraphConstructionService(
+        repository=repository,
+        client=FakeStructuredClient(
+            [
+                {"nodes": [_node("n1", "claim", "Coverage improves", [paragraph.id])]},
+                {"edges": []},
+                {"edges": []},
+            ]
+        ),
+    ).build_core(paper.id)
+
     assert repository.get_latest_stage_status(paper.id, "stage3") == ProcessingStatus.queued
 
 
