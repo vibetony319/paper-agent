@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Literal
+from unicodedata import normalize
 from uuid import uuid4
 
 
@@ -38,6 +39,11 @@ RELATION_TYPES = frozenset(
         "related_to",
     }
 )
+
+
+def normalize_graph_node_name(name: str) -> str:
+    """Return the durable identity used for graph-node names."""
+    return " ".join(normalize("NFKC", name).split()).casefold()
 
 
 def _require_nonempty_trimmed(value: str, label: str) -> None:

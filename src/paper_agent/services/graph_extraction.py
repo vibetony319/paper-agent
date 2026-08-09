@@ -3,7 +3,6 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Annotated
-from unicodedata import normalize
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
@@ -13,6 +12,7 @@ from paper_agent.domain import (
     RELATION_TYPES,
     GraphNode,
     GraphStage,
+    normalize_graph_node_name,
 )
 
 
@@ -37,7 +37,7 @@ class EdgeCandidate:
     evidence_element_ids: tuple[str, ...]
 
 
-_NonblankText = Annotated[str, Field(min_length=1, pattern=r"^\S(?:.*\S)?$")]
+_NonblankText = Annotated[str, Field(min_length=1, pattern=r"^\S(?:[\s\S]*\S)?$")]
 _EvidenceElementIds = Annotated[
     list[_NonblankText], Field(min_length=1, json_schema_extra={"uniqueItems": True})
 ]
@@ -190,7 +190,7 @@ def deduplicate_nodes(
     _require_stage(stage)
     groups: dict[tuple[str, str], list[NodeCandidate]] = {}
     for candidate in candidates:
-        key = (candidate.node_type, _normalized_name(candidate.name))
+        key = (candidate.node_type, normalize_graph_node_name(candidate.name))
         groups.setdefault(key, []).append(candidate)
 
     nodes: list[GraphNode] = []
@@ -251,10 +251,6 @@ def _require_supplied_evidence(
         raise GraphExtractionError(
             "candidate evidence must come from the supplied source elements"
         )
-
-
-def _normalized_name(name: str) -> str:
-    return " ".join(normalize("NFKC", name).split()).casefold()
 
 
 def _inline_schema_references(schema: dict[str, object]) -> dict[str, object]:

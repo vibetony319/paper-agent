@@ -734,6 +734,34 @@ def test_core_replacement_rolls_back_and_preserves_existing_graph(repository):
     assert repository.get_graph(paper.id).nodes == old
 
 
+def test_repository_rejects_canonical_equivalent_graph_node_names(repository):
+    """Breaks if direct persistence stores canonical-equivalent node names separately."""
+    paper, element = _paper_with_located_element(repository, "paper")
+    nodes = (
+        GraphNode(
+            id="cafe-nfc",
+            node_type="method",
+            name="Caf\u00e9",
+            summary="Normalizes Unicode node names.",
+            stage=GraphStage.core,
+            evidence_element_ids=(element.id,),
+        ),
+        GraphNode(
+            id="cafe-nfd",
+            node_type="method",
+            name="Cafe\u0301",
+            summary="Rejects duplicate durable identities.",
+            stage=GraphStage.core,
+            evidence_element_ids=(element.id,),
+        ),
+    )
+
+    with pytest.raises(IntegrityError):
+        repository.replace_graph_stage(paper.id, GraphStage.core, nodes, ())
+
+    assert repository.get_graph(paper.id).nodes == ()
+
+
 def test_graph_replacement_normalizes_names_and_respects_stage_dependencies(repository):
     """Breaks if case variants coexist or stage replacement clears the wrong records."""
     paper, element = _paper_with_located_element(repository, "paper")

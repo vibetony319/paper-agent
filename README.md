@@ -101,7 +101,7 @@ OpenAI-compatible vLLM server. In PowerShell, set these variables before
 starting the service:
 
 ```powershell
-$env:PAPER_AGENT_REASONING_BASE_URL = "http://127.0.0.1:8000/v1"
+$env:PAPER_AGENT_REASONING_BASE_URL = "http://127.0.0.1:8001/v1"
 $env:PAPER_AGENT_REASONING_MODEL = "your-served-model"
 $env:PAPER_AGENT_REASONING_API_KEY = "EMPTY"
 ```

@@ -30,6 +30,7 @@ from paper_agent.domain import (
     PaperGraph,
     ProcessingStatus,
     Section,
+    normalize_graph_node_name,
 )
 
 
@@ -644,7 +645,7 @@ class PaperRepository:
                         "id": node.id,
                         "paper_id": paper_id,
                         "node_type": node.node_type,
-                        "normalized_name": node.name.casefold(),
+                        "normalized_name": normalize_graph_node_name(node.name),
                         "name": node.name,
                         "summary": node.summary,
                         "stage": node.stage.value,

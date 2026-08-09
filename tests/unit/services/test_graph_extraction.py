@@ -154,6 +154,52 @@ def test_deduplicator_normalizes_unicode_and_preserves_distinct_node_types() -> 
     assert nodes[1].evidence_element_ids == ("e3",)
 
 
+def test_node_candidates_accept_trimmed_multiline_summaries() -> None:
+    """Breaks if valid multiline graph summaries are rejected by the parser."""
+    summary = "Explains the first finding.\nThen explains the second finding."
+
+    candidates = parse_node_candidates(
+        {
+            "nodes": [
+                {
+                    "local_id": "n1",
+                    "node_type": "method",
+                    "name": "Router",
+                    "summary": summary,
+                    "evidence_element_ids": ["e1"],
+                }
+            ]
+        },
+        stage=GraphStage.core,
+        allowed_evidence_ids=frozenset({"e1"}),
+    )
+
+    assert candidates[0].summary == summary
+
+
+@pytest.mark.parametrize("summary", ["", " Summary", "Summary ", "\nSummary", "Summary\n"])
+def test_node_candidates_reject_blank_or_untrimmed_summaries(summary: str) -> None:
+    """Breaks if parser validation diverges from strict summary schema whitespace rules."""
+    payload = {
+        "nodes": [
+            {
+                "local_id": "n1",
+                "node_type": "method",
+                "name": "Router",
+                "summary": summary,
+                "evidence_element_ids": ["e1"],
+            }
+        ]
+    }
+
+    with pytest.raises(GraphExtractionError):
+        parse_node_candidates(
+            payload,
+            stage=GraphStage.core,
+            allowed_evidence_ids=frozenset({"e1"}),
+        )
+
+
 def test_output_schemas_match_the_strict_parser_boundary() -> None:
     """Breaks if model output schemas allow fields the parser rejects."""
     node_schema = node_output_schema()
@@ -173,14 +219,14 @@ def test_output_schemas_match_the_strict_parser_boundary() -> None:
         assert evidence_schema["uniqueItems"] is True
         assert evidence_schema["items"] == {
             "minLength": 1,
-            "pattern": r"^\S(?:.*\S)?$",
+            "pattern": r"^\S(?:[\s\S]*\S)?$",
             "type": "string",
         }
 
     for field_name in ("local_id", "name", "summary"):
-        assert node["properties"][field_name]["pattern"] == r"^\S(?:.*\S)?$"
+        assert node["properties"][field_name]["pattern"] == r"^\S(?:[\s\S]*\S)?$"
     for field_name in ("source_node_id", "target_node_id"):
-        assert edge["properties"][field_name]["pattern"] == r"^\S(?:.*\S)?$"
+        assert edge["properties"][field_name]["pattern"] == r"^\S(?:[\s\S]*\S)?$"
 
     assert node["properties"]["node_type"]["enum"] == [
         "ablation",
