@@ -55,7 +55,7 @@ curl http://127.0.0.1:8000/health
 With the server running, upload a local PDF:
 
 ```bash
-curl -F "file=@/absolute/path/to/paper.pdf;type=application/pdf" http://127.0.0.1:8000/api/papers
+curl -F "file=@paper.pdf;type=application/pdf" http://127.0.0.1:8000/api/papers
 ```
 
 The response contains the new paper's `id`. Substitute that value for
@@ -90,9 +90,11 @@ graph. They remain `null` until the corresponding graph build is attempted.
 
 Paper upload, document retrieval, source retrieval, page rendering, and notes
 work without a reasoning-model configuration. Graph construction is optional:
-when no reasoning model is configured, a graph-build request returns
-`503 {"detail":"Reasoning model is not configured."}`; it does not start or
-record a graph-processing run.
+when the prerequisites are satisfied but no reasoning model is configured, a
+core build (completed Stage 1) or deep build (completed Stages 1 and 2) returns
+`503 {"detail":"Reasoning model is not configured."}`. A build that does not
+meet those prerequisites returns `409 {"detail":"Paper graph prerequisites
+are not complete."}` instead; neither response creates a processing row.
 
 To enable local graph construction, point the service at an already-running
 OpenAI-compatible vLLM server. In PowerShell, set these variables before
@@ -121,7 +123,7 @@ After configuring and starting vLLM, start paper-agent normally, upload a PDF,
 and use the returned ID to build the core graph:
 
 ```bash
-curl -F "file=@/absolute/path/to/paper.pdf;type=application/pdf" http://127.0.0.1:8000/api/papers
+curl -F "file=@paper.pdf;type=application/pdf" http://127.0.0.1:8000/api/papers
 curl -X POST http://127.0.0.1:8000/api/papers/<paper-id>/graph/core
 ```
 
