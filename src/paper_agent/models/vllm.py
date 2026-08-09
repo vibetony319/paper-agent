@@ -105,8 +105,6 @@ class VllmToolCallingClient:
             if raw_tool_calls is None:
                 raw_tool_calls = ()
             tool_calls = tuple(self._parse_tool_call(tool_call) for tool_call in raw_tool_calls)
-        except VllmToolCallingError:
-            raise
         except Exception:
             raise VllmToolCallingError("vLLM returned an invalid tool response.") from None
         return VllmToolTurn(content=content, tool_calls=tool_calls)

@@ -117,6 +117,22 @@ def test_tool_client_never_exposes_raw_model_payload_on_bad_arguments(fake_opena
     assert "prompt-secret" not in str(error.value)
 
 
+def test_tool_client_sanitizes_vllm_tool_calling_errors_from_the_provider(fake_openai):
+    """Breaks if a provider can leak sensitive text via the public error type."""
+    fake_openai.error = VllmToolCallingError("provider-prompt-secret")
+
+    with pytest.raises(VllmToolCallingError) as error:
+        VllmToolCallingClient(_config(), client=fake_openai).request_tool_turn(
+            messages=[{"role": "user", "content": "prompt-secret"}],
+            tools=(_read_element_tool(),),
+            tool_choice="auto",
+        )
+
+    assert str(error.value) == "vLLM returned an invalid tool response."
+    assert "provider-prompt-secret" not in str(error.value)
+    assert "prompt-secret" not in str(error.value)
+
+
 def test_tool_client_wraps_openai_client_construction_failures_safely(monkeypatch):
     """Breaks if OpenAI client construction exposes its configuration failure."""
     import paper_agent.models.vllm as vllm_module
