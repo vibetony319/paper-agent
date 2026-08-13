@@ -1,0 +1,153 @@
+import { useCallback, useEffect, useReducer } from 'react';
+
+import { ApiError, paperApi } from '../api/client';
+import type { AgentMode, Citation } from '../api/types';
+import {
+  initialWorkspaceState,
+  toSourceTarget,
+  workspaceReducer,
+} from './reducer';
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError';
+}
+
+export function usePaperWorkspace(activePaperId: string | null) {
+  const [state, dispatch] = useReducer(workspaceReducer, initialWorkspaceState);
+
+  const reportApiError = useCallback((paperId: string, error: unknown) => {
+    if (isAbortError(error)) {
+      return;
+    }
+    if (error instanceof ApiError) {
+      dispatch({ type: 'request/failed', paperId, message: error.message });
+    }
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    dispatch({ type: 'paper/opened', paperId: activePaperId });
+
+    if (activePaperId === null) {
+      return () => controller.abort();
+    }
+
+    void Promise.all([
+      paperApi.getDocument(activePaperId),
+      paperApi.getGraph(activePaperId),
+      paperApi.getNotes(activePaperId),
+    ])
+      .then(([document, graph, notes]) => {
+        if (controller.signal.aborted) {
+          return;
+        }
+        dispatch({ type: 'document/loaded', paperId: activePaperId, document, notes });
+        dispatch({ type: 'graph/loaded', paperId: activePaperId, graph });
+      })
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted) {
+          reportApiError(activePaperId, error);
+        }
+      });
+
+    return () => controller.abort();
+  }, [activePaperId, reportApiError]);
+
+  const buildCoreGraph = useCallback(async () => {
+    if (state.activePaperId === null) {
+      return;
+    }
+    try {
+      const graph = await paperApi.buildCoreGraph(state.activePaperId);
+      dispatch({ type: 'graph/loaded', paperId: state.activePaperId, graph });
+    } catch (error) {
+      reportApiError(state.activePaperId, error);
+    }
+  }, [reportApiError, state.activePaperId]);
+
+  const buildDeepGraph = useCallback(async () => {
+    if (state.activePaperId === null) {
+      return;
+    }
+    try {
+      const graph = await paperApi.buildDeepGraph(state.activePaperId);
+      dispatch({ type: 'graph/loaded', paperId: state.activePaperId, graph });
+    } catch (error) {
+      reportApiError(state.activePaperId, error);
+    }
+  }, [reportApiError, state.activePaperId]);
+
+  const askAgent = useCallback(async (content: string, mode: AgentMode) => {
+    if (state.activePaperId === null) {
+      return null;
+    }
+    try {
+      const message = await paperApi.askAgent(state.activePaperId, {
+        content,
+        mode,
+        conversation_id: state.conversationId ?? undefined,
+      });
+      dispatch({
+        type: 'conversation/set',
+        conversationId: message.conversation_id,
+        message,
+      });
+      return message;
+    } catch (error) {
+      reportApiError(state.activePaperId, error);
+      return null;
+    }
+  }, [reportApiError, state.activePaperId, state.conversationId]);
+
+  const saveNote = useCallback(async (
+    body: string,
+    elementId = state.activeSource?.id,
+    pageNumber = state.activeSource?.pageNumber,
+  ) => {
+    if (state.activePaperId === null) {
+      return null;
+    }
+    try {
+      const note = await paperApi.createNote(state.activePaperId, {
+        body,
+        element_id: elementId,
+        page_number: pageNumber,
+      });
+      dispatch({ type: 'notes/created', paperId: state.activePaperId, note });
+      return note;
+    } catch (error) {
+      reportApiError(state.activePaperId, error);
+      return null;
+    }
+  }, [reportApiError, state.activePaperId, state.activeSource]);
+
+  const selectCitation = useCallback((citation: Citation) => {
+    const element = state.document?.elements.find(({ id }) => id === citation.id);
+    dispatch({ type: 'source/selected', source: element === undefined ? null : toSourceTarget(element) });
+  }, [state.document]);
+
+  const selectGraphEvidenceElement = useCallback((elementId: string) => {
+    const element = state.document?.elements.find(({ id }) => id === elementId);
+    dispatch({ type: 'source/selected', source: element === undefined ? null : toSourceTarget(element) });
+  }, [state.document]);
+
+  const clearActiveSource = useCallback(() => {
+    dispatch({ type: 'source/selected', source: null });
+  }, []);
+
+  const setGraphFocus = useCallback((nodeId: string | null) => {
+    dispatch({ type: 'graph/focused', nodeId });
+  }, []);
+
+  return {
+    ...state,
+    buildCoreGraph,
+    buildDeepGraph,
+    askAgent,
+    saveNote,
+    selectCitation,
+    selectGraphEvidenceElement,
+    clearActiveSource,
+    setGraphFocus,
+  };
+}
