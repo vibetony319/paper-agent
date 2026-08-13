@@ -18,6 +18,19 @@ def _upload_pdf(client: TestClient, sample_pdf: Path, filename: str = "paper.pdf
     return response.json()
 
 
+def test_paper_library_returns_safe_sorted_summaries(client, sample_pdf):
+    _upload_pdf(client, sample_pdf, "zeta.pdf")
+    _upload_pdf(client, sample_pdf, "alpha.pdf")
+
+    response = client.get("/api/papers")
+
+    assert response.status_code == 200
+    assert [paper["original_filename"] for paper in response.json()] == [
+        "alpha.pdf", "zeta.pdf"
+    ]
+    assert all("stored_filename" not in paper for paper in response.json())
+
+
 def test_upload_then_retrieve_summary_document_source_and_page_image(
     client: TestClient, sample_pdf: Path
 ) -> None:

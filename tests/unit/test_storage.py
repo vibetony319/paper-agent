@@ -537,6 +537,31 @@ def test_repository_returns_latest_durable_stage_status(repository) -> None:
     assert repository.get_latest_stage_status(paper.id, "missing") is None
 
 
+def test_repository_lists_papers_by_filename_then_id(repository) -> None:
+    """Breaks if a paper library is not returned in stable display order."""
+    repository.create_paper(
+        paper_id="zeta-id",
+        original_filename="zeta.pdf",
+        stored_filename="zeta.pdf",
+    )
+    repository.create_paper(
+        paper_id="beta-id",
+        original_filename="alpha.pdf",
+        stored_filename="alpha-first.pdf",
+    )
+    repository.create_paper(
+        paper_id="alpha-id",
+        original_filename="alpha.pdf",
+        stored_filename="alpha-second.pdf",
+    )
+
+    assert repository.list_papers() == (
+        repository.get_paper("alpha-id"),
+        repository.get_paper("beta-id"),
+        repository.get_paper("zeta-id"),
+    )
+
+
 def test_repository_returns_newest_aggregate_processing_error(repository) -> None:
     """Breaks if multiple aggregate failures raise instead of returning the newest error."""
     paper = repository.create_paper(

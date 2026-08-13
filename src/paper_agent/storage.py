@@ -158,6 +158,13 @@ class PaperRepository:
             row = connection.execute(select(papers).where(papers.c.id == paper_id)).mappings().one_or_none()
         return None if row is None else self._paper_from_row(row)
 
+    def list_papers(self) -> tuple[Paper, ...]:
+        with self.engine.connect() as connection:
+            rows = connection.execute(
+                select(papers).order_by(papers.c.original_filename.asc(), papers.c.id.asc())
+            ).mappings().all()
+        return tuple(self._paper_from_row(row) for row in rows)
+
     def create_conversation(self, conversation: Conversation) -> Conversation:
         with self.engine.begin() as connection:
             connection.execute(

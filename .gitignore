@@ -18,6 +18,8 @@ node_modules/
 .next/
 dist/
 web/.npm-cache/
+web/node_modules/
+web/dist/
 
 # Isolated feature workspaces
 .worktrees/
