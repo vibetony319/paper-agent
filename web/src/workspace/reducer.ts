@@ -25,7 +25,7 @@ export type WorkspaceAction =
   | { type: 'graph/loaded'; paperId: string; graph: PaperGraph }
   | { type: 'source/selected'; source: SourceTarget | null }
   | { type: 'graph/focused'; nodeId: string | null }
-  | { type: 'conversation/set'; conversationId: string; message: AgentMessage }
+  | { type: 'conversation/set'; paperId: string; conversationId: string; message: AgentMessage }
   | { type: 'notes/created'; paperId: string; note: Note }
   | { type: 'request/failed'; paperId: string; message: string };
 
@@ -79,12 +79,14 @@ export function workspaceReducer(
     case 'graph/focused':
       return { ...state, graphFocusNodeId: action.nodeId };
     case 'conversation/set':
-      return {
-        ...state,
-        conversationId: action.conversationId,
-        messages: [...state.messages, action.message],
-        errorMessage: null,
-      };
+      return isCurrentPaper(state, action.paperId)
+        ? {
+          ...state,
+          conversationId: action.conversationId,
+          messages: [...state.messages, action.message],
+          errorMessage: null,
+        }
+        : state;
     case 'notes/created':
       return isCurrentPaper(state, action.paperId)
         ? { ...state, notes: [...state.notes, action.note], errorMessage: null }

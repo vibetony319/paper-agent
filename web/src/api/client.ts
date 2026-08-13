@@ -62,14 +62,14 @@ export const paperApi = {
     return request<PaperSummary>('/api/papers', { method: 'POST', body });
   },
 
-  getDocument: (paperId: string) =>
-    request<PaperDocument>(`/api/papers/${encodeURIComponent(paperId)}/document`),
+  getDocument: (paperId: string, init?: Pick<RequestInit, 'signal'>) =>
+    request<PaperDocument>(`/api/papers/${encodeURIComponent(paperId)}/document`, init),
 
   getSourceUrl: (paperId: string) =>
     `/api/papers/${encodeURIComponent(paperId)}/source`,
 
-  getGraph: (paperId: string) =>
-    request<PaperGraph>(`/api/papers/${encodeURIComponent(paperId)}/graph`),
+  getGraph: (paperId: string, init?: Pick<RequestInit, 'signal'>) =>
+    request<PaperGraph>(`/api/papers/${encodeURIComponent(paperId)}/graph`, init),
 
   getGraphSubgraph: (paperId: string, nodeId: string, depth = 1) => {
     const params = new URLSearchParams({ node_id: nodeId, depth: String(depth) });
@@ -96,8 +96,8 @@ export const paperApi = {
       jsonRequest('POST', input),
     ),
 
-  getNotes: (paperId: string) =>
-    request<Note[]>(`/api/papers/${encodeURIComponent(paperId)}/notes`),
+  getNotes: (paperId: string, init?: Pick<RequestInit, 'signal'>) =>
+    request<Note[]>(`/api/papers/${encodeURIComponent(paperId)}/notes`, init),
 
   askAgent: (paperId: string, input: AskAgentInput) =>
     request<AgentMessage>(

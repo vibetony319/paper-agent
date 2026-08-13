@@ -33,9 +33,9 @@ export function usePaperWorkspace(activePaperId: string | null) {
     }
 
     void Promise.all([
-      paperApi.getDocument(activePaperId),
-      paperApi.getGraph(activePaperId),
-      paperApi.getNotes(activePaperId),
+      paperApi.getDocument(activePaperId, { signal: controller.signal }),
+      paperApi.getGraph(activePaperId, { signal: controller.signal }),
+      paperApi.getNotes(activePaperId, { signal: controller.signal }),
     ])
       .then(([document, graph, notes]) => {
         if (controller.signal.aborted) {
@@ -82,13 +82,15 @@ export function usePaperWorkspace(activePaperId: string | null) {
       return null;
     }
     try {
-      const message = await paperApi.askAgent(state.activePaperId, {
+      const paperId = state.activePaperId;
+      const message = await paperApi.askAgent(paperId, {
         content,
         mode,
         conversation_id: state.conversationId ?? undefined,
       });
       dispatch({
         type: 'conversation/set',
+        paperId,
         conversationId: message.conversation_id,
         message,
       });

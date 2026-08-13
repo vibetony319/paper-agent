@@ -85,6 +85,29 @@ it('clears paper-specific workspace data when a different paper opens', () => {
   });
 });
 
+it('ignores an Agent response that belongs to a paper that is no longer open', () => {
+  const switchedWorkspace = workspaceReducer(
+    readyWorkspace({ paperId: 'paper-a', conversationId: 'chat-a' }),
+    { type: 'paper/opened', paperId: 'paper-b' },
+  );
+
+  const next = workspaceReducer(switchedWorkspace, {
+    type: 'conversation/set',
+    paperId: 'paper-a',
+    conversationId: 'chat-a',
+    message: {
+      conversation_id: 'chat-a',
+      message_id: 'message-late',
+      status: 'grounded',
+      paper_answer: 'Late answer.',
+      background_explanation: null,
+      citations: [],
+    },
+  });
+
+  expect(next).toEqual(switchedWorkspace);
+});
+
 it('rejects an unlocated element as an active source target', () => {
   expect(toSourceTarget(unlocatedElement)).toBeNull();
 });
