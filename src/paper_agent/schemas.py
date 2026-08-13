@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -222,7 +223,7 @@ class CitationResponse(BaseModel):
 class AgentMessageResponse(BaseModel):
     conversation_id: str
     message_id: str
-    status: str
+    status: Literal["grounded", "insufficient_evidence"]
     paper_answer: str
     background_explanation: str | None
     citations: list[CitationResponse]

@@ -2,6 +2,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request
 
+from paper_agent.domain import AgentMessageRole, ConversationMessage, DocumentElement
 from paper_agent.schemas import (
     AgentHealthResponse,
     AgentMessageRequest,
@@ -50,9 +51,8 @@ def _require_conversation(
 
 
 def _citations(
-    repository: PaperRepository, paper_id: str, citation_element_ids: tuple[str, ...]
+    elements: dict[str, DocumentElement], citation_element_ids: tuple[str, ...]
 ) -> list[CitationResponse]:
-    elements = {element.id: element for element in repository.get_elements(paper_id)}
     try:
         return [
             CitationResponse.from_element(elements[element_id])
@@ -63,6 +63,36 @@ def _citations(
             status_code=502,
             detail="Reasoning model could not complete the request.",
         ) from error
+
+
+def _citation_elements(
+    repository: PaperRepository,
+    paper_id: str,
+    messages: tuple[ConversationMessage, ...],
+) -> dict[str, DocumentElement]:
+    citation_element_ids = tuple(
+        dict.fromkeys(
+            element_id
+            for message in messages
+            if message.role is AgentMessageRole.assistant
+            for element_id in message.citation_element_ids
+        )
+    )
+    if not citation_element_ids:
+        return {}
+
+    elements = {
+        element.id: element
+        for element in repository.get_located_elements_by_ids(
+            paper_id, citation_element_ids
+        )
+    }
+    if set(elements) != set(citation_element_ids):
+        raise HTTPException(
+            status_code=502,
+            detail="Reasoning model could not complete the request.",
+        )
+    return elements
 
 
 @router.post(
@@ -102,6 +132,9 @@ def ask_paper_agent(
             status_code=502,
             detail="Reasoning model could not complete the request.",
         ) from error
+    citation_elements = _citation_elements(
+        repository, paper_id_text, (turn.assistant_message,)
+    )
     return AgentMessageResponse(
         conversation_id=turn.conversation.id,
         message_id=turn.assistant_message.id,
@@ -109,8 +142,7 @@ def ask_paper_agent(
         paper_answer=turn.answer.paper_answer,
         background_explanation=turn.answer.background_explanation,
         citations=_citations(
-            repository,
-            paper_id_text,
+            citation_elements,
             turn.assistant_message.citation_element_ids,
         ),
     )
@@ -130,12 +162,15 @@ def get_conversation(
         repository, paper_id_text, str(conversation_id)
     )
     messages = repository.get_conversation_messages(paper_id_text, conversation.id)
+    citation_elements = _citation_elements(repository, paper_id_text, messages)
     return ConversationResponse.from_conversation(
         conversation,
         [
             ConversationMessageResponse.from_message(
                 message,
-                _citations(repository, paper_id_text, message.citation_element_ids),
+                []
+                if message.role is AgentMessageRole.user
+                else _citations(citation_elements, message.citation_element_ids),
             )
             for message in messages
         ],
@@ -148,6 +183,7 @@ def validate_agent_health(request: Request) -> AgentHealthResponse:
         _runtime(request).validate_tool_calling()
     except AgentRuntimeUnavailableError as error:
         raise HTTPException(
-            status_code=503, detail="Reasoning model is not configured."
+            status_code=503,
+            detail="Reasoning model tool calling is unavailable.",
         ) from error
     return AgentHealthResponse()

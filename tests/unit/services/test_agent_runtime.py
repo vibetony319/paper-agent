@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Callable
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
 
 from paper_agent.database import conversation_messages, conversations, processing_runs
 from paper_agent.domain import (
@@ -439,14 +439,25 @@ def test_runtime_builds_model_history_from_only_the_latest_six_durable_messages(
         )
     client = FakeAgentClient()
 
-    _runtime(repository, client).ask(
-        paper_id=paper.id,
-        question=AgentQuestion(
-            content="current-question",
-            mode=AgentMode.paper_only,
-            conversation_id=conversation.id,
-        ),
-    )
+    statements: list[str] = []
+
+    def capture_statement(
+        connection, cursor, statement, parameters, context, executemany
+    ) -> None:
+        statements.append(statement)
+
+    event.listen(repository.engine, "before_cursor_execute", capture_statement)
+    try:
+        _runtime(repository, client).ask(
+            paper_id=paper.id,
+            question=AgentQuestion(
+                content="current-question",
+                mode=AgentMode.paper_only,
+                conversation_id=conversation.id,
+            ),
+        )
+    finally:
+        event.remove(repository.engine, "before_cursor_execute", capture_statement)
 
     model_history = client.tool_requests[0]["messages"][1:]
     assert model_history == [
@@ -457,6 +468,15 @@ def test_runtime_builds_model_history_from_only_the_latest_six_durable_messages(
         {"role": "user", "content": "durable-6"},
         {"role": "user", "content": "current-question"},
     ]
+    history_reads = [
+        statement
+        for statement in statements
+        if "conversation_messages.content" in statement
+        and "FROM conversation_messages" in statement
+        and "FROM conversation_message_citations" not in statement
+    ]
+    assert len(history_reads) == 1
+    assert "LIMIT" in history_reads[0].upper()
 
 
 def test_external_mode_prompt_and_result_keep_background_separate(repository):

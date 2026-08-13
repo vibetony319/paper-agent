@@ -4,7 +4,15 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import event, func, select
 
+from paper_agent.database import conversation_messages, conversations
+from paper_agent.domain import (
+    AgentMessageRole,
+    AgentMode,
+    Conversation,
+    ConversationMessage,
+)
 from paper_agent.models import VllmToolCall, VllmToolCallingError, VllmToolTurn
 from paper_agent.services.agent_runtime import PaperAgentRuntime
 
@@ -127,16 +135,40 @@ def _configure_fake_agent_runtime(app, fake: FakeAgentClient) -> None:
     )
 
 
+def _chat_row_counts(repository) -> tuple[int, int]:
+    with repository.engine.connect() as connection:
+        return (
+            connection.execute(
+                select(func.count()).select_from(conversations)
+            ).scalar_one(),
+            connection.execute(
+                select(func.count()).select_from(conversation_messages)
+            ).scalar_one(),
+        )
+
+
 def test_agent_returns_locatable_same_paper_citations_without_paths(
     client: TestClient, uploaded_paper: UploadedPaper
 ) -> None:
     """Breaks if the route leaks storage details or returns unlocatable citations."""
     _configure_fake_agent_runtime(client.app, _grounded_tool_flow(uploaded_paper))
 
-    response = client.post(
-        f"/api/papers/{uploaded_paper.id}/agent/messages",
-        json={"content": "Explain the method.", "mode": "paper_only"},
-    )
+    statements: list[tuple[str, tuple[object, ...]]] = []
+
+    def capture_statement(
+        connection, cursor, statement, parameters, context, executemany
+    ) -> None:
+        statements.append((statement, tuple(parameters)))
+
+    repository = client.app.state.paper_repository
+    event.listen(repository.engine, "before_cursor_execute", capture_statement)
+    try:
+        response = client.post(
+            f"/api/papers/{uploaded_paper.id}/agent/messages",
+            json={"content": "Explain the method.", "mode": "paper_only"},
+        )
+    finally:
+        event.remove(repository.engine, "before_cursor_execute", capture_statement)
 
     assert response.status_code == 200
     body = response.json()
@@ -150,6 +182,17 @@ def test_agent_returns_locatable_same_paper_citations_without_paths(
     assert str(client.app.state.settings.data_dir) not in response.text
     assert "stored_filename" not in response.text
     assert "private tool planning" not in response.text
+    citation_element_reads = [
+        (statement, parameters)
+        for statement, parameters in statements
+        if "FROM document_elements" in statement
+        and "document_elements.text" in statement
+        and "document_elements.location_status" in statement
+        and "document_elements.id IN" in statement
+    ]
+    assert len(citation_element_reads) == 1
+    _, parameters = citation_element_reads[0]
+    assert parameters.count(uploaded_paper.element_id) == 1
 
     history = client.get(
         f"/api/papers/{uploaded_paper.id}/agent/conversations/{body['conversation_id']}"
@@ -166,17 +209,149 @@ def test_agent_maps_preflight_and_configuration_failures_without_chat_writes(
     client: TestClient, uploaded_paper: UploadedPaper, stage1_incomplete_paper
 ) -> None:
     """Breaks if a failed preflight is a 5xx or creates a conversation before validation."""
+    before = _chat_row_counts(client.app.state.paper_repository)
+
     assert client.post(
         f"/api/papers/{stage1_incomplete_paper.id}/agent/messages",
         json={"content": "Question", "mode": "paper_only"},
     ).status_code == 409
+    assert _chat_row_counts(client.app.state.paper_repository) == before
+
     assert client.post(
         f"/api/papers/{uploaded_paper.id}/agent/messages",
         json={"content": "Question", "mode": "paper_only"},
     ).status_code == 503
-    assert client.app.state.paper_repository.get_conversation_messages(
-        uploaded_paper.id, "missing-conversation"
-    ) == ()
+    assert _chat_row_counts(client.app.state.paper_repository) == before
+
+
+def test_conversation_get_batches_unique_cited_elements_once(
+    client: TestClient, uploaded_paper: UploadedPaper
+) -> None:
+    """Breaks if each returned message materializes the paper's full element set."""
+    repository = client.app.state.paper_repository
+    conversation = repository.create_conversation(
+        Conversation(paper_id=uploaded_paper.id, mode=AgentMode.paper_only)
+    )
+    messages = (
+        ConversationMessage(
+            conversation_id=conversation.id,
+            paper_id=uploaded_paper.id,
+            role=AgentMessageRole.user,
+            content="First question",
+        ),
+        ConversationMessage(
+            conversation_id=conversation.id,
+            paper_id=uploaded_paper.id,
+            role=AgentMessageRole.assistant,
+            content="First answer",
+            citation_element_ids=(uploaded_paper.element_id,),
+        ),
+        ConversationMessage(
+            conversation_id=conversation.id,
+            paper_id=uploaded_paper.id,
+            role=AgentMessageRole.user,
+            content="Second question",
+        ),
+        ConversationMessage(
+            conversation_id=conversation.id,
+            paper_id=uploaded_paper.id,
+            role=AgentMessageRole.assistant,
+            content="Second answer",
+            citation_element_ids=(uploaded_paper.element_id,),
+        ),
+    )
+    for message in messages:
+        repository.append_conversation_message(message)
+
+    statements: list[tuple[str, tuple[object, ...]]] = []
+
+    def capture_statement(
+        connection, cursor, statement, parameters, context, executemany
+    ) -> None:
+        statements.append((statement, tuple(parameters)))
+
+    event.listen(repository.engine, "before_cursor_execute", capture_statement)
+    try:
+        response = client.get(
+            f"/api/papers/{uploaded_paper.id}/agent/conversations/{conversation.id}"
+        )
+    finally:
+        event.remove(repository.engine, "before_cursor_execute", capture_statement)
+
+    assert response.status_code == 200
+    assert [
+        [citation["id"] for citation in message["citations"]]
+        for message in response.json()["messages"]
+    ] == [
+        [],
+        [uploaded_paper.element_id],
+        [],
+        [uploaded_paper.element_id],
+    ]
+    element_reads = [
+        (statement, parameters)
+        for statement, parameters in statements
+        if "FROM document_elements" in statement
+    ]
+    assert len(element_reads) == 1
+    statement, parameters = element_reads[0]
+    assert "document_elements.location_status" in statement
+    assert "document_elements.id IN" in statement
+    assert parameters.count(uploaded_paper.element_id) == 1
+
+
+def test_conversation_get_does_not_lookup_elements_for_user_only_messages(
+    client: TestClient, uploaded_paper: UploadedPaper
+) -> None:
+    """Breaks if citation DTO construction performs element reads for user messages."""
+    repository = client.app.state.paper_repository
+    conversation = repository.create_conversation(
+        Conversation(paper_id=uploaded_paper.id, mode=AgentMode.paper_only)
+    )
+    for content in ("First question", "Second question"):
+        repository.append_conversation_message(
+            ConversationMessage(
+                conversation_id=conversation.id,
+                paper_id=uploaded_paper.id,
+                role=AgentMessageRole.user,
+                content=content,
+            )
+        )
+
+    statements: list[str] = []
+
+    def capture_statement(
+        connection, cursor, statement, parameters, context, executemany
+    ) -> None:
+        statements.append(statement)
+
+    event.listen(repository.engine, "before_cursor_execute", capture_statement)
+    try:
+        response = client.get(
+            f"/api/papers/{uploaded_paper.id}/agent/conversations/{conversation.id}"
+        )
+    finally:
+        event.remove(repository.engine, "before_cursor_execute", capture_statement)
+
+    assert response.status_code == 200
+    assert [message["citations"] for message in response.json()["messages"]] == [
+        [],
+        [],
+    ]
+    assert not [
+        statement for statement in statements if "FROM document_elements" in statement
+    ]
+
+
+def test_agent_message_response_openapi_constrains_status_values(
+    client: TestClient,
+) -> None:
+    """Breaks if the public response contract permits arbitrary status strings."""
+    status_schema = client.get("/openapi.json").json()["components"]["schemas"][
+        "AgentMessageResponse"
+    ]["properties"]["status"]
+
+    assert status_schema["enum"] == ["grounded", "insufficient_evidence"]
 
 
 def test_agent_maps_resource_validation_and_model_failures_to_safe_boundaries(
@@ -277,7 +452,11 @@ def test_agent_health_is_explicit_and_maps_unavailable_or_failed_validation_to_5
     client: TestClient,
 ) -> None:
     """Breaks if agent health validates during startup or leaks provider failure details."""
-    assert client.post("/api/agent/health").status_code == 503
+    unavailable = client.post("/api/agent/health")
+    assert unavailable.status_code == 503
+    assert unavailable.json() == {
+        "detail": "Reasoning model tool calling is unavailable."
+    }
 
     healthy = FakeAgentClient()
     _configure_fake_agent_runtime(client.app, healthy)
@@ -290,4 +469,7 @@ def test_agent_health_is_explicit_and_maps_unavailable_or_failed_validation_to_5
     _configure_fake_agent_runtime(client.app, failing)
     response = client.post("/api/agent/health")
     assert response.status_code == 503
+    assert response.json() == {
+        "detail": "Reasoning model tool calling is unavailable."
+    }
     assert "raw health endpoint secret" not in response.text

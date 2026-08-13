@@ -181,6 +181,8 @@ class PaperRepository:
     def append_conversation_message(self, message: ConversationMessage) -> ConversationMessage:
         if message.role is AgentMessageRole.user and message.citation_element_ids:
             raise ConversationReferenceError("user messages cannot cite source elements")
+        if len(set(message.citation_element_ids)) != len(message.citation_element_ids):
+            raise ConversationReferenceError("assistant citations must not contain duplicates")
         with self.engine.begin() as connection:
             self._require_owned_conversation(
                 connection, message.paper_id, message.conversation_id
@@ -214,17 +216,68 @@ class PaperRepository:
         return replace(message, sequence=sequence)
 
     def get_conversation_messages(
-        self, paper_id: str, conversation_id: str
+        self,
+        paper_id: str,
+        conversation_id: str,
+        *,
+        limit: int | None = None,
     ) -> tuple[ConversationMessage, ...]:
+        if limit is not None and limit < 1:
+            raise ValueError("conversation message limit must be positive")
+
+        message_scope = (
+            select(conversation_messages)
+            .where(conversation_messages.c.paper_id == paper_id)
+            .where(conversation_messages.c.conversation_id == conversation_id)
+        )
+        if limit is not None:
+            message_scope = message_scope.order_by(
+                conversation_messages.c.sequence.desc()
+            ).limit(limit)
+        selected_messages = message_scope.subquery()
+
         with self.engine.connect() as connection:
-            rows = connection.execute(
-                select(conversation_messages)
-                .where(conversation_messages.c.paper_id == paper_id)
-                .where(conversation_messages.c.conversation_id == conversation_id)
-                .order_by(conversation_messages.c.sequence)
+            rows = tuple(
+                connection.execute(
+                    select(selected_messages).order_by(selected_messages.c.sequence)
+                ).mappings()
+            )
+            if not rows:
+                return ()
+
+            citation_rows = connection.execute(
+                select(
+                    conversation_message_citations.c.message_id,
+                    conversation_message_citations.c.element_id,
+                )
+                .select_from(
+                    conversation_message_citations.join(
+                        selected_messages,
+                        (
+                            conversation_message_citations.c.paper_id
+                            == selected_messages.c.paper_id
+                        )
+                        & (
+                            conversation_message_citations.c.message_id
+                            == selected_messages.c.id
+                        ),
+                    )
+                )
+                .order_by(
+                    conversation_message_citations.c.message_id,
+                    conversation_message_citations.c.element_id,
+                )
             ).mappings()
+            citations_by_message: dict[str, list[str]] = {}
+            for citation_row in citation_rows:
+                citations_by_message.setdefault(
+                    citation_row["message_id"], []
+                ).append(citation_row["element_id"])
+
             return tuple(
-                self._conversation_message_from_row(connection, paper_id, row)
+                self._conversation_message_from_row(
+                    row, tuple(citations_by_message.get(row["id"], ()))
+                )
                 for row in rows
             )
 
@@ -402,6 +455,22 @@ class PaperRepository:
             rows = connection.execute(
                 select(document_elements)
                 .where(document_elements.c.paper_id == paper_id)
+                .order_by(document_elements.c.order_index, document_elements.c.id)
+            ).mappings()
+            return tuple(self._element_from_row(row) for row in rows)
+
+    def get_located_elements_by_ids(
+        self, paper_id: str, element_ids: tuple[str, ...]
+    ) -> tuple[DocumentElement, ...]:
+        unique_ids = tuple(dict.fromkeys(element_ids))
+        if not unique_ids:
+            return ()
+        with self.engine.connect() as connection:
+            rows = connection.execute(
+                select(document_elements)
+                .where(document_elements.c.paper_id == paper_id)
+                .where(document_elements.c.location_status == "located")
+                .where(document_elements.c.id.in_(unique_ids))
                 .order_by(document_elements.c.order_index, document_elements.c.id)
             ).mappings()
             return tuple(self._element_from_row(row) for row in rows)
@@ -980,16 +1049,8 @@ class PaperRepository:
 
     @staticmethod
     def _conversation_message_from_row(
-        connection, paper_id: str, row
+        row, citation_element_ids: tuple[str, ...]
     ) -> ConversationMessage:
-        citation_element_ids = tuple(
-            connection.execute(
-                select(conversation_message_citations.c.element_id)
-                .where(conversation_message_citations.c.paper_id == paper_id)
-                .where(conversation_message_citations.c.message_id == row["id"])
-                .order_by(conversation_message_citations.c.element_id)
-            ).scalars()
-        )
         return ConversationMessage(
             id=row["id"],
             conversation_id=row["conversation_id"],

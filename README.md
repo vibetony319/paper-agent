@@ -190,10 +190,11 @@ A correctly configured server returns:
 {"status":"ok"}
 ```
 
-If no reasoning configuration is present, the endpoint returns `503` with
-`{"detail":"Reasoning model is not configured."}`. Do not treat a passing
-unit test as evidence that a particular local vLLM model and parser work
-together; run the explicit health request after starting those services.
+If reasoning is not configured or explicit tool-calling validation fails, the
+endpoint returns `503` with `{"detail":"Reasoning model tool calling is
+unavailable."}`. Do not treat a passing unit test as evidence that a particular
+local vLLM model and parser work together; run the explicit health request after
+starting those services.
 
 After an upload has parsed successfully (the upload response reports
 `"status": "completed"` and `"stage1_status": "completed"`), submit a

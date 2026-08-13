@@ -191,8 +191,10 @@ class PaperAgentRuntime:
         self, *, paper_id: str, conversation: Conversation
     ) -> list[dict[str, object]]:
         durable_messages = self.repository.get_conversation_messages(
-            paper_id, conversation.id
-        )[-HISTORY_MESSAGE_LIMIT:]
+            paper_id,
+            conversation.id,
+            limit=HISTORY_MESSAGE_LIMIT,
+        )
         return [
             {"role": "system", "content": _system_prompt(conversation.mode)},
             *(
