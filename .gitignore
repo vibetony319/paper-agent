@@ -21,6 +21,7 @@ web/.npm-cache/
 
 # Isolated feature workspaces
 .worktrees/
+.superpowers/sdd/2026-08-13-web-ui/
 
 # Editor and operating-system files
 .DS_Store
