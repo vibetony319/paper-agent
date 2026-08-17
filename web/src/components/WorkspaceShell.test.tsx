@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, expect, it, vi } from 'vitest';
 
@@ -92,6 +92,9 @@ it('does not advance the visible conversation after an empty or failed Agent res
   await user.click(screen.getByRole('button', { name: 'Ask' }));
 
   await waitFor(() => expect(askAgent).toHaveBeenCalledOnce());
+  expect(askAgent).toHaveBeenCalledWith('Will this persist?', 'paper_only');
+  expect(await screen.findByRole('alert'))
+    .toHaveTextContent('Unable to receive an Agent response.');
   expect(screen.queryByRole('article')).not.toBeInTheDocument();
   expect(screen.getByLabelText('Ask about this paper')).toHaveValue('Will this persist?');
   expect(screen.queryByText('Grounded in this paper')).not.toBeInTheDocument();
@@ -153,6 +156,43 @@ it('ignores an Agent response that resolves after the active paper changes', asy
   expect(screen.queryByText('Old paper question')).not.toBeInTheDocument();
 });
 
+it('ignores a null Agent result that resolves after the active paper changes', async () => {
+  const user = userEvent.setup();
+  let resolveResponse: ((message: AgentMessage | null) => void) | undefined;
+  const askAgent = vi.fn(() => new Promise<AgentMessage | null>((resolve) => {
+    resolveResponse = resolve;
+  }));
+
+  const { rerender } = render(
+    <AgentPanel
+      paperId="paper-a"
+      messages={[]}
+      askAgent={askAgent}
+      onSelectCitation={vi.fn()}
+    />,
+  );
+
+  await user.type(screen.getByLabelText('Ask about this paper'), 'Old paper question');
+  await user.click(screen.getByRole('button', { name: 'Ask' }));
+  expect(askAgent).toHaveBeenCalledWith('Old paper question', 'paper_only');
+  rerender(
+    <AgentPanel
+      paperId="paper-b"
+      messages={[]}
+      askAgent={askAgent}
+      onSelectCitation={vi.fn()}
+    />,
+  );
+  await act(async () => {
+    resolveResponse?.(null);
+    await Promise.resolve();
+  });
+
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  expect(screen.getByLabelText('Ask about this paper')).toHaveValue('');
+  expect(screen.queryByRole('article')).not.toBeInTheDocument();
+});
+
 it('creates a note attached to the active source target and de-duplicates its authoritative update', async () => {
   const user = userEvent.setup();
   const savedNote: Note = {
@@ -192,7 +232,32 @@ it('creates a note attached to the active source target and de-duplicates its au
   expect(screen.getAllByText(savedNote.body)).toHaveLength(1);
 });
 
-it('allows an unbound note and only enables jumps for notes with a valid element location', async () => {
+it('retains an unbound note draft and shows a safe alert when save returns null', async () => {
+  const user = userEvent.setup();
+  const saveNote = vi.fn().mockResolvedValue(null);
+
+  render(
+    <NotesPanel
+      paperId="paper-a"
+      activeSource={null}
+      notes={[]}
+      documentElements={[]}
+      saveNote={saveNote}
+      onSelectSource={vi.fn()}
+    />,
+  );
+
+  expect(screen.getByText('No source selected. This note will be unbound.')).toBeVisible();
+  await user.type(screen.getByLabelText('New note'), 'A free-standing observation.');
+  await user.click(screen.getByRole('button', { name: 'Save note' }));
+  await waitFor(() => expect(saveNote)
+    .toHaveBeenCalledWith('A free-standing observation.', undefined, undefined));
+  expect(await screen.findByRole('alert')).toHaveTextContent('Unable to save this note.');
+  expect(screen.getByLabelText('New note')).toHaveValue('A free-standing observation.');
+  expect(screen.queryByRole('article')).not.toBeInTheDocument();
+});
+
+it('only enables jumps for notes with a valid element location', async () => {
   const user = userEvent.setup();
   const onSelectSource = vi.fn();
   const malformedElement: DocumentElement = {
@@ -200,7 +265,6 @@ it('allows an unbound note and only enables jumps for notes with a valid element
     id: 'malformed',
     bbox: { x0: 0.5, y0: 0.2, x1: 0.5, y1: 0.3 },
   };
-  const saveNote = vi.fn().mockResolvedValue(null);
 
   render(
     <NotesPanel
@@ -212,21 +276,56 @@ it('allows an unbound note and only enables jumps for notes with a valid element
         { id: 'free-note', body: 'Free note.', element_id: null, page_number: null },
       ]}
       documentElements={[locatedElement, malformedElement]}
-      saveNote={saveNote}
+      saveNote={vi.fn().mockResolvedValue(null)}
       onSelectSource={onSelectSource}
     />,
   );
-
-  expect(screen.getByText('No source selected. This note will be unbound.')).toBeVisible();
-  await user.type(screen.getByLabelText('New note'), 'A free-standing observation.');
-  await user.click(screen.getByRole('button', { name: 'Save note' }));
-  await waitFor(() => expect(saveNote)
-    .toHaveBeenCalledWith('A free-standing observation.', undefined, undefined));
 
   await user.click(screen.getByRole('button', { name: 'Jump to page 3 paragraph' }));
   expect(onSelectSource).toHaveBeenCalledWith('element-3');
   expect(screen.getByRole('button', { name: 'Source location unavailable' })).toBeDisabled();
   expect(screen.queryByRole('button', { name: 'Jump to source' })).not.toBeInTheDocument();
+});
+
+it('ignores a null note result that resolves after the active paper changes', async () => {
+  const user = userEvent.setup();
+  let resolveNote: ((note: Note | null) => void) | undefined;
+  const saveNote = vi.fn(() => new Promise<Note | null>((resolve) => {
+    resolveNote = resolve;
+  }));
+
+  const { rerender } = render(
+    <NotesPanel
+      paperId="paper-a"
+      activeSource={sourceTarget}
+      notes={[]}
+      documentElements={[locatedElement]}
+      saveNote={saveNote}
+      onSelectSource={vi.fn()}
+    />,
+  );
+
+  await user.type(screen.getByLabelText('New note'), 'Old paper note.');
+  await user.click(screen.getByRole('button', { name: 'Save note' }));
+  expect(saveNote).toHaveBeenCalledWith('Old paper note.', sourceTarget.id, sourceTarget.pageNumber);
+  rerender(
+    <NotesPanel
+      paperId="paper-b"
+      activeSource={null}
+      notes={[]}
+      documentElements={[]}
+      saveNote={saveNote}
+      onSelectSource={vi.fn()}
+    />,
+  );
+  await act(async () => {
+    resolveNote?.(null);
+    await Promise.resolve();
+  });
+
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  expect(screen.getByLabelText('New note')).toHaveValue('');
+  expect(screen.queryByRole('article')).not.toBeInTheDocument();
 });
 
 it('keeps both panel drafts mounted while switching accessible tabs', async () => {

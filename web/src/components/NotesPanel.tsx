@@ -86,8 +86,11 @@ export function NotesPanel({
       if (
         requestId.current !== activeRequestId
         || currentPaperId.current !== requestPaperId
-        || note === null
       ) {
+        return;
+      }
+      if (note === null) {
+        setErrorMessage('Unable to save this note.');
         return;
       }
 

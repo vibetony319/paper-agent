@@ -88,8 +88,11 @@ export function AgentPanel({
       if (
         requestId.current !== activeRequestId
         || currentPaperId.current !== requestPaperId
-        || response === null
       ) {
+        return;
+      }
+      if (response === null) {
+        setErrorMessage('Unable to receive an Agent response.');
         return;
       }
 
