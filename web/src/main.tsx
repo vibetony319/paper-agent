@@ -2,6 +2,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import './pdfjs';
+import '@xyflow/react/dist/style.css';
 import './styles.css';
 
 function App() {

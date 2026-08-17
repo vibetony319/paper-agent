@@ -144,3 +144,116 @@ a:focus-visible {
   pointer-events: none;
   position: absolute;
 }
+
+.graph-panel {
+  box-sizing: border-box;
+  display: grid;
+  gap: 0.85rem;
+  max-width: 72rem;
+  padding: 1rem;
+}
+
+.graph-panel__header,
+.graph-panel__actions,
+.graph-panel__evidence {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.graph-panel__header {
+  border-bottom: 1px solid #c7d1d9;
+  justify-content: space-between;
+  padding-bottom: 0.85rem;
+}
+
+.graph-panel h2,
+.graph-panel h3,
+.graph-panel p {
+  margin: 0;
+}
+
+.graph-panel h2 {
+  font-size: 1.2rem;
+}
+
+.graph-panel h3 {
+  font-size: 1rem;
+}
+
+.graph-panel__eyebrow {
+  color: #4a6170;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.graph-panel__canvas {
+  border: 1px solid #b8c6d0;
+  height: 36rem;
+  min-height: 24rem;
+  overflow: hidden;
+}
+
+.graph-panel__canvas .react-flow {
+  background: #e7edf1;
+}
+
+.graph-panel__canvas .react-flow__node {
+  border: 1px solid #4d6575;
+  border-radius: 3px;
+  box-sizing: border-box;
+  color: #172b3a;
+  font-size: 0.78rem;
+  line-height: 1.25;
+  padding: 0.55rem;
+  width: 13.5rem;
+}
+
+.graph-panel__canvas .react-flow__node.selected,
+.graph-panel__canvas .react-flow__node:focus-visible {
+  border-color: #007f83;
+  box-shadow: 0 0 0 3px rgb(0 127 131 / 26%);
+}
+
+.graph-panel__canvas .react-flow__edge-path {
+  stroke: #667b89;
+  stroke-width: 1.5;
+}
+
+.graph-panel__canvas .react-flow__edge-text {
+  fill: #3e5362;
+  font-size: 0.64rem;
+}
+
+.graph-panel__inspector,
+.graph-panel__empty {
+  border-left: 4px solid #007f83;
+  color: #31495a;
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.8rem;
+}
+
+.graph-panel__empty {
+  background: #f8fafb;
+}
+
+.graph-panel__status {
+  color: #385263;
+  font-weight: 650;
+}
+
+.graph-panel__error {
+  border-left: 4px solid #b34f3e;
+  color: #733126;
+  padding-left: 0.65rem;
+}
+
+@media (max-width: 42rem) {
+  .graph-panel__canvas {
+    height: 28rem;
+  }
+}
