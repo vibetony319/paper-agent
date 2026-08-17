@@ -39,3 +39,7 @@ it('forwards an AbortSignal to selected paper loads', async () => {
     fetchSpy.mockRestore();
   }
 });
+
+it('builds a relative original-PDF URL', () => {
+  expect(paperApi.getSourceUrl('paper id')).toBe('/api/papers/paper%20id/source');
+});

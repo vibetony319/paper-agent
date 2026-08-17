@@ -1,6 +1,6 @@
 :root {
-  color: #172033;
-  background: #f7f9fc;
+  color: #182433;
+  background: #eef2f5;
   font-family: Inter, ui-sans-serif, system-ui, sans-serif;
 }
 
@@ -12,4 +12,135 @@ main {
   display: grid;
   min-height: 100vh;
   place-items: center;
+}
+
+button,
+input,
+a {
+  font: inherit;
+}
+
+button,
+.pdf-reader__source-link {
+  border: 1px solid #506276;
+  border-radius: 3px;
+  background: #f8fafb;
+  color: #172b3a;
+  cursor: pointer;
+  font-weight: 650;
+  padding: 0.5rem 0.7rem;
+  text-decoration: none;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+button:focus-visible,
+input:focus-visible,
+a:focus-visible {
+  outline: 3px solid #007f83;
+  outline-offset: 3px;
+}
+
+.pdf-reader {
+  box-sizing: border-box;
+  width: min(100%, 62rem);
+  border: 1px solid #c7d1d9;
+  background: #f8fafb;
+  padding: 1.25rem;
+}
+
+.pdf-reader__header,
+.pdf-reader__controls {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  justify-content: space-between;
+}
+
+.pdf-reader__header {
+  border-bottom: 1px solid #d6dee4;
+  margin-bottom: 1rem;
+  padding-bottom: 1rem;
+}
+
+.pdf-reader h2,
+.pdf-reader__eyebrow {
+  margin: 0;
+}
+
+.pdf-reader h2 {
+  font-size: 1.25rem;
+}
+
+.pdf-reader__eyebrow {
+  color: #4a6170;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.pdf-reader__controls {
+  justify-content: flex-start;
+  margin-bottom: 0.75rem;
+}
+
+.pdf-reader__controls label {
+  align-items: center;
+  display: flex;
+  gap: 0.4rem;
+  font-weight: 650;
+}
+
+.pdf-reader__controls input {
+  border: 1px solid #738596;
+  border-radius: 3px;
+  color: inherit;
+  padding: 0.45rem;
+  width: 4.5rem;
+}
+
+.pdf-reader__status,
+.pdf-reader__empty {
+  color: #5b6975;
+}
+
+.pdf-reader__error {
+  border-left: 4px solid #007f83;
+  color: #31495a;
+  padding-left: 0.65rem;
+}
+
+.pdf-reader__page {
+  align-items: flex-start;
+  background: #dfe6eb;
+  display: flex;
+  justify-content: center;
+  min-height: 12rem;
+  overflow: auto;
+  padding: 1rem;
+  position: relative;
+}
+
+.pdf-reader__canvas-shell {
+  flex: 0 0 auto;
+  line-height: 0;
+  position: relative;
+}
+
+.pdf-reader__canvas-shell canvas {
+  background: #fff;
+  display: block;
+  box-shadow: 0 1px 2px rgb(23 43 58 / 18%);
+}
+
+.pdf-reader__overlay {
+  border: 3px solid #007f83;
+  box-sizing: border-box;
+  pointer-events: none;
+  position: absolute;
 }
