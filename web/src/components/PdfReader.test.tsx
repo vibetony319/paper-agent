@@ -1,3 +1,4 @@
+import { useLayoutEffect, useState } from 'react';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
@@ -235,6 +236,63 @@ it('cancels an obsolete render so an earlier page cannot paint over the current 
   await waitFor(() => expect(screen.getByText('Page 2 of 2')).toBeVisible());
   expect(screen.getByRole('img', { name: 'Rendered PDF page 2' }))
     .toHaveAttribute('width', '640');
+});
+
+it('does not render an obsolete page into a replacement canvas before effect cleanup', async () => {
+  type PdfPage = Awaited<ReturnType<typeof pdf.getPage>>;
+  type GetPage = () => Promise<PdfPage>;
+  type RenderPage = () => ReturnType<typeof pdf.render>;
+
+  let resolveStalePage: ((page: PdfPage) => void) | undefined;
+  const staleRender = vi.fn<RenderPage>(() => ({
+    cancel: vi.fn(),
+    promise: Promise.resolve(),
+  }));
+  const staleGetPage = vi.fn<GetPage>(() => new Promise<PdfPage>((resolve) => {
+    resolveStalePage = resolve;
+  }));
+  const staleTask: ReturnType<typeof pdf.getDocument> = {
+    destroy: vi.fn(() => Promise.resolve()),
+    promise: Promise.resolve({ getPage: staleGetPage }),
+  };
+  pdf.getDocument.mockReturnValueOnce(staleTask);
+
+  function ReplacementHarness() {
+    const [paperId, setPaperId] = useState('paper-a');
+
+    useLayoutEffect(() => {
+      if (paperId === 'paper-b') {
+        resolveStalePage?.({
+          getViewport: () => ({ width: 320, height: 440 }),
+          render: staleRender,
+        });
+      }
+    }, [paperId]);
+
+    return (
+      <>
+        <button type="button" onClick={() => setPaperId('paper-b')}>Replace paper</button>
+        <PdfReader
+          paperId={paperId}
+          pages={[{ id: 'page-1', number: 1, width: 612, height: 792 }]}
+          activeSource={null}
+          onSourceCleared={vi.fn()}
+        />
+      </>
+    );
+  }
+
+  render(<ReplacementHarness />);
+  await waitFor(() => expect(staleGetPage).toHaveBeenCalledWith(1));
+  const originalCanvas = screen.getByRole('img', { name: 'Rendered PDF page 1' });
+
+  screen.getByRole('button', { name: 'Replace paper' }).click();
+  await Promise.resolve();
+  const replacementCanvas = screen.getByRole('img', { name: 'Rendered PDF page 1' });
+  expect(replacementCanvas).not.toBe(originalCanvas);
+
+  await waitFor(() => expect(pdf.render).toHaveBeenCalledOnce());
+  expect(staleRender).not.toHaveBeenCalled();
 });
 
 it('destroys a superseded loading task before its stale document can render', async () => {

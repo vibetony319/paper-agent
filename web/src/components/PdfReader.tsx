@@ -1,16 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { GlobalWorkerOptions, getDocument } from 'pdfjs-dist';
 import type { RenderTask } from 'pdfjs-dist';
 
 import { paperApi } from '../api/client';
 import type { Page } from '../api/types';
+import { getDocument } from '../pdfjs';
 import type { SourceTarget } from '../workspace/types';
 import { sourceOverlayStyle } from './pdfGeometry';
-
-GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/build/pdf.worker.min.mjs',
-  import.meta.url,
-).toString();
 
 type PdfReaderProps = {
   paperId: string;
@@ -91,7 +86,10 @@ export function PdfReader({
 
     let active = true;
     let renderTask: RenderTask | undefined;
+    const canvas = canvasRef.current;
     const loadingTask = getDocument({ url: paperApi.getSourceUrl(paperId) });
+
+    const isActiveCanvas = () => active && canvas !== null && canvasRef.current === canvas;
 
     setStatus('loading');
     setErrorMessage(null);
@@ -99,31 +97,37 @@ export function PdfReader({
     const renderPage = async () => {
       try {
         const document = await loadingTask.promise;
-        if (!active) {
+        if (!isActiveCanvas()) {
           return;
         }
 
         const page = await document.getPage(pageNumber);
-        if (!active) {
+        if (!isActiveCanvas()) {
           return;
         }
 
-        const canvas = canvasRef.current;
-        const context = canvas?.getContext('2d');
         if (canvas === null) {
           return;
         }
+
+        const context = canvas.getContext('2d');
         if (context === null) {
           throw new Error('Canvas rendering is unavailable.');
         }
 
         const viewport = page.getViewport({ scale: 1.25 });
         const pixelRatio = window.devicePixelRatio || 1;
+        if (!isActiveCanvas()) {
+          return;
+        }
         canvas.width = Math.floor(viewport.width * pixelRatio);
         canvas.height = Math.floor(viewport.height * pixelRatio);
         canvas.style.width = `${Math.floor(viewport.width)}px`;
         canvas.style.height = `${Math.floor(viewport.height)}px`;
 
+        if (!isActiveCanvas()) {
+          return;
+        }
         renderTask = page.render({
           canvas,
           canvasContext: context,
@@ -132,7 +136,7 @@ export function PdfReader({
         });
         await renderTask.promise;
 
-        if (active) {
+        if (isActiveCanvas()) {
           setStatus('ready');
         }
       } catch (error) {
