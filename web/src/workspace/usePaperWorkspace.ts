@@ -55,25 +55,31 @@ export function usePaperWorkspace(activePaperId: string | null) {
 
   const buildCoreGraph = useCallback(async () => {
     if (state.activePaperId === null) {
-      return;
+      return null;
     }
+    const paperId = state.activePaperId;
     try {
-      const graph = await paperApi.buildCoreGraph(state.activePaperId);
-      dispatch({ type: 'graph/loaded', paperId: state.activePaperId, graph });
+      const graph = await paperApi.buildCoreGraph(paperId);
+      dispatch({ type: 'graph/loaded', paperId, graph });
+      return graph;
     } catch (error) {
-      reportApiError(state.activePaperId, error);
+      reportApiError(paperId, error);
+      throw error;
     }
   }, [reportApiError, state.activePaperId]);
 
   const buildDeepGraph = useCallback(async () => {
     if (state.activePaperId === null) {
-      return;
+      return null;
     }
+    const paperId = state.activePaperId;
     try {
-      const graph = await paperApi.buildDeepGraph(state.activePaperId);
-      dispatch({ type: 'graph/loaded', paperId: state.activePaperId, graph });
+      const graph = await paperApi.buildDeepGraph(paperId);
+      dispatch({ type: 'graph/loaded', paperId, graph });
+      return graph;
     } catch (error) {
-      reportApiError(state.activePaperId, error);
+      reportApiError(paperId, error);
+      throw error;
     }
   }, [reportApiError, state.activePaperId]);
 

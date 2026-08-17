@@ -6,6 +6,7 @@ import type {
   PaperGraph,
 } from '../api/types';
 import type { SourceTarget, WorkspaceState } from './types';
+import { hasValidSourceLocation } from './sourceTarget';
 
 export const initialWorkspaceState: WorkspaceState = {
   activePaperId: null,
@@ -30,11 +31,7 @@ export type WorkspaceAction =
   | { type: 'request/failed'; paperId: string; message: string };
 
 export function toSourceTarget(element: DocumentElement): SourceTarget | null {
-  if (
-    element.location_status !== 'located'
-    || element.page_number === null
-    || element.bbox === null
-  ) {
+  if (!hasValidSourceLocation(element)) {
     return null;
   }
 

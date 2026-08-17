@@ -112,6 +112,22 @@ it('rejects an unlocated element as an active source target', () => {
   expect(toSourceTarget(unlocatedElement)).toBeNull();
 });
 
+it.each([
+  ['a zero page', { page_number: 0 }],
+  ['a negative page', { page_number: -1 }],
+  ['a fractional page', { page_number: 1.5 }],
+  ['a zero-width box', { bbox: { x0: 0.2, y0: 0.2, x1: 0.2, y1: 0.3 } }],
+  ['a zero-height box', { bbox: { x0: 0.2, y0: 0.2, x1: 0.3, y1: 0.2 } }],
+  ['a reversed horizontal box', { bbox: { x0: 0.8, y0: 0.2, x1: 0.3, y1: 0.4 } }],
+  ['a reversed vertical box', { bbox: { x0: 0.2, y0: 0.8, x1: 0.4, y1: 0.3 } }],
+  ['a box below the normalized range', { bbox: { x0: -0.1, y0: 0.2, x1: 0.4, y1: 0.3 } }],
+  ['a box above the normalized range', { bbox: { x0: 0.2, y0: 0.3, x1: 1.1, y1: 0.4 } }],
+  ['a box containing NaN', { bbox: { x0: Number.NaN, y0: 0.2, x1: 0.4, y1: 0.3 } }],
+  ['a box containing Infinity', { bbox: { x0: 0.2, y0: 0.3, x1: 0.4, y1: Number.POSITIVE_INFINITY } }],
+] satisfies Array<[string, Partial<DocumentElement>]>)('rejects located evidence with %s', (_name, overrides) => {
+  expect(toSourceTarget({ ...locatedElement, ...overrides })).toBeNull();
+});
+
 it('preserves the API location when selecting a located element', () => {
   expect(toSourceTarget(locatedElement)).toEqual({
     id: 'element-a',
