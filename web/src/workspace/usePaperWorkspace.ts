@@ -15,13 +15,21 @@ function isAbortError(error: unknown): boolean {
 export function usePaperWorkspace(activePaperId: string | null) {
   const [state, dispatch] = useReducer(workspaceReducer, initialWorkspaceState);
 
-  const reportApiError = useCallback((paperId: string, error: unknown) => {
+  const reportApiError = useCallback((
+    paperId: string,
+    error: unknown,
+    fallback = 'Unable to load the paper workspace.',
+  ) => {
     if (isAbortError(error)) {
       return;
     }
-    if (error instanceof ApiError) {
-      dispatch({ type: 'request/failed', paperId, message: error.message });
-    }
+    dispatch({
+      type: 'request/failed',
+      paperId,
+      message: error instanceof ApiError
+        ? error.message
+        : fallback,
+    });
   }, []);
 
   useEffect(() => {
@@ -63,7 +71,7 @@ export function usePaperWorkspace(activePaperId: string | null) {
       dispatch({ type: 'graph/loaded', paperId, graph });
       return graph;
     } catch (error) {
-      reportApiError(paperId, error);
+      reportApiError(paperId, error, 'Unable to build the core graph.');
       throw error;
     }
   }, [reportApiError, state.activePaperId]);
@@ -78,7 +86,7 @@ export function usePaperWorkspace(activePaperId: string | null) {
       dispatch({ type: 'graph/loaded', paperId, graph });
       return graph;
     } catch (error) {
-      reportApiError(paperId, error);
+      reportApiError(paperId, error, 'Unable to build the deep graph.');
       throw error;
     }
   }, [reportApiError, state.activePaperId]);
@@ -102,7 +110,7 @@ export function usePaperWorkspace(activePaperId: string | null) {
       });
       return message;
     } catch (error) {
-      reportApiError(state.activePaperId, error);
+      reportApiError(state.activePaperId, error, 'Unable to receive an Agent response.');
       return null;
     }
   }, [reportApiError, state.activePaperId, state.conversationId]);
@@ -124,7 +132,7 @@ export function usePaperWorkspace(activePaperId: string | null) {
       dispatch({ type: 'notes/created', paperId: state.activePaperId, note });
       return note;
     } catch (error) {
-      reportApiError(state.activePaperId, error);
+      reportApiError(state.activePaperId, error, 'Unable to save this note.');
       return null;
     }
   }, [reportApiError, state.activePaperId, state.activeSource]);
