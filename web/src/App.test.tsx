@@ -291,6 +291,118 @@ it('shows a safe workspace loading state and does not mount panes after a load e
   expect(screen.queryByLabelText('Paper graph')).not.toBeInTheDocument();
 });
 
+it('retries a transient document conflict by reselecting the same active paper', async () => {
+  const user = userEvent.setup();
+  let documentRequests = 0;
+  useReadyWorkspaceHandlers();
+  server.use(http.get('/api/papers/paper-a/document', () => {
+    documentRequests += 1;
+    return documentRequests === 1
+      ? HttpResponse.json({ detail: 'Paper document is not ready.' }, { status: 409 })
+      : HttpResponse.json(documentFor(readyPaper));
+  }));
+
+  render(<App />);
+  const paperButton = await screen.findByRole('button', { name: /routing-paper\.pdf/i });
+  await user.click(paperButton);
+  expect(await screen.findByRole('alert')).toHaveTextContent('Paper document is not ready.');
+
+  await user.click(paperButton);
+
+  expect(await screen.findByLabelText('Paper reader')).toBeVisible();
+  expect(screen.getByLabelText('Paper graph')).toBeVisible();
+  expect(documentRequests).toBe(2);
+});
+
+it('retries a transient graph failure from the blocking workspace action', async () => {
+  const user = userEvent.setup();
+  let graphRequests = 0;
+  useReadyWorkspaceHandlers();
+  server.use(http.get('/api/papers/paper-a/graph', () => {
+    graphRequests += 1;
+    return graphRequests === 1
+      ? HttpResponse.json({ detail: 'Paper graph is temporarily unavailable.' }, { status: 503 })
+      : HttpResponse.json(graph);
+  }));
+
+  render(<App />);
+  await user.click(await screen.findByRole('button', { name: /routing-paper\.pdf/i }));
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    'Paper graph is temporarily unavailable.',
+  );
+
+  await user.click(screen.getByRole('button', { name: 'Retry paper loading' }));
+
+  expect(await screen.findByLabelText('Paper reader')).toBeVisible();
+  expect(screen.getByLabelText('Paper graph')).toBeVisible();
+  expect(graphRequests).toBe(2);
+});
+
+it('does not reload a ready paper or clear its Agent draft when it is reselected', async () => {
+  const user = userEvent.setup();
+  let documentRequests = 0;
+  useReadyWorkspaceHandlers();
+  server.use(http.get('/api/papers/paper-a/document', () => {
+    documentRequests += 1;
+    return HttpResponse.json(documentFor(readyPaper));
+  }));
+
+  render(<App />);
+  const paperButton = await screen.findByRole('button', { name: /routing-paper\.pdf/i });
+  await user.click(paperButton);
+  const draft = await screen.findByLabelText('Ask about this paper');
+  await user.type(draft, 'Keep this draft');
+
+  await user.click(paperButton);
+
+  expect(draft).toHaveValue('Keep this draft');
+  expect(documentRequests).toBe(1);
+});
+
+it('keeps the research panes ready and reports a notes-only load failure', async () => {
+  const user = userEvent.setup();
+  useReadyWorkspaceHandlers();
+  server.use(http.get('/api/papers/paper-a/notes', () => HttpResponse.json(
+    { detail: 'Paper notes are temporarily unavailable.' },
+    { status: 503 },
+  )));
+
+  render(<App />);
+  await user.click(await screen.findByRole('button', { name: /routing-paper\.pdf/i }));
+
+  expect(await screen.findByLabelText('Paper reader')).toBeVisible();
+  expect(screen.getByLabelText('Paper graph')).toBeVisible();
+  expect(screen.getByRole('complementary', { name: 'Research tools' })).toBeVisible();
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    'Paper notes are temporarily unavailable.',
+  );
+});
+
+it('opens the reader, graph, and tools while the notes request is unresolved', async () => {
+  const user = userEvent.setup();
+  let notesRequestStarted = false;
+  useReadyWorkspaceHandlers();
+  server.use(http.get('/api/papers/paper-a/notes', async ({ request }) => {
+    notesRequestStarted = true;
+    await new Promise<void>((resolve) => {
+      if (request.signal.aborted) {
+        resolve();
+      } else {
+        request.signal.addEventListener('abort', () => resolve(), { once: true });
+      }
+    });
+    return HttpResponse.json([]);
+  }));
+
+  render(<App />);
+  await user.click(await screen.findByRole('button', { name: /routing-paper\.pdf/i }));
+
+  expect(await screen.findByLabelText('Paper reader')).toBeVisible();
+  expect(screen.getByLabelText('Paper graph')).toBeVisible();
+  expect(screen.getByRole('complementary', { name: 'Research tools' })).toBeVisible();
+  expect(notesRequestStarted).toBe(true);
+});
+
 it('turns a workspace network failure into a public-safe error state', async () => {
   const user = userEvent.setup();
   useReadyWorkspaceHandlers();

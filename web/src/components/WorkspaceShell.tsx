@@ -10,9 +10,14 @@ type PaperWorkspace = ReturnType<typeof usePaperWorkspace>;
 export interface WorkspaceShellProps {
   paper: PaperSummary;
   workspace: PaperWorkspace;
+  onRetryPaperLoading: () => void;
 }
 
-export function WorkspaceShell({ paper, workspace }: WorkspaceShellProps) {
+export function WorkspaceShell({
+  paper,
+  workspace,
+  onRetryPaperLoading,
+}: WorkspaceShellProps) {
   const ownsActivePaper = workspace.activePaperId === paper.id;
   const document = ownsActivePaper ? workspace.document : null;
   const graph = ownsActivePaper ? workspace.graph : null;
@@ -34,7 +39,8 @@ export function WorkspaceShell({ paper, workspace }: WorkspaceShellProps) {
         <section className="workspace-state workspace-state--error" aria-label="Workspace error">
           <h2>Paper workspace unavailable</h2>
           <p role="alert">{blockingError}</p>
-          <p>The paper remains available in the library. Try selecting it again when processing is ready.</p>
+          <p>The paper remains available in the library. Retry when processing is ready.</p>
+          <button type="button" onClick={onRetryPaperLoading}>Retry paper loading</button>
         </section>
       ) : document === null || graph === null ? (
         <section className="workspace-state" aria-label="Workspace loading">
@@ -46,6 +52,11 @@ export function WorkspaceShell({ paper, workspace }: WorkspaceShellProps) {
         <>
           {workspace.errorMessage !== null && (
             <p className="workspace-shell__error" role="alert">{workspace.errorMessage}</p>
+          )}
+          {workspace.notesErrorMessage !== null && (
+            <p className="workspace-shell__error" role="alert">
+              {workspace.notesErrorMessage}
+            </p>
           )}
           <div className="workspace-grid">
             <div className="workspace-pane workspace-pane--reader">

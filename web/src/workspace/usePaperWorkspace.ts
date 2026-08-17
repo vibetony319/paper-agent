@@ -12,11 +12,12 @@ function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
 }
 
-export function usePaperWorkspace(activePaperId: string | null) {
+export function usePaperWorkspace(activePaperId: string | null, loadRevision = 0) {
   const [state, dispatch] = useReducer(workspaceReducer, initialWorkspaceState);
 
   const reportApiError = useCallback((
     paperId: string,
+    loadRevision: number,
     error: unknown,
     fallback = 'Unable to load the paper workspace.',
   ) => {
@@ -26,6 +27,7 @@ export function usePaperWorkspace(activePaperId: string | null) {
     dispatch({
       type: 'request/failed',
       paperId,
+      loadRevision,
       message: error instanceof ApiError
         ? error.message
         : fallback,
@@ -34,7 +36,7 @@ export function usePaperWorkspace(activePaperId: string | null) {
 
   useEffect(() => {
     const controller = new AbortController();
-    dispatch({ type: 'paper/opened', paperId: activePaperId });
+    dispatch({ type: 'paper/opened', paperId: activePaperId, loadRevision });
 
     if (activePaperId === null) {
       return () => controller.abort();
@@ -43,77 +45,139 @@ export function usePaperWorkspace(activePaperId: string | null) {
     void Promise.all([
       paperApi.getDocument(activePaperId, { signal: controller.signal }),
       paperApi.getGraph(activePaperId, { signal: controller.signal }),
-      paperApi.getNotes(activePaperId, { signal: controller.signal }),
     ])
-      .then(([document, graph, notes]) => {
+      .then(([document, graph]) => {
         if (controller.signal.aborted) {
           return;
         }
-        dispatch({ type: 'document/loaded', paperId: activePaperId, document, notes });
-        dispatch({ type: 'graph/loaded', paperId: activePaperId, graph });
+        dispatch({
+          type: 'workspace/loaded',
+          paperId: activePaperId,
+          loadRevision,
+          document,
+          graph,
+        });
       })
       .catch((error: unknown) => {
-        if (!controller.signal.aborted) {
-          reportApiError(activePaperId, error);
+        if (controller.signal.aborted || isAbortError(error)) {
+          return;
         }
+        dispatch({
+          type: 'workspace/failed',
+          paperId: activePaperId,
+          loadRevision,
+          message: error instanceof ApiError
+            ? error.message
+            : 'Unable to load the paper workspace.',
+        });
+      });
+
+    void paperApi.getNotes(activePaperId, { signal: controller.signal })
+      .then((notes) => {
+        if (controller.signal.aborted) {
+          return;
+        }
+        dispatch({ type: 'notes/loaded', paperId: activePaperId, loadRevision, notes });
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted || isAbortError(error)) {
+          return;
+        }
+        dispatch({
+          type: 'notes/failed',
+          paperId: activePaperId,
+          loadRevision,
+          message: error instanceof ApiError
+            ? error.message
+            : 'Unable to load paper notes.',
+        });
       });
 
     return () => controller.abort();
-  }, [activePaperId, reportApiError]);
+  }, [activePaperId, loadRevision]);
 
   const buildCoreGraph = useCallback(async () => {
     if (state.activePaperId === null) {
       return null;
     }
     const paperId = state.activePaperId;
+    const requestLoadRevision = state.loadRevision;
     try {
       const graph = await paperApi.buildCoreGraph(paperId);
-      dispatch({ type: 'graph/loaded', paperId, graph });
+      dispatch({
+        type: 'graph/loaded', paperId, loadRevision: requestLoadRevision, graph,
+      });
       return graph;
     } catch (error) {
-      reportApiError(paperId, error, 'Unable to build the core graph.');
+      reportApiError(
+        paperId,
+        requestLoadRevision,
+        error,
+        'Unable to build the core graph.',
+      );
       throw error;
     }
-  }, [reportApiError, state.activePaperId]);
+  }, [reportApiError, state.activePaperId, state.loadRevision]);
 
   const buildDeepGraph = useCallback(async () => {
     if (state.activePaperId === null) {
       return null;
     }
     const paperId = state.activePaperId;
+    const requestLoadRevision = state.loadRevision;
     try {
       const graph = await paperApi.buildDeepGraph(paperId);
-      dispatch({ type: 'graph/loaded', paperId, graph });
+      dispatch({
+        type: 'graph/loaded', paperId, loadRevision: requestLoadRevision, graph,
+      });
       return graph;
     } catch (error) {
-      reportApiError(paperId, error, 'Unable to build the deep graph.');
+      reportApiError(
+        paperId,
+        requestLoadRevision,
+        error,
+        'Unable to build the deep graph.',
+      );
       throw error;
     }
-  }, [reportApiError, state.activePaperId]);
+  }, [reportApiError, state.activePaperId, state.loadRevision]);
 
   const askAgent = useCallback(async (content: string, mode: AgentMode) => {
     if (state.activePaperId === null) {
       return null;
     }
+    const paperId = state.activePaperId;
+    const requestLoadRevision = state.loadRevision;
+    const conversationId = state.conversationId;
     try {
-      const paperId = state.activePaperId;
       const message = await paperApi.askAgent(paperId, {
         content,
         mode,
-        conversation_id: state.conversationId ?? undefined,
+        conversation_id: conversationId ?? undefined,
       });
       dispatch({
         type: 'conversation/set',
         paperId,
+        loadRevision: requestLoadRevision,
         conversationId: message.conversation_id,
         message,
       });
       return message;
     } catch (error) {
-      reportApiError(state.activePaperId, error, 'Unable to receive an Agent response.');
+      reportApiError(
+        paperId,
+        requestLoadRevision,
+        error,
+        'Unable to receive an Agent response.',
+      );
       return null;
     }
-  }, [reportApiError, state.activePaperId, state.conversationId]);
+  }, [
+    reportApiError,
+    state.activePaperId,
+    state.conversationId,
+    state.loadRevision,
+  ]);
 
   const saveNote = useCallback(async (
     body: string,
@@ -123,19 +187,30 @@ export function usePaperWorkspace(activePaperId: string | null) {
     if (state.activePaperId === null) {
       return null;
     }
+    const paperId = state.activePaperId;
+    const requestLoadRevision = state.loadRevision;
     try {
-      const note = await paperApi.createNote(state.activePaperId, {
+      const note = await paperApi.createNote(paperId, {
         body,
         element_id: elementId,
         page_number: pageNumber,
       });
-      dispatch({ type: 'notes/created', paperId: state.activePaperId, note });
+      dispatch({
+        type: 'notes/created', paperId, loadRevision: requestLoadRevision, note,
+      });
       return note;
     } catch (error) {
-      reportApiError(state.activePaperId, error, 'Unable to save this note.');
+      if (!isAbortError(error)) {
+        dispatch({
+          type: 'notes/failed',
+          paperId,
+          loadRevision: requestLoadRevision,
+          message: error instanceof ApiError ? error.message : 'Unable to save this note.',
+        });
+      }
       return null;
     }
-  }, [reportApiError, state.activePaperId, state.activeSource]);
+  }, [state.activePaperId, state.activeSource, state.loadRevision]);
 
   const selectCitation = useCallback((citation: Citation) => {
     const element = state.document?.elements.find(({ id }) => id === citation.id);

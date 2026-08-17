@@ -2,7 +2,7 @@ import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 import { ApiError, paperApi } from '../api/client';
-import type { PaperDocument, PaperGraph } from '../api/types';
+import type { AgentMessage, Note, PaperDocument, PaperGraph } from '../api/types';
 import { usePaperWorkspace } from './usePaperWorkspace';
 
 const emptyGraph: PaperGraph = { nodes: [], edges: [] };
@@ -22,6 +22,16 @@ function documentFor(paperId: string): PaperDocument {
     elements: [],
     notes: [],
   };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((nextResolve, nextReject) => {
+    resolve = nextResolve;
+    reject = nextReject;
+  });
+  return { promise, resolve, reject };
 }
 
 beforeEach(() => {
@@ -84,4 +94,166 @@ it('reports and rethrows a deep graph API error', async () => {
   expect(caught).toBe(apiError);
   expect(result.current.errorMessage).toBe('Graph service is unavailable.');
   expect(result.current.graph).toBe(emptyGraph);
+});
+
+it('mounts required document and graph state when notes fail independently', async () => {
+  vi.mocked(paperApi.getNotes).mockRejectedValue(
+    new ApiError(503, 'Notes are temporarily unavailable.'),
+  );
+
+  const { result } = renderHook(() => usePaperWorkspace('paper-a'));
+
+  await waitFor(() => expect(result.current.document).not.toBeNull());
+  expect(result.current.graph).toBe(emptyGraph);
+  expect(result.current.errorMessage).toBeNull();
+  expect(result.current.notesErrorMessage).toBe('Notes are temporarily unavailable.');
+});
+
+it('mounts required document and graph state while notes remain unresolved', async () => {
+  const pendingNotes = deferred<Note[]>();
+  vi.mocked(paperApi.getNotes).mockReturnValue(pendingNotes.promise);
+
+  const { result } = renderHook(() => usePaperWorkspace('paper-a'));
+
+  await waitFor(() => expect(result.current.document).not.toBeNull());
+  expect(result.current.graph).toBe(emptyGraph);
+  expect(result.current.notes).toEqual([]);
+});
+
+it('ignores a stale notes response after retrying the same paper', async () => {
+  const staleNotes = deferred<Note[]>();
+  const currentNote: Note = {
+    id: 'current-note', body: 'Current retry note.', element_id: null, page_number: null,
+  };
+  vi.mocked(paperApi.getNotes)
+    .mockReturnValueOnce(staleNotes.promise)
+    .mockResolvedValueOnce([currentNote]);
+
+  const { result, rerender } = renderHook(
+    ({ revision }) => usePaperWorkspace('paper-a', revision),
+    { initialProps: { revision: 0 } },
+  );
+  await waitFor(() => expect(result.current.document).not.toBeNull());
+
+  rerender({ revision: 1 });
+  await waitFor(() => expect(result.current.notes).toEqual([currentNote]));
+  expect(paperApi.getDocument).toHaveBeenCalledTimes(2);
+  expect(paperApi.getGraph).toHaveBeenCalledTimes(2);
+  expect(paperApi.getNotes).toHaveBeenCalledTimes(2);
+  await act(async () => {
+    staleNotes.resolve([{
+      id: 'stale-note', body: 'Obsolete retry note.', element_id: null, page_number: null,
+    }]);
+    await Promise.resolve();
+  });
+
+  expect(result.current.notes).toEqual([currentNote]);
+});
+
+it('ignores a stale notes response after switching papers', async () => {
+  const staleNotes = deferred<Note[]>();
+  const paperBNote: Note = {
+    id: 'paper-b-note', body: 'Paper B note.', element_id: null, page_number: null,
+  };
+  vi.mocked(paperApi.getNotes)
+    .mockReturnValueOnce(staleNotes.promise)
+    .mockResolvedValueOnce([paperBNote]);
+
+  const { result, rerender } = renderHook(
+    ({ paperId }) => usePaperWorkspace(paperId),
+    { initialProps: { paperId: 'paper-a' as string | null } },
+  );
+  rerender({ paperId: 'paper-b' });
+  await waitFor(() => expect(result.current.notes).toEqual([paperBNote]));
+  await act(async () => {
+    staleNotes.resolve([{
+      id: 'paper-a-note', body: 'Paper A note.', element_id: null, page_number: null,
+    }]);
+    await Promise.resolve();
+  });
+
+  expect(result.current.activePaperId).toBe('paper-b');
+  expect(result.current.notes).toEqual([paperBNote]);
+});
+
+it('ignores old graph, Agent, and note completions after retrying the same paper', async () => {
+  const oldCoreGraph = deferred<PaperGraph>();
+  const oldDeepGraph = deferred<PaperGraph>();
+  const oldAgentMessage = deferred<AgentMessage>();
+  const oldNote = deferred<Note>();
+  vi.spyOn(paperApi, 'buildCoreGraph').mockReturnValue(oldCoreGraph.promise);
+  vi.spyOn(paperApi, 'buildDeepGraph').mockReturnValue(oldDeepGraph.promise);
+  vi.spyOn(paperApi, 'askAgent').mockReturnValue(oldAgentMessage.promise);
+  vi.spyOn(paperApi, 'createNote').mockReturnValue(oldNote.promise);
+
+  const { result, rerender } = renderHook(
+    ({ revision }) => usePaperWorkspace('paper-a', revision),
+    { initialProps: { revision: 0 } },
+  );
+  await waitFor(() => expect(result.current.document).not.toBeNull());
+
+  const coreRequest = result.current.buildCoreGraph();
+  const deepRequest = result.current.buildDeepGraph();
+  const agentRequest = result.current.askAgent('Old question.', 'paper_only');
+  const noteRequest = result.current.saveNote('Old note.');
+
+  rerender({ revision: 1 });
+  await waitFor(() => expect(result.current.loadRevision).toBe(1));
+  await waitFor(() => expect(result.current.document).not.toBeNull());
+
+  const staleGraph: PaperGraph = {
+    nodes: [{
+      id: 'stale-node', node_type: 'claim', name: 'Stale graph', summary: 'Old result.',
+      stage: 'core', evidence_element_ids: [],
+    }],
+    edges: [],
+  };
+  const staleMessage: AgentMessage = {
+    conversation_id: 'stale-conversation',
+    message_id: 'stale-message',
+    status: 'grounded',
+    paper_answer: 'Old answer.',
+    background_explanation: null,
+    citations: [],
+  };
+  const staleNote: Note = {
+    id: 'stale-note', body: 'Old note.', element_id: null, page_number: null,
+  };
+
+  await act(async () => {
+    oldCoreGraph.resolve(staleGraph);
+    oldDeepGraph.resolve(staleGraph);
+    oldAgentMessage.resolve(staleMessage);
+    oldNote.resolve(staleNote);
+    await Promise.all([coreRequest, deepRequest, agentRequest, noteRequest]);
+  });
+
+  expect(result.current.graph).toBe(emptyGraph);
+  expect(result.current.conversationId).toBeNull();
+  expect(result.current.messages).toEqual([]);
+  expect(result.current.notes).toEqual([]);
+});
+
+it('ignores an old mutation failure after retrying the same paper', async () => {
+  const oldDeepGraph = deferred<PaperGraph>();
+  const apiError = new ApiError(503, 'Old graph failure.');
+  vi.spyOn(paperApi, 'buildDeepGraph').mockReturnValue(oldDeepGraph.promise);
+
+  const { result, rerender } = renderHook(
+    ({ revision }) => usePaperWorkspace('paper-a', revision),
+    { initialProps: { revision: 0 } },
+  );
+  await waitFor(() => expect(result.current.document).not.toBeNull());
+  const oldRequest = result.current.buildDeepGraph();
+  const settledOldRequest = oldRequest.catch((error: unknown) => error);
+
+  rerender({ revision: 1 });
+  await waitFor(() => expect(result.current.loadRevision).toBe(1));
+  await act(async () => {
+    oldDeepGraph.reject(apiError);
+    await settledOldRequest;
+  });
+
+  expect(await settledOldRequest).toBe(apiError);
+  expect(result.current.errorMessage).toBeNull();
 });

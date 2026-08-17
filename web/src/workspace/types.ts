@@ -15,6 +15,7 @@ export type SourceTarget = {
 
 export type WorkspaceState = {
   activePaperId: string | null;
+  loadRevision: number;
   document: PaperDocument | null;
   graph: PaperGraph | null;
   notes: Note[];
@@ -23,4 +24,5 @@ export type WorkspaceState = {
   conversationId: string | null;
   messages: AgentMessage[];
   errorMessage: string | null;
+  notesErrorMessage: string | null;
 };

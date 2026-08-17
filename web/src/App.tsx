@@ -7,13 +7,32 @@ import { usePaperWorkspace } from './workspace/usePaperWorkspace';
 
 export function App() {
   const [activePaper, setActivePaper] = useState<PaperSummary | null>(null);
-  const workspace = usePaperWorkspace(activePaper?.id ?? null);
+  const [workspaceLoadRevision, setWorkspaceLoadRevision] = useState(0);
+  const workspace = usePaperWorkspace(activePaper?.id ?? null, workspaceLoadRevision);
+
+  const selectPaper = (paper: PaperSummary) => {
+    const isActivePaper = activePaper?.id === paper.id;
+    const activeWorkspaceIsReady = workspace.activePaperId === paper.id
+      && workspace.document !== null
+      && workspace.graph !== null;
+
+    if (isActivePaper && !activeWorkspaceIsReady) {
+      setWorkspaceLoadRevision((current) => current + 1);
+    } else if (!isActivePaper) {
+      setWorkspaceLoadRevision(0);
+    }
+    setActivePaper(paper);
+  };
+
+  const retryActivePaper = () => {
+    setWorkspaceLoadRevision((current) => current + 1);
+  };
 
   return (
     <div className="app-shell">
       <PaperLibrary
         activePaperId={activePaper?.id ?? null}
-        onPaperSelected={setActivePaper}
+        onPaperSelected={selectPaper}
       />
       <main className="app-content">
         {activePaper === null ? (
@@ -26,7 +45,11 @@ export function App() {
             </p>
           </section>
         ) : (
-          <WorkspaceShell paper={activePaper} workspace={workspace} />
+          <WorkspaceShell
+            paper={activePaper}
+            workspace={workspace}
+            onRetryPaperLoading={retryActivePaper}
+          />
         )}
       </main>
     </div>

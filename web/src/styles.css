@@ -367,6 +367,10 @@ a:focus-visible {
   line-height: 1.5;
 }
 
+.workspace-state button {
+  justify-self: start;
+}
+
 .workspace-shell__error {
   background: var(--paper);
   border-left: 4px solid var(--teal);
