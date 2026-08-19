@@ -114,6 +114,10 @@ export function PdfReader({
         if (context === null) {
           throw new Error('Canvas rendering is unavailable.');
         }
+        const canvasShell = canvas.parentElement;
+        if (canvasShell === null) {
+          throw new Error('Canvas shell is unavailable.');
+        }
 
         const viewport = page.getViewport({ scale: 1.25 });
         const pixelRatio = window.devicePixelRatio || 1;
@@ -122,8 +126,10 @@ export function PdfReader({
         }
         canvas.width = Math.floor(viewport.width * pixelRatio);
         canvas.height = Math.floor(viewport.height * pixelRatio);
-        canvas.style.width = `${Math.floor(viewport.width)}px`;
-        canvas.style.height = `${Math.floor(viewport.height)}px`;
+        canvasShell.style.width = `${Math.floor(viewport.width)}px`;
+        canvasShell.style.maxWidth = '100%';
+        canvas.style.width = '100%';
+        canvas.style.height = 'auto';
 
         if (!isActiveCanvas()) {
           return;

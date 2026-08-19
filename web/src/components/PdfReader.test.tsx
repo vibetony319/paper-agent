@@ -101,6 +101,27 @@ it('positions normalized evidence in the rendered page coordinate space', async 
   expect(overlay.parentElement).not.toHaveClass('pdf-reader__page');
 });
 
+it('fits the displayed page within its pane while preserving a high-DPI backing store', async () => {
+  vi.spyOn(window, 'devicePixelRatio', 'get').mockReturnValue(2);
+
+  render(
+    <PdfReader
+      paperId="paper-a"
+      pages={[{ id: 'page-1', number: 1, width: 612, height: 792 }]}
+      activeSource={null}
+      onSourceCleared={vi.fn()}
+    />,
+  );
+
+  await waitFor(() => expect(pdf.render).toHaveBeenCalledOnce());
+
+  const canvas = screen.getByRole('img', { name: 'Rendered PDF page 1' });
+  expect(canvas).toHaveStyle({ width: '100%', height: 'auto' });
+  expect(canvas.parentElement).toHaveStyle({ width: '640px', maxWidth: '100%' });
+  expect(canvas).toHaveAttribute('width', '1280');
+  expect(canvas).toHaveAttribute('height', '1760');
+});
+
 it('shows a public-safe error when the canvas cannot render', async () => {
   vi.mocked(HTMLCanvasElement.prototype.getContext).mockReturnValueOnce(null);
 
