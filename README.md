@@ -4,8 +4,8 @@ A local-first workspace for reading AI/ML papers. A local FastAPI service can
 accept a PDF, parse and persist its document data, serve the original source
 PDF and page images, store paper-scoped notes, and build an evidence-backed
 knowledge graph with an optional local reasoning model. The Agent Runtime
-supports citation-aware, tool-calling paper chat; the Web UI increment is not
-included yet.
+supports citation-aware, tool-calling paper chat, and the browser workbench is
+included for local reading.
 
 ## Requirements and local installation
 
@@ -50,6 +50,31 @@ returns `{"status":"ok"}` when it is running.
 ```bash
 curl http://127.0.0.1:8000/health
 ```
+
+## Browser workbench
+
+Run the backend and browser development server as two local processes from the
+repository root:
+
+1. Start paper-agent: `.venv\Scripts\uvicorn.exe paper_agent.app:create_app --factory --port 8000`
+2. In a second terminal: `cd web; npm install --cache .npm-cache; npm run dev`
+3. Open the Vite URL printed by the browser server, normally
+   `http://127.0.0.1:5173`.
+
+The Vite development server proxies only `/api` requests to the local
+paper-agent backend. The workbench has three panes: the left pane renders the
+original PDF and source highlights, the center pane shows the paper's evidence
+graph, and the right pane contains the Agent and Notes tools. Use **Build core
+graph** after document processing completes, then **Build deep graph** after
+the core graph is available. Selecting a graph node reveals its evidence;
+clicking a located evidence item or Agent citation selects the source element,
+jumps the reader to its page, and highlights its bounding box.
+
+The Agent separates `paper_only` from `external_knowledge`. `paper_only`
+returns only the citation-validated paper answer. `external_knowledge` keeps
+background knowledge in a separate explanation while paper-supported content
+stays in the citation-validated answer. The UI displays complete
+citation-validated responses and does not stream unverified model text.
 
 ## Minimal upload and read workflow
 
