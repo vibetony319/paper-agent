@@ -234,6 +234,43 @@ it('ignores old graph, Agent, and note completions after retrying the same paper
   expect(result.current.notes).toEqual([]);
 });
 
+it('ignores an obsolete A graph completion after retrying A, switching to B, and returning to A', async () => {
+  const obsoleteGraph = deferred<PaperGraph>();
+  vi.spyOn(paperApi, 'buildCoreGraph').mockReturnValue(obsoleteGraph.promise);
+
+  const { result, rerender } = renderHook(
+    ({ paperId, revision }) => usePaperWorkspace(paperId, revision),
+    { initialProps: { paperId: 'paper-a' as string | null, revision: 0 } },
+  );
+  await waitFor(() => expect(result.current.document).not.toBeNull());
+  const obsoleteRequest = result.current.buildCoreGraph();
+
+  rerender({ paperId: 'paper-a', revision: 1 });
+  await waitFor(() => expect(result.current.loadRevision).toBe(1));
+  await waitFor(() => expect(result.current.document).not.toBeNull());
+
+  rerender({ paperId: 'paper-b', revision: 0 });
+  await waitFor(() => expect(result.current.activePaperId).toBe('paper-b'));
+  await waitFor(() => expect(result.current.document?.paper.id).toBe('paper-b'));
+
+  rerender({ paperId: 'paper-a', revision: 0 });
+  await waitFor(() => expect(result.current.activePaperId).toBe('paper-a'));
+  await waitFor(() => expect(result.current.document?.paper.id).toBe('paper-a'));
+
+  await act(async () => {
+    obsoleteGraph.resolve({
+      nodes: [{
+        id: 'obsolete-node', node_type: 'claim', name: 'Obsolete graph', summary: 'Old result.',
+        stage: 'core', evidence_element_ids: [],
+      }],
+      edges: [],
+    });
+    await obsoleteRequest;
+  });
+
+  expect(result.current.graph).toBe(emptyGraph);
+});
+
 it('ignores an old mutation failure after retrying the same paper', async () => {
   const oldDeepGraph = deferred<PaperGraph>();
   const apiError = new ApiError(503, 'Old graph failure.');

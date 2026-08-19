@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useReducer } from 'react';
+import { useCallback, useEffect, useReducer, useRef } from 'react';
 
 import { ApiError, paperApi } from '../api/client';
 import type { AgentMode, Citation } from '../api/types';
@@ -14,6 +14,8 @@ function isAbortError(error: unknown): boolean {
 
 export function usePaperWorkspace(activePaperId: string | null, loadRevision = 0) {
   const [state, dispatch] = useReducer(workspaceReducer, initialWorkspaceState);
+  // Keep reducer guards unique even when callers reset their retry trigger.
+  const nextLoadGeneration = useRef(0);
 
   const reportApiError = useCallback((
     paperId: string,
@@ -35,8 +37,9 @@ export function usePaperWorkspace(activePaperId: string | null, loadRevision = 0
   }, []);
 
   useEffect(() => {
+    const loadGeneration = nextLoadGeneration.current++;
     const controller = new AbortController();
-    dispatch({ type: 'paper/opened', paperId: activePaperId, loadRevision });
+    dispatch({ type: 'paper/opened', paperId: activePaperId, loadRevision: loadGeneration });
 
     if (activePaperId === null) {
       return () => controller.abort();
@@ -53,7 +56,7 @@ export function usePaperWorkspace(activePaperId: string | null, loadRevision = 0
         dispatch({
           type: 'workspace/loaded',
           paperId: activePaperId,
-          loadRevision,
+          loadRevision: loadGeneration,
           document,
           graph,
         });
@@ -65,7 +68,7 @@ export function usePaperWorkspace(activePaperId: string | null, loadRevision = 0
         dispatch({
           type: 'workspace/failed',
           paperId: activePaperId,
-          loadRevision,
+          loadRevision: loadGeneration,
           message: error instanceof ApiError
             ? error.message
             : 'Unable to load the paper workspace.',
@@ -77,7 +80,9 @@ export function usePaperWorkspace(activePaperId: string | null, loadRevision = 0
         if (controller.signal.aborted) {
           return;
         }
-        dispatch({ type: 'notes/loaded', paperId: activePaperId, loadRevision, notes });
+        dispatch({
+          type: 'notes/loaded', paperId: activePaperId, loadRevision: loadGeneration, notes,
+        });
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted || isAbortError(error)) {
@@ -86,7 +91,7 @@ export function usePaperWorkspace(activePaperId: string | null, loadRevision = 0
         dispatch({
           type: 'notes/failed',
           paperId: activePaperId,
-          loadRevision,
+          loadRevision: loadGeneration,
           message: error instanceof ApiError
             ? error.message
             : 'Unable to load paper notes.',
