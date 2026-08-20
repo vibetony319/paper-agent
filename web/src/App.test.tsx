@@ -34,9 +34,21 @@ vi.mock('./components/PdfReader', () => ({
 }));
 
 vi.mock('./components/GraphPanel', () => ({
-  GraphPanel: ({ onSelectEvidence }: { onSelectEvidence: (elementId: string) => void }) => (
+  GraphPanel: ({
+    graph,
+    onSelectEvidence,
+    buildCoreGraph,
+  }: {
+    graph: PaperGraph;
+    onSelectEvidence: (elementId: string) => void;
+    buildCoreGraph: () => Promise<PaperGraph | null>;
+  }) => (
     <section>
       <h2>Paper connections</h2>
+      <p>Graph node count: {graph.nodes.length}</p>
+      <button type="button" onClick={() => void buildCoreGraph()}>
+        Build core graph
+      </button>
       <button type="button" onClick={() => onSelectEvidence('element-2')}>
         Select graph evidence
       </button>
@@ -72,7 +84,7 @@ const graph: PaperGraph = {
     node_type: 'method',
     name: 'Sparse router',
     summary: 'Selects experts.',
-    stage: 'core',
+    stage: 'stage2',
     evidence_element_ids: [locatedElement.id],
   }],
   edges: [],
@@ -132,6 +144,48 @@ it('loads the paper library and opens an existing paper with readable stage stat
   expect(screen.getByLabelText('Paper reader')).toBeVisible();
   expect(screen.getByLabelText('Paper graph')).toBeVisible();
   expect(screen.getByRole('complementary', { name: 'Research tools' })).toBeVisible();
+});
+
+it('refreshes the active header and library stages after a successful core graph build', async () => {
+  const user = userEvent.setup();
+  const unbuiltPaper: PaperSummary = {
+    ...readyPaper,
+    stage2_status: null,
+  };
+  const builtPaper: PaperSummary = {
+    ...unbuiltPaper,
+    stage2_status: 'completed',
+  };
+  const builtGraph: PaperGraph = {
+    nodes: [{
+      ...graph.nodes[0],
+      id: 'built-node',
+    }],
+    edges: [],
+  };
+  server.use(
+    http.get('/api/papers', () => HttpResponse.json([unbuiltPaper])),
+    http.get('/api/papers/paper-a/document', () => HttpResponse.json(documentFor(unbuiltPaper))),
+    http.get('/api/papers/paper-a/graph', () => HttpResponse.json({ nodes: [], edges: [] })),
+    http.get('/api/papers/paper-a/notes', () => HttpResponse.json([])),
+    http.post('/api/papers/paper-a/graph/core', () => HttpResponse.json(builtGraph)),
+    http.get('/api/papers/paper-a', () => HttpResponse.json(builtPaper)),
+  );
+
+  render(<App />);
+  const paperButton = await screen.findByRole('button', { name: /routing-paper\.pdf/i });
+  await user.click(paperButton);
+  expect(await screen.findByText('Graph node count: 0')).toBeVisible();
+  expect(screen.getByText(/core graph unavailable/i)).toBeVisible();
+  expect(paperButton).toHaveTextContent('Core graph Unavailable');
+
+  await user.click(screen.getByRole('button', { name: 'Build core graph' }));
+
+  expect(await screen.findByText('Graph node count: 1')).toBeVisible();
+  await waitFor(() => {
+    expect(screen.getByText(/core graph ready/i)).toBeVisible();
+    expect(paperButton).toHaveTextContent('Core graph Ready');
+  });
 });
 
 it('opens an uploaded paper, inserts it once, and prevents a second in-flight upload', async () => {

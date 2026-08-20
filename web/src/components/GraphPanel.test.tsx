@@ -43,16 +43,16 @@ const graph: PaperGraph = {
   nodes: [
     {
       id: 'method', node_type: 'method', name: 'Token router', summary: 'Routes tokens.',
-      stage: 'core', evidence_element_ids: ['located', 'unlocated'],
+      stage: 'stage2', evidence_element_ids: ['located', 'unlocated'],
     },
     {
       id: 'claim', node_type: 'claim', name: 'Primary claim', summary: 'Improves quality.',
-      stage: 'core', evidence_element_ids: [],
+      stage: 'stage2', evidence_element_ids: [],
     },
   ],
   edges: [{
     id: 'claim-method', source_node_id: 'claim', target_node_id: 'method',
-    relation_type: 'supports', stage: 'core', evidence_element_ids: [],
+    relation_type: 'supports', stage: 'stage2', evidence_element_ids: [],
   }],
 };
 
@@ -186,7 +186,7 @@ it('ignores a focused graph response after the active paper changes', async () =
   const paperBGraph: PaperGraph = {
     nodes: [{
       id: 'result', node_type: 'result', name: 'Paper B result', summary: 'A different paper.',
-      stage: 'core', evidence_element_ids: [],
+      stage: 'stage2', evidence_element_ids: [],
     }],
     edges: [],
   };
@@ -223,14 +223,14 @@ it('removes a previous root layout immediately and never renders its stale resul
   const updatedPaperAGraph: PaperGraph = {
     nodes: [{
       id: 'updated', node_type: 'result', name: 'Updated paper A', summary: 'New root graph.',
-      stage: 'core', evidence_element_ids: [],
+      stage: 'stage2', evidence_element_ids: [],
     }],
     edges: [],
   };
   const paperBGraph: PaperGraph = {
     nodes: [{
       id: 'paper-b', node_type: 'result', name: 'Paper B result', summary: 'Current root graph.',
-      stage: 'core', evidence_element_ids: [],
+      stage: 'stage2', evidence_element_ids: [],
     }],
     edges: [],
   };

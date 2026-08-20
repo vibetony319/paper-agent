@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react';
 
 import { ApiError, paperApi } from '../api/client';
-import type { AgentMode, Citation } from '../api/types';
+import type { AgentMode, Citation, PaperSummary } from '../api/types';
 import {
   initialWorkspaceState,
   toSourceTarget,
@@ -12,10 +12,21 @@ function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
 }
 
-export function usePaperWorkspace(activePaperId: string | null, loadRevision = 0) {
+export function usePaperWorkspace(
+  activePaperId: string | null,
+  loadRevision = 0,
+  onPaperSummaryUpdated?: (paper: PaperSummary) => void,
+) {
   const [state, dispatch] = useReducer(workspaceReducer, initialWorkspaceState);
   // Keep reducer guards unique even when callers reset their retry trigger.
   const nextLoadGeneration = useRef(0);
+  const currentPaperId = useRef(activePaperId);
+  const currentWorkspaceRevision = useRef(loadRevision);
+  const currentLoadGeneration = useRef(state.loadRevision);
+
+  currentPaperId.current = activePaperId;
+  currentWorkspaceRevision.current = loadRevision;
+  currentLoadGeneration.current = state.loadRevision;
 
   const reportApiError = useCallback((
     paperId: string,
@@ -35,6 +46,44 @@ export function usePaperWorkspace(activePaperId: string | null, loadRevision = 0
         : fallback,
     });
   }, []);
+
+  const isCurrentPaperRequest = useCallback((
+    paperId: string,
+    requestLoadGeneration: number,
+    requestWorkspaceRevision: number,
+  ) => (
+    currentPaperId.current === paperId
+    && currentLoadGeneration.current === requestLoadGeneration
+    && currentWorkspaceRevision.current === requestWorkspaceRevision
+  ), []);
+
+  const refreshPaperSummary = useCallback(async (
+    paperId: string,
+    requestLoadGeneration: number,
+    requestWorkspaceRevision: number,
+  ) => {
+    try {
+      const paper = await paperApi.getPaper(paperId);
+      if (
+        onPaperSummaryUpdated !== undefined
+        && isCurrentPaperRequest(paperId, requestLoadGeneration, requestWorkspaceRevision)
+      ) {
+        onPaperSummaryUpdated?.(paper);
+      }
+    } catch (error) {
+      if (
+        onPaperSummaryUpdated !== undefined
+        && isCurrentPaperRequest(paperId, requestLoadGeneration, requestWorkspaceRevision)
+      ) {
+        reportApiError(
+          paperId,
+          requestLoadGeneration,
+          error,
+          'Unable to refresh the paper status.',
+        );
+      }
+    }
+  }, [isCurrentPaperRequest, onPaperSummaryUpdated, reportApiError]);
 
   useEffect(() => {
     const loadGeneration = nextLoadGeneration.current++;
@@ -106,46 +155,76 @@ export function usePaperWorkspace(activePaperId: string | null, loadRevision = 0
       return null;
     }
     const paperId = state.activePaperId;
-    const requestLoadRevision = state.loadRevision;
+    const requestLoadGeneration = state.loadRevision;
+    const requestWorkspaceRevision = loadRevision;
     try {
       const graph = await paperApi.buildCoreGraph(paperId);
       dispatch({
-        type: 'graph/loaded', paperId, loadRevision: requestLoadRevision, graph,
+        type: 'graph/loaded', paperId, loadRevision: requestLoadGeneration, graph,
       });
+      if (
+        onPaperSummaryUpdated !== undefined
+        && isCurrentPaperRequest(paperId, requestLoadGeneration, requestWorkspaceRevision)
+      ) {
+        await refreshPaperSummary(paperId, requestLoadGeneration, requestWorkspaceRevision);
+      }
       return graph;
     } catch (error) {
       reportApiError(
         paperId,
-        requestLoadRevision,
+        requestLoadGeneration,
         error,
         'Unable to build the core graph.',
       );
       throw error;
     }
-  }, [reportApiError, state.activePaperId, state.loadRevision]);
+  }, [
+    isCurrentPaperRequest,
+    onPaperSummaryUpdated,
+    refreshPaperSummary,
+    reportApiError,
+    loadRevision,
+    state.activePaperId,
+    state.loadRevision,
+  ]);
 
   const buildDeepGraph = useCallback(async () => {
     if (state.activePaperId === null) {
       return null;
     }
     const paperId = state.activePaperId;
-    const requestLoadRevision = state.loadRevision;
+    const requestLoadGeneration = state.loadRevision;
+    const requestWorkspaceRevision = loadRevision;
     try {
       const graph = await paperApi.buildDeepGraph(paperId);
       dispatch({
-        type: 'graph/loaded', paperId, loadRevision: requestLoadRevision, graph,
+        type: 'graph/loaded', paperId, loadRevision: requestLoadGeneration, graph,
       });
+      if (
+        onPaperSummaryUpdated !== undefined
+        && isCurrentPaperRequest(paperId, requestLoadGeneration, requestWorkspaceRevision)
+      ) {
+        await refreshPaperSummary(paperId, requestLoadGeneration, requestWorkspaceRevision);
+      }
       return graph;
     } catch (error) {
       reportApiError(
         paperId,
-        requestLoadRevision,
+        requestLoadGeneration,
         error,
         'Unable to build the deep graph.',
       );
       throw error;
     }
-  }, [reportApiError, state.activePaperId, state.loadRevision]);
+  }, [
+    isCurrentPaperRequest,
+    onPaperSummaryUpdated,
+    refreshPaperSummary,
+    reportApiError,
+    loadRevision,
+    state.activePaperId,
+    state.loadRevision,
+  ]);
 
   const askAgent = useCallback(async (content: string, mode: AgentMode) => {
     if (state.activePaperId === null) {
@@ -153,7 +232,7 @@ export function usePaperWorkspace(activePaperId: string | null, loadRevision = 0
     }
     const paperId = state.activePaperId;
     const requestLoadRevision = state.loadRevision;
-    const conversationId = state.conversationId;
+    const conversationId = state.conversationMode === mode ? state.conversationId : null;
     try {
       const message = await paperApi.askAgent(paperId, {
         content,
@@ -165,6 +244,7 @@ export function usePaperWorkspace(activePaperId: string | null, loadRevision = 0
         paperId,
         loadRevision: requestLoadRevision,
         conversationId: message.conversation_id,
+        mode,
         message,
       });
       return message;
@@ -181,6 +261,7 @@ export function usePaperWorkspace(activePaperId: string | null, loadRevision = 0
     reportApiError,
     state.activePaperId,
     state.conversationId,
+    state.conversationMode,
     state.loadRevision,
   ]);
 

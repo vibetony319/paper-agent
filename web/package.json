@@ -3,6 +3,9 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "engines": {
+    "node": "^22.14.0 || >=24.0.0"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit --project tsconfig.app.json && tsc --noEmit --project tsconfig.node.json && vite build",

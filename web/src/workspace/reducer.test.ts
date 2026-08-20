@@ -55,6 +55,7 @@ function readyWorkspace({
     },
     graphFocusNodeId: 'node-a',
     conversationId,
+    conversationMode: 'paper_only',
     messages: [{
       conversation_id: conversationId,
       message_id: 'message-a',
@@ -84,6 +85,7 @@ it('clears paper-specific workspace data when a different paper opens', () => {
     activeSource: null,
     graphFocusNodeId: null,
     conversationId: null,
+    conversationMode: null,
     messages: [],
     notesErrorMessage: null,
   });
@@ -100,6 +102,7 @@ it('ignores an Agent response that belongs to a paper that is no longer open', (
     paperId: 'paper-a',
     loadRevision: 0,
     conversationId: 'chat-a',
+    mode: 'paper_only',
     message: {
       conversation_id: 'chat-a',
       message_id: 'message-late',
@@ -124,7 +127,7 @@ it.each([
         node_type: 'claim',
         name: 'Stale graph',
         summary: 'Built before retry.',
-        stage: 'core',
+        stage: 'stage2',
         evidence_element_ids: [],
       }],
       edges: [],
@@ -135,6 +138,7 @@ it.each([
     paperId: 'paper-a',
     loadRevision: 1,
     conversationId: 'stale-chat',
+    mode: 'paper_only',
     message: {
       conversation_id: 'stale-chat',
       message_id: 'stale-message',
@@ -197,6 +201,7 @@ it('resets paper-specific state when the same paper opens with a new load revisi
     activeSource: null,
     graphFocusNodeId: null,
     conversationId: null,
+    conversationMode: null,
     messages: [],
     errorMessage: null,
     notesErrorMessage: null,

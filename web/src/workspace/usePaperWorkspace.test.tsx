@@ -9,7 +9,7 @@ const emptyGraph: PaperGraph = { nodes: [], edges: [] };
 const builtGraph: PaperGraph = {
   nodes: [{
     id: 'built', node_type: 'claim', name: 'Built graph', summary: 'Workspace result.',
-    stage: 'core', evidence_element_ids: [],
+    stage: 'stage2', evidence_element_ids: [],
   }],
   edges: [],
 };
@@ -56,6 +56,61 @@ it('returns and stores a core graph built for the active paper', async () => {
   expect(buildCoreGraph).toHaveBeenCalledWith('paper-a');
   expect(returnedGraph).toBe(builtGraph);
   expect(result.current.graph).toBe(builtGraph);
+});
+
+it('starts a new Agent conversation when the second request changes answer scope', async () => {
+  const paperOnlyResponse: AgentMessage = {
+    conversation_id: 'paper-only-conversation',
+    message_id: 'message-1',
+    status: 'grounded',
+    paper_answer: 'Paper-only answer.',
+    background_explanation: null,
+    citations: [],
+  };
+  const backgroundResponse: AgentMessage = {
+    ...paperOnlyResponse,
+    conversation_id: 'background-conversation',
+    message_id: 'message-2',
+  };
+  const continuedBackgroundResponse: AgentMessage = {
+    ...backgroundResponse,
+    message_id: 'message-3',
+  };
+  const askAgent = vi.spyOn(paperApi, 'askAgent')
+    .mockResolvedValueOnce(paperOnlyResponse)
+    .mockResolvedValueOnce(backgroundResponse)
+    .mockResolvedValueOnce(continuedBackgroundResponse);
+  const { result } = renderHook(() => usePaperWorkspace('paper-a'));
+  await waitFor(() => expect(result.current.document).not.toBeNull());
+
+  await act(async () => {
+    await result.current.askAgent('What does the paper show?', 'paper_only');
+  });
+  await waitFor(() => expect(result.current.conversationId).toBe('paper-only-conversation'));
+  await act(async () => {
+    await result.current.askAgent('Why does that matter?', 'external_knowledge');
+  });
+  await waitFor(() => expect(result.current.conversationId).toBe('background-conversation'));
+  await act(async () => {
+    await result.current.askAgent('What follows from that?', 'external_knowledge');
+  });
+
+  expect(askAgent).toHaveBeenNthCalledWith(1, 'paper-a', {
+    content: 'What does the paper show?',
+    mode: 'paper_only',
+    conversation_id: undefined,
+  });
+  expect(askAgent).toHaveBeenNthCalledWith(2, 'paper-a', {
+    content: 'Why does that matter?',
+    mode: 'external_knowledge',
+    conversation_id: undefined,
+  });
+  expect(askAgent).toHaveBeenNthCalledWith(3, 'paper-a', {
+    content: 'What follows from that?',
+    mode: 'external_knowledge',
+    conversation_id: 'background-conversation',
+  });
+  expect(result.current.conversationId).toBe('background-conversation');
 });
 
 it('returns null without calling a builder when no paper is active', async () => {
@@ -204,7 +259,7 @@ it('ignores old graph, Agent, and note completions after retrying the same paper
   const staleGraph: PaperGraph = {
     nodes: [{
       id: 'stale-node', node_type: 'claim', name: 'Stale graph', summary: 'Old result.',
-      stage: 'core', evidence_element_ids: [],
+      stage: 'stage2', evidence_element_ids: [],
     }],
     edges: [],
   };
@@ -261,7 +316,7 @@ it('ignores an obsolete A graph completion after retrying A, switching to B, and
     obsoleteGraph.resolve({
       nodes: [{
         id: 'obsolete-node', node_type: 'claim', name: 'Obsolete graph', summary: 'Old result.',
-        stage: 'core', evidence_element_ids: [],
+        stage: 'stage2', evidence_element_ids: [],
       }],
       edges: [],
     });

@@ -56,6 +56,9 @@ function jsonRequest(method: 'POST', body?: unknown): RequestInit {
 export const paperApi = {
   listPapers: () => request<PaperSummary[]>('/api/papers'),
 
+  getPaper: (paperId: string) =>
+    request<PaperSummary>(`/api/papers/${encodeURIComponent(paperId)}`),
+
   upload: (file: File) => {
     const body = new FormData();
     body.append('file', file);

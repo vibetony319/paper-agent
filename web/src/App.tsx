@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 
 import type { PaperSummary } from './api/types';
 import { PaperLibrary } from './components/PaperLibrary';
@@ -8,7 +8,14 @@ import { usePaperWorkspace } from './workspace/usePaperWorkspace';
 export function App() {
   const [activePaper, setActivePaper] = useState<PaperSummary | null>(null);
   const [workspaceLoadRevision, setWorkspaceLoadRevision] = useState(0);
-  const workspace = usePaperWorkspace(activePaper?.id ?? null, workspaceLoadRevision);
+  const updateActivePaperSummary = useCallback((paper: PaperSummary) => {
+    setActivePaper((current) => current?.id === paper.id ? paper : current);
+  }, []);
+  const workspace = usePaperWorkspace(
+    activePaper?.id ?? null,
+    workspaceLoadRevision,
+    updateActivePaperSummary,
+  );
 
   const selectPaper = (paper: PaperSummary) => {
     const isActivePaper = activePaper?.id === paper.id;
@@ -32,6 +39,7 @@ export function App() {
     <div className="app-shell">
       <PaperLibrary
         activePaperId={activePaper?.id ?? null}
+        paperUpdate={activePaper}
         onPaperSelected={selectPaper}
       />
       <main className="app-content">

@@ -9,7 +9,7 @@ function graphWithNodes(count: number): PaperGraph {
     node_type: 'concept',
     name: `Node ${index}`,
     summary: `Summary ${index}`,
-    stage: 'core' as const,
+    stage: 'stage2' as const,
     evidence_element_ids: [],
   }));
 
@@ -20,7 +20,7 @@ function graphWithNodes(count: number): PaperGraph {
       source_node_id: nodes[0].id,
       target_node_id: node.id,
       relation_type: 'related_to',
-      stage: 'core' as const,
+      stage: 'stage2' as const,
       evidence_element_ids: [],
     })),
   };
@@ -30,33 +30,33 @@ const sampleGraph: PaperGraph = {
   nodes: [
     {
       id: 'method', node_type: 'method', name: 'Method', summary: 'Routes tokens.',
-      stage: 'core', evidence_element_ids: ['element-1'],
+      stage: 'stage2', evidence_element_ids: ['element-1'],
     },
     {
       id: 'router', node_type: 'component', name: 'Router', summary: 'Selects experts.',
-      stage: 'deep', evidence_element_ids: ['element-2'],
+      stage: 'stage3', evidence_element_ids: ['element-2'],
     },
     {
       id: 'claim', node_type: 'claim', name: 'Claim', summary: 'Improves routing.',
-      stage: 'core', evidence_element_ids: [],
+      stage: 'stage2', evidence_element_ids: [],
     },
     {
       id: 'dataset', node_type: 'dataset', name: 'Dataset', summary: 'Evaluation data.',
-      stage: 'core', evidence_element_ids: [],
+      stage: 'stage2', evidence_element_ids: [],
     },
   ],
   edges: [
     {
       id: 'method-router', source_node_id: 'method', target_node_id: 'router',
-      relation_type: 'part_of', stage: 'deep', evidence_element_ids: [],
+      relation_type: 'part_of', stage: 'stage3', evidence_element_ids: [],
     },
     {
       id: 'claim-method', source_node_id: 'claim', target_node_id: 'method',
-      relation_type: 'supports', stage: 'core', evidence_element_ids: [],
+      relation_type: 'supports', stage: 'stage2', evidence_element_ids: [],
     },
     {
       id: 'dataset-claim', source_node_id: 'dataset', target_node_id: 'claim',
-      relation_type: 'evaluated_on', stage: 'core', evidence_element_ids: [],
+      relation_type: 'evaluated_on', stage: 'stage2', evidence_element_ids: [],
     },
   ],
 };

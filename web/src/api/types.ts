@@ -71,7 +71,7 @@ export interface GraphNode {
   node_type: string;
   name: string;
   summary: string;
-  stage: 'core' | 'deep';
+  stage: 'stage2' | 'stage3';
   evidence_element_ids: string[];
 }
 
@@ -80,7 +80,7 @@ export interface GraphEdge {
   source_node_id: string;
   target_node_id: string;
   relation_type: string;
-  stage: 'core' | 'deep';
+  stage: 'stage2' | 'stage3';
   evidence_element_ids: string[];
 }
 

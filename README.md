@@ -9,9 +9,10 @@ included for local reading.
 
 ## Requirements and local installation
 
-Use Python 3.12 or newer. From the repository root, create and activate a
-virtual environment if desired, then install the project and its development
-tools:
+Use Python 3.12 or newer. The browser workbench requires Node.js 22.14 or
+newer on the Node 22 release line, or Node.js 24 or newer. From the repository
+root, create and activate a virtual environment if desired, then install the
+project and its development tools:
 
 ```bash
 python -m pip install -e ".[dev]"

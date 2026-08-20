@@ -1,4 +1,5 @@
 import type {
+  AgentMode,
   AgentMessage,
   BoundingBox,
   Note,
@@ -22,6 +23,7 @@ export type WorkspaceState = {
   activeSource: SourceTarget | null;
   graphFocusNodeId: string | null;
   conversationId: string | null;
+  conversationMode: AgentMode | null;
   messages: AgentMessage[];
   errorMessage: string | null;
   notesErrorMessage: string | null;

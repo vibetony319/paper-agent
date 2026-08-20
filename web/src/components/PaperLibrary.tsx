@@ -5,6 +5,7 @@ import type { PaperSummary, ProcessingStatus } from '../api/types';
 
 export interface PaperLibraryProps {
   activePaperId: string | null;
+  paperUpdate: PaperSummary | null;
   onPaperSelected: (paper: PaperSummary) => void;
 }
 
@@ -67,7 +68,7 @@ export function paperStageSummary(paper: PaperSummary): string {
     .join(', ');
 }
 
-export function PaperLibrary({ activePaperId, onPaperSelected }: PaperLibraryProps) {
+export function PaperLibrary({ activePaperId, paperUpdate, onPaperSelected }: PaperLibraryProps) {
   const [papers, setPapers] = useState<PaperSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploadingFilename, setUploadingFilename] = useState<string | null>(null);
@@ -100,6 +101,12 @@ export function PaperLibrary({ activePaperId, onPaperSelected }: PaperLibraryPro
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (paperUpdate !== null) {
+      setPapers((current) => mergePapers(current, [paperUpdate]));
+    }
+  }, [paperUpdate]);
 
   const upload = async (file: File) => {
     if (uploadInFlight.current) {

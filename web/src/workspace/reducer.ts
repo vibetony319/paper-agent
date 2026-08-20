@@ -1,4 +1,5 @@
 import type {
+  AgentMode,
   AgentMessage,
   DocumentElement,
   Note,
@@ -17,6 +18,7 @@ export const initialWorkspaceState: WorkspaceState = {
   activeSource: null,
   graphFocusNodeId: null,
   conversationId: null,
+  conversationMode: null,
   messages: [],
   errorMessage: null,
   notesErrorMessage: null,
@@ -42,6 +44,7 @@ export type WorkspaceAction =
     paperId: string;
     loadRevision: number;
     conversationId: string;
+    mode: AgentMode;
     message: AgentMessage;
   }
   | { type: 'notes/created'; paperId: string; loadRevision: number; note: Note }
@@ -124,6 +127,7 @@ export function workspaceReducer(
         ? {
           ...state,
           conversationId: action.conversationId,
+          conversationMode: action.mode,
           messages: [...state.messages, action.message],
           errorMessage: null,
         }
