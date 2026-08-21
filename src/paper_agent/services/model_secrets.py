@@ -1,6 +1,14 @@
 import json
+import os
 from pathlib import Path
-from uuid import UUID
+import tempfile
+from threading import RLock
+
+from paper_agent.model_profiles import (
+    MODEL_SECRET_REFERENCE_PREFIX,
+    parse_model_secret_reference,
+    validate_model_profile_id,
+)
 
 
 class ModelSecretStoreError(RuntimeError):
@@ -11,18 +19,20 @@ class ModelSecretStoreError(RuntimeError):
 
 
 class ModelSecretStore:
-    _reference_prefix = "model-profile:"
+    _reference_prefix = MODEL_SECRET_REFERENCE_PREFIX
+    _lock = RLock()
 
     def __init__(self, path: Path) -> None:
         self.path = path
 
     def set(self, profile_id: str, secret: str) -> str:
-        profile_id = self._validate_profile_id(profile_id)
+        profile_id = self._validated_profile_id(profile_id)
         if not isinstance(secret, str):
             raise ModelSecretStoreError()
-        secrets = self._read_all()
-        secrets[profile_id] = secret
-        self._write_all(secrets)
+        with self._lock:
+            secrets = self._read_all()
+            secrets[profile_id] = secret
+            self._write_all(secrets)
         return f"{self._reference_prefix}{profile_id}"
 
     def get(self, secret_ref: str | None) -> str:
@@ -35,11 +45,12 @@ class ModelSecretStore:
         if secret_ref is None:
             return
         profile_id = self._profile_id_from_reference(secret_ref)
-        secrets = self._read_all()
-        if profile_id not in secrets:
-            return
-        del secrets[profile_id]
-        self._write_all(secrets)
+        with self._lock:
+            secrets = self._read_all()
+            if profile_id not in secrets:
+                return
+            del secrets[profile_id]
+            self._write_all(secrets)
 
     def _read_all(self) -> dict[str, str]:
         if not self.path.exists():
@@ -54,33 +65,47 @@ class ModelSecretStore:
         for profile_id, secret in loaded.items():
             if not isinstance(profile_id, str) or not isinstance(secret, str):
                 raise ModelSecretStoreError()
-            secrets[self._validate_profile_id(profile_id)] = secret
+            secrets[self._validated_profile_id(profile_id)] = secret
         return secrets
 
     def _write_all(self, secrets: dict[str, str]) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.path.with_suffix(".tmp")
+        temporary: Path | None = None
+        descriptor: int | None = None
         try:
-            temporary.write_text(json.dumps(secrets), encoding="utf-8")
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            descriptor, temporary_name = tempfile.mkstemp(
+                prefix=f"{self.path.name}.", suffix=".tmp", dir=self.path.parent
+            )
+            temporary = Path(temporary_name)
+            os.close(descriptor)
+            descriptor = None
             temporary.chmod(0o600)
+            temporary.write_text(json.dumps(secrets), encoding="utf-8")
             temporary.replace(self.path)
-        except OSError:
+        except (OSError, TypeError, ValueError):
             raise ModelSecretStoreError() from None
+        finally:
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+            if temporary is not None:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
     @classmethod
     def _profile_id_from_reference(cls, secret_ref: str) -> str:
-        if not isinstance(secret_ref, str) or not secret_ref.startswith(cls._reference_prefix):
+        try:
+            return parse_model_secret_reference(secret_ref)
+        except ValueError:
             raise ModelSecretStoreError()
-        return cls._validate_profile_id(secret_ref.removeprefix(cls._reference_prefix))
 
     @staticmethod
-    def _validate_profile_id(profile_id: str) -> str:
-        if not isinstance(profile_id, str):
-            raise ModelSecretStoreError()
+    def _validated_profile_id(profile_id: str) -> str:
         try:
-            parsed = UUID(profile_id)
-        except (ValueError, AttributeError):
-            raise ModelSecretStoreError() from None
-        if str(parsed) != profile_id:
+            return validate_model_profile_id(profile_id)
+        except ValueError:
             raise ModelSecretStoreError()
-        return profile_id

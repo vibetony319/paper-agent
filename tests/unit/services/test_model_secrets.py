@@ -1,4 +1,6 @@
 import json
+import threading
+from pathlib import Path
 
 import pytest
 
@@ -75,6 +77,72 @@ def test_secret_store_delete_rewrites_the_file_without_a_temporary_left_behind(t
     assert store.get(second_reference) == "second-secret"
     assert json.loads(path.read_text(encoding="utf-8")) == {second_id: "second-secret"}
     assert not path.with_suffix(".tmp").exists()
+
+
+def test_secret_store_keeps_an_existing_legacy_temporary_file_out_of_replacements(tmp_path):
+    """Breaks if a fixed temporary path can overwrite unrelated plaintext or collide."""
+    path = tmp_path / "secrets" / "model-profiles.json"
+    path.parent.mkdir()
+    legacy_temporary = path.with_suffix(".tmp")
+    legacy_temporary.write_text("unrelated", encoding="utf-8")
+    store = ModelSecretStore(path)
+
+    store.set(PROFILE_ID, "top-secret")
+
+    assert store.get(f"model-profile:{PROFILE_ID}") == "top-secret"
+    assert legacy_temporary.read_text(encoding="utf-8") == "unrelated"
+
+
+@pytest.mark.parametrize("failing_method", ("write_text", "chmod", "replace"))
+def test_secret_store_cleans_failed_temporary_writes_and_preserves_destination(
+    tmp_path, monkeypatch, failing_method
+):
+    """Breaks if an atomic-write failure leaks a temp key file or damages prior secrets."""
+    path = tmp_path / "secrets" / "model-profiles.json"
+    store = ModelSecretStore(path)
+    reference = store.set(PROFILE_ID, "preserved-secret")
+
+    def fail(*_args, **_kwargs):
+        raise OSError("injected failure")
+
+    if failing_method == "write_text":
+        def fail_write(path, *_args, **_kwargs):
+            path.write_bytes(b"partial-secret")
+            raise OSError("injected failure")
+
+        monkeypatch.setattr(Path, failing_method, fail_write)
+    else:
+        monkeypatch.setattr(Path, failing_method, fail)
+
+    with pytest.raises(ModelSecretStoreError) as caught:
+        store.set("00000000-0000-4000-8000-000000000002", "new-secret")
+
+    assert "new-secret" not in str(caught.value)
+    assert store.get(reference) == "preserved-secret"
+    assert list(path.parent.glob(f"{path.stem}*.tmp")) == []
+
+
+def test_secret_store_serializes_process_local_set_operations(tmp_path):
+    """Breaks if a second in-process set can finish while the shared write lock is held."""
+    store = ModelSecretStore(tmp_path / "secrets" / "model-profiles.json")
+    started = threading.Event()
+    finished = threading.Event()
+
+    def write_secret() -> None:
+        started.set()
+        store.set(PROFILE_ID, "top-secret")
+        finished.set()
+
+    with ModelSecretStore._lock:
+        writer = threading.Thread(target=write_secret)
+        writer.start()
+        assert started.wait(timeout=1)
+        assert not finished.wait(timeout=0.2)
+
+    writer.join(timeout=1)
+    assert not writer.is_alive()
+    assert finished.is_set()
+    assert store.get(f"model-profile:{PROFILE_ID}") == "top-secret"
 
 
 def test_secret_store_handles_missing_references_without_touching_a_file(tmp_path):

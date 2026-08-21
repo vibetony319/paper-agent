@@ -1,4 +1,5 @@
 from dataclasses import asdict
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy.exc import IntegrityError
@@ -69,6 +70,74 @@ def test_profile_rejects_base_urls_that_can_embed_credentials(base_url):
     """Breaks if API-key material can be persisted through a model URL."""
     with pytest.raises(ValueError, match="base URL"):
         _profile(base_url=base_url)
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    (
+        "http://:8000/v1",
+        "http://localhost:not-a-port/v1",
+        "http://[unclosed-host/v1",
+    ),
+)
+def test_profile_rejects_malformed_base_url_hosts_and_ports(base_url):
+    """Breaks if a malformed vLLM endpoint reaches persistence or later client setup."""
+    with pytest.raises(ValueError, match="base URL"):
+        _profile(base_url=base_url)
+
+
+def test_profile_and_changes_reject_non_reference_secret_values_without_echoing_them():
+    """Breaks if secret material can enter domain reprs or SQLite through secret_ref."""
+    hostile_secret = "sk-live-secret"
+
+    with pytest.raises(ValueError) as profile_error:
+        _profile(secret_ref=hostile_secret)
+    with pytest.raises(ValueError) as changes_error:
+        ModelProfileChanges(secret_ref=hostile_secret)
+
+    assert hostile_secret not in str(profile_error.value)
+    assert hostile_secret not in str(changes_error.value)
+
+
+def test_repository_rejects_invalid_secret_refs_on_create_and_update(repository):
+    """Breaks if an invalid ref can be written by either repository mutation path."""
+    profile = repository.create(_profile())
+
+    with pytest.raises(ValueError):
+        repository.create(_profile(secret_ref="sk-live-secret"))
+    with pytest.raises(ValueError):
+        repository.update(
+            profile.id,
+            expected_revision=profile.revision,
+            changes=ModelProfileChanges(secret_ref="sk-live-secret"),
+        )
+
+    assert repository.get(profile.id) == profile
+
+
+def test_profile_rejects_naive_public_datetimes():
+    """Breaks if timestamp serialization depends on the host machine timezone."""
+    naive = datetime(2026, 8, 22, 9, 30)
+
+    with pytest.raises(ValueError, match="timezone-aware"):
+        ModelCapabilities(checked_at=naive)
+    for field_name in ("created_at", "updated_at", "deleted_at"):
+        with pytest.raises(ValueError, match="timezone-aware"):
+            _profile(**{field_name: naive})
+
+
+def test_profile_normalizes_aware_public_datetimes_to_utc():
+    """Breaks if equivalent public timestamps persist with host-dependent offsets."""
+    china_time = datetime(2026, 8, 22, 9, 30, tzinfo=timezone(timedelta(hours=8)))
+    profile = _profile(
+        created_at=china_time,
+        updated_at=china_time,
+        capabilities=ModelCapabilities(checked_at=china_time),
+    )
+
+    assert profile.created_at == datetime(2026, 8, 22, 1, 30, tzinfo=UTC)
+    assert profile.updated_at == datetime(2026, 8, 22, 1, 30, tzinfo=UTC)
+    assert profile.capabilities.checked_at == datetime(2026, 8, 22, 1, 30, tzinfo=UTC)
 
 
 def test_repository_enforces_one_active_default_profile(repository):

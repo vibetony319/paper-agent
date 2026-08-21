@@ -1,7 +1,32 @@
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from urllib.parse import urlparse
-from uuid import uuid4
+from uuid import UUID, uuid4
+
+
+MODEL_SECRET_REFERENCE_PREFIX = "model-profile:"
+
+
+def validate_model_profile_id(profile_id: str) -> str:
+    if not isinstance(profile_id, str):
+        raise ValueError("model profile ID must be a canonical UUID")
+    try:
+        parsed = UUID(profile_id)
+    except (ValueError, AttributeError):
+        raise ValueError("model profile ID must be a canonical UUID") from None
+    if str(parsed) != profile_id:
+        raise ValueError("model profile ID must be a canonical UUID")
+    return profile_id
+
+
+def parse_model_secret_reference(secret_ref: str) -> str:
+    if not isinstance(secret_ref, str) or not secret_ref.startswith(
+        MODEL_SECRET_REFERENCE_PREFIX
+    ):
+        raise ValueError("model secret reference is invalid")
+    return validate_model_profile_id(
+        secret_ref.removeprefix(MODEL_SECRET_REFERENCE_PREFIX)
+    )
 
 
 def _normalized_required(value: str, label: str) -> str:
@@ -12,10 +37,16 @@ def _normalized_required(value: str, label: str) -> str:
 
 def _normalized_base_url(value: str) -> str:
     normalized = _normalized_required(value, "base URL")
-    parsed = urlparse(normalized)
+    try:
+        parsed = urlparse(normalized)
+        hostname = parsed.hostname
+        parsed.port
+    except ValueError:
+        raise ValueError("base URL must be an HTTP or HTTPS URL") from None
     if (
         parsed.scheme not in {"http", "https"}
         or not parsed.netloc
+        or hostname is None
         or parsed.username is not None
         or parsed.password is not None
         or parsed.query
@@ -25,12 +56,26 @@ def _normalized_base_url(value: str) -> str:
     return normalized
 
 
+def _normalized_public_datetime(value: datetime, label: str) -> datetime:
+    if not isinstance(value, datetime) or value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError(f"{label} must be timezone-aware")
+    return value.astimezone(UTC)
+
+
 @dataclass(frozen=True)
 class ModelCapabilities:
     basic_chat: bool = False
     structured_output: bool = False
     tool_calling: bool = False
     checked_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if self.checked_at is not None:
+            object.__setattr__(
+                self,
+                "checked_at",
+                _normalized_public_datetime(self.checked_at, "capabilities checked_at"),
+            )
 
 
 @dataclass(frozen=True)
@@ -67,6 +112,26 @@ class ModelProfile:
         )
         if self.revision < 1:
             raise ValueError("revision must be positive")
+        if self.secret_ref is not None:
+            parse_model_secret_reference(self.secret_ref)
+        if not isinstance(self.capabilities, ModelCapabilities):
+            raise ValueError("capabilities must be a ModelCapabilities")
+        object.__setattr__(
+            self,
+            "created_at",
+            _normalized_public_datetime(self.created_at, "created_at"),
+        )
+        object.__setattr__(
+            self,
+            "updated_at",
+            _normalized_public_datetime(self.updated_at, "updated_at"),
+        )
+        if self.deleted_at is not None:
+            object.__setattr__(
+                self,
+                "deleted_at",
+                _normalized_public_datetime(self.deleted_at, "deleted_at"),
+            )
 
     def snapshot(self) -> ModelSnapshot:
         return ModelSnapshot(
@@ -94,3 +159,7 @@ class ModelProfileChanges:
     enabled: bool | None = None
     is_default: bool | None = None
     secret_ref: str | None | Unchanged = UNCHANGED
+
+    def __post_init__(self) -> None:
+        if self.secret_ref is not UNCHANGED and self.secret_ref is not None:
+            parse_model_secret_reference(self.secret_ref)
