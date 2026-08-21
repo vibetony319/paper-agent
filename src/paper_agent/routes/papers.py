@@ -37,6 +37,14 @@ async def upload_paper(request: Request, file: UploadFile = File(...)) -> PaperS
     return PaperSummaryResponse.from_summary(summary)
 
 
+@router.get("", response_model=list[PaperSummaryResponse])
+def list_papers(request: Request) -> list[PaperSummaryResponse]:
+    return [
+        PaperSummaryResponse.from_summary(summary)
+        for summary in _service(request).list_summaries()
+    ]
+
+
 @router.get("/{paper_id}", response_model=PaperSummaryResponse)
 def get_paper(paper_id: str, request: Request) -> PaperSummaryResponse:
     try:

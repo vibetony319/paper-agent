@@ -184,6 +184,9 @@ class PaperIngestionService:
             error=self._public_error_summary(error_summary),
         )
 
+    def list_summaries(self) -> tuple[PaperSummary, ...]:
+        return tuple(self.get_summary(paper.id) for paper in self.repository.list_papers())
+
     def get_source_path(self, paper_id: str) -> Path:
         paper = self.repository.get_paper(paper_id)
         if paper is None:

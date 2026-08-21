@@ -2,12 +2,16 @@ import sqlite3
 from pathlib import Path
 
 import pytest
-from sqlalchemy import insert, select
+from sqlalchemy import event, insert, select
 from sqlalchemy.exc import IntegrityError
 
 from paper_agent.database import document_elements, graph_nodes, notes, sections
 from paper_agent.domain import (
+    AgentMessageRole,
+    AgentMode,
     BoundingBox,
+    Conversation,
+    ConversationMessage,
     DocumentElement,
     GraphEdge,
     GraphNode,
@@ -18,7 +22,7 @@ from paper_agent.domain import (
     ProcessingStatus,
     Section,
 )
-from paper_agent.storage import GraphReferenceError, PaperRepository
+from paper_agent.storage import ConversationReferenceError, GraphReferenceError, PaperRepository
 
 
 @pytest.fixture
@@ -533,6 +537,31 @@ def test_repository_returns_latest_durable_stage_status(repository) -> None:
     assert repository.get_latest_stage_status(paper.id, "missing") is None
 
 
+def test_repository_lists_papers_by_filename_then_id(repository) -> None:
+    """Breaks if a paper library is not returned in stable display order."""
+    repository.create_paper(
+        paper_id="zeta-id",
+        original_filename="zeta.pdf",
+        stored_filename="zeta.pdf",
+    )
+    repository.create_paper(
+        paper_id="beta-id",
+        original_filename="alpha.pdf",
+        stored_filename="alpha-first.pdf",
+    )
+    repository.create_paper(
+        paper_id="alpha-id",
+        original_filename="alpha.pdf",
+        stored_filename="alpha-second.pdf",
+    )
+
+    assert repository.list_papers() == (
+        repository.get_paper("alpha-id"),
+        repository.get_paper("beta-id"),
+        repository.get_paper("zeta-id"),
+    )
+
+
 def test_repository_returns_newest_aggregate_processing_error(repository) -> None:
     """Breaks if multiple aggregate failures raise instead of returning the newest error."""
     paper = repository.create_paper(
@@ -614,6 +643,274 @@ def _paper_with_located_element(repository: PaperRepository, name: str):
         ),
     )
     return paper, element
+
+
+def _conversation_for_paper(repository: PaperRepository):
+    paper, element = _paper_with_located_element(repository, "conversation")
+    conversation = repository.create_conversation(
+        Conversation(paper_id=paper.id, mode=AgentMode.paper_only)
+    )
+    return paper, element, conversation
+
+
+def _user_message(conversation, content: str, citation_element_ids: tuple[str, ...] = ()):
+    return ConversationMessage(
+        conversation_id=conversation.id,
+        paper_id=conversation.paper_id,
+        role=AgentMessageRole.user,
+        content=content,
+        citation_element_ids=citation_element_ids,
+    )
+
+
+def _assistant_message(
+    conversation, content: str, citation_element_ids: tuple[str, ...] = ()
+):
+    return ConversationMessage(
+        conversation_id=conversation.id,
+        paper_id=conversation.paper_id,
+        role=AgentMessageRole.assistant,
+        content=content,
+        citation_element_ids=citation_element_ids,
+    )
+
+
+def test_repository_round_trips_paper_conversations_and_located_message_citations(repository):
+    """Breaks if conversation reads lose their mode, messages, or source-element citations."""
+    paper, element, conversation = _conversation_for_paper(repository)
+    user = repository.append_conversation_message(_user_message(conversation, "Explain it."))
+    assistant = repository.append_conversation_message(
+        _assistant_message(conversation, "It routes tokens.", (element.id,))
+    )
+
+    assert repository.get_conversation(paper.id, conversation.id) == conversation
+    assert repository.get_conversation("another-paper", conversation.id) is None
+    assert repository.get_conversation_messages(paper.id, conversation.id) == (user, assistant)
+
+
+def test_repository_returns_messages_in_durable_sequence_order(repository):
+    """Breaks if a full reload is capped or uses unstable SQLite insertion order."""
+    paper, _, conversation = _conversation_for_paper(repository)
+    persisted = tuple(
+        repository.append_conversation_message(
+            _user_message(conversation, f"message-{index}")
+        )
+        for index in range(8)
+    )
+
+    messages = repository.get_conversation_messages(paper.id, conversation.id)
+
+    assert [message.id for message in messages] == [message.id for message in persisted]
+    assert [message.sequence for message in messages] == list(range(8))
+
+
+def test_repository_limits_recent_messages_in_sql_and_returns_chronological_order(
+    repository,
+):
+    """Breaks if bounded model history still fetches the full durable conversation."""
+    paper, _, conversation = _conversation_for_paper(repository)
+    for index in range(10):
+        repository.append_conversation_message(
+            _user_message(conversation, f"message-{index}")
+        )
+
+    statements: list[str] = []
+
+    def capture_statement(
+        connection, cursor, statement, parameters, context, executemany
+    ) -> None:
+        statements.append(statement)
+
+    event.listen(repository.engine, "before_cursor_execute", capture_statement)
+    try:
+        messages = repository.get_conversation_messages(
+            paper.id, conversation.id, limit=6
+        )
+    finally:
+        event.remove(repository.engine, "before_cursor_execute", capture_statement)
+
+    assert [message.content for message in messages] == [
+        "message-4",
+        "message-5",
+        "message-6",
+        "message-7",
+        "message-8",
+        "message-9",
+    ]
+    message_reads = [
+        statement
+        for statement in statements
+        if "conversation_messages.content" in statement
+        and "FROM conversation_messages" in statement
+        and "FROM conversation_message_citations" not in statement
+    ]
+    assert len(message_reads) == 1
+    normalized_read = " ".join(message_reads[0].upper().split())
+    descending_order = "ORDER BY CONVERSATION_MESSAGES.SEQUENCE DESC"
+    assert descending_order in normalized_read
+    assert normalized_read.index(descending_order) < normalized_read.index("LIMIT")
+
+
+def test_repository_batches_citations_for_the_returned_message_set(repository):
+    """Breaks if conversation reads issue one citation query for every message."""
+    paper, _, conversation = _conversation_for_paper(repository)
+    first_citation = repository.save_element(
+        paper.id,
+        DocumentElement(
+            id="citation-z",
+            kind="paragraph",
+            text="First citation",
+            page_number=1,
+            bbox=BoundingBox(0, 0.1, 1, 0.2),
+        ),
+    )
+    second_citation = repository.save_element(
+        paper.id,
+        DocumentElement(
+            id="citation-a",
+            kind="paragraph",
+            text="Second citation",
+            page_number=1,
+            bbox=BoundingBox(0, 0.2, 1, 0.3),
+        ),
+    )
+    repository.append_conversation_message(_user_message(conversation, "Question"))
+    for index in range(3):
+        repository.append_conversation_message(
+            _assistant_message(
+                conversation,
+                f"Answer {index}",
+                (first_citation.id, second_citation.id),
+            )
+        )
+
+    statements: list[str] = []
+
+    def capture_statement(
+        connection, cursor, statement, parameters, context, executemany
+    ) -> None:
+        statements.append(statement)
+
+    event.listen(repository.engine, "before_cursor_execute", capture_statement)
+    try:
+        messages = repository.get_conversation_messages(paper.id, conversation.id)
+    finally:
+        event.remove(repository.engine, "before_cursor_execute", capture_statement)
+
+    message_reads = [
+        statement
+        for statement in statements
+        if "conversation_messages.content" in statement
+        and "FROM conversation_messages" in statement
+        and "FROM conversation_message_citations" not in statement
+    ]
+    citation_reads = [
+        statement
+        for statement in statements
+        if "FROM conversation_message_citations" in statement
+    ]
+    assert len(message_reads) == 1
+    assert len(citation_reads) == 1
+    assert [message.citation_element_ids for message in messages] == [
+        (),
+        ("citation-a", "citation-z"),
+        ("citation-a", "citation-z"),
+        ("citation-a", "citation-z"),
+    ]
+
+
+def test_repository_rejects_user_message_citations(repository):
+    """Breaks if untrusted user text can be persisted as a sourced paper claim."""
+    _, element, conversation = _conversation_for_paper(repository)
+
+    with pytest.raises(ConversationReferenceError, match="user"):
+        repository.append_conversation_message(
+            _user_message(conversation, "This is sourced.", (element.id,))
+        )
+
+
+@pytest.mark.parametrize("conversation_id", ("missing-conversation", "other-conversation"))
+def test_repository_rejects_unknown_or_mismatched_message_conversations(
+    repository, conversation_id: str
+):
+    """Breaks if a message can be appended without an owned conversation."""
+    paper, _, conversation = _conversation_for_paper(repository)
+    if conversation_id == "other-conversation":
+        _, _, other_conversation = _conversation_for_paper(repository)
+        message = ConversationMessage(
+            conversation_id=other_conversation.id,
+            paper_id=paper.id,
+            role=AgentMessageRole.user,
+            content="Wrong paper conversation.",
+        )
+    else:
+        message = ConversationMessage(
+            conversation_id=conversation_id,
+            paper_id=conversation.paper_id,
+            role=AgentMessageRole.user,
+            content="Unknown conversation.",
+        )
+
+    with pytest.raises(ConversationReferenceError, match="conversation"):
+        repository.append_conversation_message(message)
+
+
+def test_repository_rejects_a_message_citation_from_another_paper(repository):
+    """Breaks if a paper answer can cite an element from a different paper."""
+    _, _, conversation = _conversation_for_paper(repository)
+    _, second_element = _paper_with_located_element(repository, "second-citation")
+
+    with pytest.raises(ConversationReferenceError, match="citation"):
+        repository.append_conversation_message(
+            _assistant_message(conversation, "A grounded answer.", (second_element.id,))
+        )
+
+
+def test_repository_rejects_unlocated_message_citations(repository):
+    """Breaks if a citation can point at semantic text without a source location."""
+    paper, _, conversation = _conversation_for_paper(repository)
+    unlocated = repository.save_element(
+        paper.id, DocumentElement.paragraph("semantic only", location_status="unlocated")
+    )
+
+    with pytest.raises(ConversationReferenceError, match="citation"):
+        repository.append_conversation_message(
+            _assistant_message(conversation, "A grounded answer.", (unlocated.id,))
+        )
+
+
+def test_repository_rejects_duplicate_assistant_citations_before_persistence(
+    repository,
+):
+    """Breaks if duplicate citation IDs escape validation as a raw database error."""
+    paper, element, conversation = _conversation_for_paper(repository)
+
+    statements: list[str] = []
+
+    def capture_statement(
+        connection, cursor, statement, parameters, context, executemany
+    ) -> None:
+        statements.append(statement)
+
+    event.listen(repository.engine, "before_cursor_execute", capture_statement)
+    try:
+        with pytest.raises(ConversationReferenceError, match="duplicate"):
+            repository.append_conversation_message(
+                _assistant_message(
+                    conversation,
+                    "Repeated citation.",
+                    (element.id, element.id),
+                )
+            )
+    finally:
+        event.remove(repository.engine, "before_cursor_execute", capture_statement)
+
+    assert not [
+        statement
+        for statement in statements
+        if statement.lstrip().upper().startswith("INSERT INTO CONVERSATION_MESSAGES")
+    ]
+    assert repository.get_conversation_messages(paper.id, conversation.id) == ()
 
 
 def _deep_nodes(element_id: str) -> tuple[GraphNode, ...]:

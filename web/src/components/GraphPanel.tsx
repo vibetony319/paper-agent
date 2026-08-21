@@ -1,0 +1,308 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Background, Controls, ReactFlow, type NodeMouseHandler } from '@xyflow/react';
+
+import { ApiError, paperApi } from '../api/client';
+import type { DocumentElement, PaperGraph } from '../api/types';
+import { hasValidSourceLocation } from '../workspace/sourceTarget';
+import {
+  focusGraph,
+  layoutGraph,
+  overviewGraph,
+  type GraphView,
+} from './graphLayout';
+
+export type GraphPanelProps = {
+  paperId: string;
+  graph: PaperGraph;
+  documentElements?: DocumentElement[];
+  onSelectEvidence: (elementId: string) => void;
+  buildCoreGraph: () => Promise<PaperGraph | null>;
+  buildDeepGraph: () => Promise<PaperGraph | null>;
+};
+
+type PendingAction = 'core' | 'deep' | 'focus' | null;
+type RootIdentity = { paperId: string; graph: PaperGraph };
+type ViewIdentity = object;
+
+type VisibleGraphState = {
+  rootIdentity: RootIdentity;
+  viewIdentity: ViewIdentity;
+  graph: GraphView;
+};
+
+type FlowGraphState = {
+  rootIdentity: RootIdentity | null;
+  viewIdentity: ViewIdentity | null;
+  nodes: Awaited<ReturnType<typeof layoutGraph>>['nodes'];
+  edges: Awaited<ReturnType<typeof layoutGraph>>['edges'];
+};
+
+function publicErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof ApiError ? error.message : fallback;
+}
+
+export function GraphPanel({
+  paperId,
+  graph,
+  documentElements = [],
+  onSelectEvidence,
+  buildCoreGraph,
+  buildDeepGraph,
+}: GraphPanelProps) {
+  const rootIdentity = useMemo<RootIdentity>(() => ({ paperId, graph }), [graph, paperId]);
+  const rootOverview = useMemo(() => overviewGraph(graph), [graph]);
+  const [visibleGraphState, setVisibleGraphState] = useState<VisibleGraphState>(() => ({
+    rootIdentity,
+    viewIdentity: {},
+    graph: rootOverview,
+  }));
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [flowGraph, setFlowGraph] = useState<FlowGraphState>({
+    rootIdentity: null,
+    viewIdentity: null,
+    nodes: [],
+    edges: [],
+  });
+  const [pendingAction, setPendingAction] = useState<PendingAction>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const currentPaperId = useRef(paperId);
+  const currentRootIdentity = useRef(rootIdentity);
+  const appliedRootIdentity = useRef(rootIdentity);
+  const operationId = useRef(0);
+  const layoutId = useRef(0);
+
+  currentPaperId.current = paperId;
+  currentRootIdentity.current = rootIdentity;
+  const rootIsCurrent = visibleGraphState.rootIdentity === rootIdentity;
+  const visibleGraph = rootIsCurrent ? visibleGraphState.graph : rootOverview;
+  const currentViewIdentity = useRef<ViewIdentity | null>(visibleGraphState.viewIdentity);
+  currentViewIdentity.current = rootIsCurrent ? visibleGraphState.viewIdentity : null;
+  const flowIsCurrent = rootIsCurrent
+    && flowGraph.rootIdentity === rootIdentity
+    && flowGraph.viewIdentity === visibleGraphState.viewIdentity;
+
+  useEffect(() => {
+    if (appliedRootIdentity.current === rootIdentity) {
+      return;
+    }
+    appliedRootIdentity.current = rootIdentity;
+    operationId.current += 1;
+    setVisibleGraphState({ rootIdentity, viewIdentity: {}, graph: rootOverview });
+    setSelectedNodeId(null);
+    setPendingAction(null);
+    setErrorMessage(null);
+  }, [rootIdentity, rootOverview]);
+
+  useEffect(() => {
+    const requestId = ++layoutId.current;
+    const layoutRootIdentity = visibleGraphState.rootIdentity;
+    const layoutViewIdentity = visibleGraphState.viewIdentity;
+
+    void layoutGraph(visibleGraphState.graph.nodes, visibleGraphState.graph.edges)
+      .then((nextFlowGraph) => {
+        if (
+          layoutId.current === requestId
+          && currentRootIdentity.current === layoutRootIdentity
+          && currentViewIdentity.current === layoutViewIdentity
+        ) {
+          setFlowGraph({
+            rootIdentity: layoutRootIdentity,
+            viewIdentity: layoutViewIdentity,
+            ...nextFlowGraph,
+          });
+        }
+      })
+      .catch(() => {
+        if (
+          layoutId.current === requestId
+          && currentRootIdentity.current === layoutRootIdentity
+          && currentViewIdentity.current === layoutViewIdentity
+        ) {
+          setErrorMessage('Unable to arrange the graph.');
+        }
+      });
+  }, [visibleGraphState]);
+
+  const selectedNode = selectedNodeId === null || !rootIsCurrent
+    ? null
+    : visibleGraph.nodes.find((node) => node.id === selectedNodeId) ?? null;
+  const elementsById = new Map(documentElements.map((element) => [element.id, element]));
+
+  const selectNode: NodeMouseHandler = (_event, flowNode) => {
+    const node = visibleGraph.nodes.find(({ id }) => id === flowNode.id);
+    if (node === undefined || pendingAction !== null) {
+      return;
+    }
+
+    const requestId = ++operationId.current;
+    const selectedPaperId = paperId;
+    const selectedRootIdentity = rootIdentity;
+    setSelectedNodeId(node.id);
+    setPendingAction('focus');
+    setErrorMessage(null);
+
+    void paperApi.getGraphSubgraph(selectedPaperId, node.id, 1)
+      .then((subgraph) => {
+        if (
+          operationId.current !== requestId
+          || currentPaperId.current !== selectedPaperId
+          || currentRootIdentity.current !== selectedRootIdentity
+        ) {
+          return;
+        }
+        setVisibleGraphState({
+          rootIdentity: selectedRootIdentity,
+          viewIdentity: {},
+          graph: focusGraph(subgraph, node.id),
+        });
+        setPendingAction(null);
+      })
+      .catch((error: unknown) => {
+        if (
+          operationId.current !== requestId
+          || currentPaperId.current !== selectedPaperId
+          || currentRootIdentity.current !== selectedRootIdentity
+        ) {
+          return;
+        }
+        setPendingAction(null);
+        setErrorMessage(publicErrorMessage(error, 'Unable to load the focused graph.'));
+      });
+  };
+
+  const buildGraph = (kind: Exclude<PendingAction, 'focus'>) => {
+    if (pendingAction !== null) {
+      return;
+    }
+
+    const requestId = ++operationId.current;
+    const selectedPaperId = paperId;
+    const selectedRootIdentity = rootIdentity;
+    setPendingAction(kind);
+    setErrorMessage(null);
+    const request = kind === 'core' ? buildCoreGraph() : buildDeepGraph();
+
+    void request
+      .then((nextGraph) => {
+        if (
+          operationId.current !== requestId
+          || currentPaperId.current !== selectedPaperId
+          || currentRootIdentity.current !== selectedRootIdentity
+        ) {
+          return;
+        }
+        if (nextGraph === null) {
+          setPendingAction(null);
+          return;
+        }
+        setVisibleGraphState({
+          rootIdentity: selectedRootIdentity,
+          viewIdentity: {},
+          graph: overviewGraph(nextGraph),
+        });
+        setSelectedNodeId(null);
+        setPendingAction(null);
+      })
+      .catch((error: unknown) => {
+        if (
+          operationId.current !== requestId
+          || currentPaperId.current !== selectedPaperId
+          || currentRootIdentity.current !== selectedRootIdentity
+        ) {
+          return;
+        }
+        setPendingAction(null);
+        setErrorMessage(publicErrorMessage(
+          error,
+          kind === 'core' ? 'Unable to build the core graph.' : 'Unable to build the deep graph.',
+        ));
+      });
+  };
+
+  return (
+    <section className="graph-panel" aria-labelledby="graph-panel-title">
+      <header className="graph-panel__header">
+        <div>
+          <p className="graph-panel__eyebrow">Evidence graph</p>
+          <h2 id="graph-panel-title">Paper connections</h2>
+        </div>
+        <div className="graph-panel__actions" aria-label="Graph build actions">
+          <button
+            type="button"
+            onClick={() => buildGraph('core')}
+            disabled={pendingAction !== null}
+          >
+            {pendingAction === 'core' ? 'Building core graph…' : 'Build core graph'}
+          </button>
+          <button
+            type="button"
+            onClick={() => buildGraph('deep')}
+            disabled={pendingAction !== null}
+          >
+            {pendingAction === 'deep' ? 'Building deep graph…' : 'Build deep graph'}
+          </button>
+        </div>
+      </header>
+
+      {errorMessage !== null && <p className="graph-panel__error" role="alert">{errorMessage}</p>}
+      {pendingAction === 'focus' && <p className="graph-panel__status">Loading focused graph…</p>}
+
+      {visibleGraph.nodes.length === 0 ? (
+        <div className="graph-panel__empty">
+          <p>No graph connections are available yet.</p>
+          <p>Build a core graph when the paper has finished processing.</p>
+        </div>
+      ) : (
+        <div className="graph-panel__canvas" aria-label="Paper graph canvas">
+          <ReactFlow
+            nodes={flowIsCurrent ? flowGraph.nodes : []}
+            edges={flowIsCurrent ? flowGraph.edges : []}
+            onNodeClick={selectNode}
+            fitView
+            nodesDraggable={false}
+            nodesConnectable={false}
+            elementsSelectable
+            proOptions={{ hideAttribution: true }}
+          >
+            <Background gap={18} size={1} />
+            <Controls showInteractive={false} />
+          </ReactFlow>
+        </div>
+      )}
+
+      <aside className="graph-panel__inspector" aria-live="polite">
+        {selectedNode === null ? (
+          <p>Select a graph node to inspect its evidence.</p>
+        ) : (
+          <>
+            <p className="graph-panel__eyebrow">{selectedNode.node_type}</p>
+            <h3>{selectedNode.name}</h3>
+            <p>{selectedNode.summary}</p>
+            <div className="graph-panel__evidence" aria-label="Node evidence">
+              {selectedNode.evidence_element_ids.length === 0 ? (
+                <p>No linked evidence is available for this node.</p>
+              ) : selectedNode.evidence_element_ids.map((elementId, index) => {
+                const element = elementsById.get(elementId);
+                const located = element !== undefined && hasValidSourceLocation(element);
+                const label = located
+                  ? `Evidence ${index + 1}`
+                  : `Evidence ${index + 1}: No source location`;
+
+                return (
+                  <button
+                    key={elementId}
+                    type="button"
+                    disabled={!located}
+                    onClick={() => onSelectEvidence(elementId)}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          </>
+        )}
+      </aside>
+    </section>
+  );
+}

@@ -1,8 +1,14 @@
 from dataclasses import dataclass
+from typing import Literal
+from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from paper_agent.domain import (
+    AgentMessageRole,
+    AgentMode,
+    Conversation,
+    ConversationMessage,
     DocumentElement,
     GraphEdge,
     GraphNode,
@@ -171,6 +177,98 @@ class BoundingBoxResponse(BaseModel):
     y0: float
     x1: float
     y1: float
+
+
+class AgentMessageRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    content: str = Field(min_length=1)
+    mode: AgentMode
+    conversation_id: UUID | None = None
+
+    @field_validator("content")
+    @classmethod
+    def _reject_blank_content(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("content must not be blank")
+        return value
+
+class CitationResponse(BaseModel):
+    id: str
+    kind: str
+    page_number: int
+    bbox: BoundingBoxResponse
+
+    @classmethod
+    def from_element(cls, element: DocumentElement) -> "CitationResponse":
+        if (
+            element.location_status != "located"
+            or element.page_number is None
+            or element.bbox is None
+        ):
+            raise ValueError("citation element must be located")
+        return cls(
+            id=element.id,
+            kind=element.kind,
+            page_number=element.page_number,
+            bbox=BoundingBoxResponse(
+                x0=element.bbox.x0,
+                y0=element.bbox.y0,
+                x1=element.bbox.x1,
+                y1=element.bbox.y1,
+            ),
+        )
+
+
+class AgentMessageResponse(BaseModel):
+    conversation_id: str
+    message_id: str
+    status: Literal["grounded", "insufficient_evidence"]
+    paper_answer: str
+    background_explanation: str | None
+    citations: list[CitationResponse]
+
+
+class ConversationMessageResponse(BaseModel):
+    id: str
+    role: AgentMessageRole
+    content: str
+    citations: list[CitationResponse]
+
+    @classmethod
+    def from_message(
+        cls, message: ConversationMessage, citations: list[CitationResponse]
+    ) -> "ConversationMessageResponse":
+        return cls(
+            id=message.id,
+            role=message.role,
+            content=message.content,
+            citations=citations,
+        )
+
+
+class ConversationResponse(BaseModel):
+    id: str
+    paper_id: str
+    mode: AgentMode
+    messages: list[ConversationMessageResponse]
+
+    @classmethod
+    def from_conversation(
+        cls,
+        conversation: Conversation,
+        messages: list[ConversationMessageResponse],
+    ) -> "ConversationResponse":
+        return cls(
+            id=conversation.id,
+            paper_id=conversation.paper_id,
+            mode=conversation.mode,
+            messages=messages,
+        )
+
+
+class AgentHealthResponse(BaseModel):
+    status: str = "ok"
 
 
 class PageResponse(BaseModel):

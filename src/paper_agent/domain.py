@@ -13,6 +13,16 @@ class ProcessingStatus(StrEnum):
     failed = "failed"
 
 
+class AgentMode(StrEnum):
+    paper_only = "paper_only"
+    external_knowledge = "external_knowledge"
+
+
+class AgentMessageRole(StrEnum):
+    user = "user"
+    assistant = "assistant"
+
+
 class GraphStage(StrEnum):
     core = "stage2"
     deep = "stage3"
@@ -153,6 +163,24 @@ class Paper:
     stored_filename: str
     status: ProcessingStatus = ProcessingStatus.queued
     source_published: bool = False
+
+
+@dataclass(frozen=True)
+class Conversation:
+    paper_id: str
+    mode: AgentMode
+    id: str = field(default_factory=lambda: str(uuid4()))
+
+
+@dataclass(frozen=True)
+class ConversationMessage:
+    conversation_id: str
+    paper_id: str
+    role: AgentMessageRole
+    content: str
+    citation_element_ids: tuple[str, ...] = ()
+    sequence: int | None = None
+    id: str = field(default_factory=lambda: str(uuid4()))
 
 
 @dataclass(frozen=True)

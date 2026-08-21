@@ -5,6 +5,9 @@ from sqlalchemy import delete, func, insert, select, update
 from sqlalchemy.engine import Engine
 
 from paper_agent.database import (
+    conversation_message_citations,
+    conversation_messages,
+    conversations,
     document_elements,
     graph_edge_evidence,
     graph_edges,
@@ -18,7 +21,11 @@ from paper_agent.database import (
     sections,
 )
 from paper_agent.domain import (
+    AgentMessageRole,
+    AgentMode,
     BoundingBox,
+    Conversation,
+    ConversationMessage,
     DocumentElement,
     GraphEdge,
     GraphNode,
@@ -40,6 +47,10 @@ class PageReferenceError(ValueError):
 
 class GraphReferenceError(ValueError):
     """Raised when graph evidence or endpoints are not owned by a paper."""
+
+
+class ConversationReferenceError(ValueError):
+    """Raised when a conversation message references records outside its paper."""
 
 
 class PaperRepository:
@@ -146,6 +157,136 @@ class PaperRepository:
         with self.engine.connect() as connection:
             row = connection.execute(select(papers).where(papers.c.id == paper_id)).mappings().one_or_none()
         return None if row is None else self._paper_from_row(row)
+
+    def list_papers(self) -> tuple[Paper, ...]:
+        with self.engine.connect() as connection:
+            rows = connection.execute(
+                select(papers).order_by(papers.c.original_filename.asc(), papers.c.id.asc())
+            ).mappings().all()
+        return tuple(self._paper_from_row(row) for row in rows)
+
+    def create_conversation(self, conversation: Conversation) -> Conversation:
+        with self.engine.begin() as connection:
+            connection.execute(
+                insert(conversations).values(
+                    id=conversation.id,
+                    paper_id=conversation.paper_id,
+                    mode=conversation.mode.value,
+                )
+            )
+        return conversation
+
+    def get_conversation(self, paper_id: str, conversation_id: str) -> Conversation | None:
+        with self.engine.connect() as connection:
+            row = connection.execute(
+                select(conversations)
+                .where(conversations.c.paper_id == paper_id)
+                .where(conversations.c.id == conversation_id)
+            ).mappings().one_or_none()
+        return None if row is None else self._conversation_from_row(row)
+
+    def append_conversation_message(self, message: ConversationMessage) -> ConversationMessage:
+        if message.role is AgentMessageRole.user and message.citation_element_ids:
+            raise ConversationReferenceError("user messages cannot cite source elements")
+        if len(set(message.citation_element_ids)) != len(message.citation_element_ids):
+            raise ConversationReferenceError("assistant citations must not contain duplicates")
+        with self.engine.begin() as connection:
+            self._require_owned_conversation(
+                connection, message.paper_id, message.conversation_id
+            )
+            self._require_located_conversation_citations(
+                connection, message.paper_id, message.citation_element_ids
+            )
+            sequence = self._next_conversation_sequence(connection, message.conversation_id)
+            connection.execute(
+                insert(conversation_messages).values(
+                    id=message.id,
+                    conversation_id=message.conversation_id,
+                    paper_id=message.paper_id,
+                    role=message.role.value,
+                    content=message.content,
+                    sequence=sequence,
+                )
+            )
+            if message.citation_element_ids:
+                connection.execute(
+                    insert(conversation_message_citations),
+                    [
+                        {
+                            "paper_id": message.paper_id,
+                            "message_id": message.id,
+                            "element_id": element_id,
+                        }
+                        for element_id in message.citation_element_ids
+                    ],
+                )
+        return replace(message, sequence=sequence)
+
+    def get_conversation_messages(
+        self,
+        paper_id: str,
+        conversation_id: str,
+        *,
+        limit: int | None = None,
+    ) -> tuple[ConversationMessage, ...]:
+        if limit is not None and limit < 1:
+            raise ValueError("conversation message limit must be positive")
+
+        message_scope = (
+            select(conversation_messages)
+            .where(conversation_messages.c.paper_id == paper_id)
+            .where(conversation_messages.c.conversation_id == conversation_id)
+        )
+        if limit is not None:
+            message_scope = message_scope.order_by(
+                conversation_messages.c.sequence.desc()
+            ).limit(limit)
+        selected_messages = message_scope.subquery()
+
+        with self.engine.connect() as connection:
+            rows = tuple(
+                connection.execute(
+                    select(selected_messages).order_by(selected_messages.c.sequence)
+                ).mappings()
+            )
+            if not rows:
+                return ()
+
+            citation_rows = connection.execute(
+                select(
+                    conversation_message_citations.c.message_id,
+                    conversation_message_citations.c.element_id,
+                )
+                .select_from(
+                    conversation_message_citations.join(
+                        selected_messages,
+                        (
+                            conversation_message_citations.c.paper_id
+                            == selected_messages.c.paper_id
+                        )
+                        & (
+                            conversation_message_citations.c.message_id
+                            == selected_messages.c.id
+                        ),
+                    )
+                )
+                .order_by(
+                    conversation_message_citations.c.message_id,
+                    conversation_message_citations.c.element_id,
+                )
+            ).mappings()
+            citations_by_message: dict[str, list[str]] = {}
+            for citation_row in citation_rows:
+                citations_by_message.setdefault(
+                    citation_row["message_id"], []
+                ).append(citation_row["element_id"])
+
+            return tuple(
+                self._conversation_message_from_row(
+                    row, tuple(citations_by_message.get(row["id"], ()))
+                )
+                for row in rows
+            )
 
     def save_page(self, paper_id: str, page: Page) -> Page:
         with self.engine.begin() as connection:
@@ -321,6 +462,22 @@ class PaperRepository:
             rows = connection.execute(
                 select(document_elements)
                 .where(document_elements.c.paper_id == paper_id)
+                .order_by(document_elements.c.order_index, document_elements.c.id)
+            ).mappings()
+            return tuple(self._element_from_row(row) for row in rows)
+
+    def get_located_elements_by_ids(
+        self, paper_id: str, element_ids: tuple[str, ...]
+    ) -> tuple[DocumentElement, ...]:
+        unique_ids = tuple(dict.fromkeys(element_ids))
+        if not unique_ids:
+            return ()
+        with self.engine.connect() as connection:
+            rows = connection.execute(
+                select(document_elements)
+                .where(document_elements.c.paper_id == paper_id)
+                .where(document_elements.c.location_status == "located")
+                .where(document_elements.c.id.in_(unique_ids))
                 .order_by(document_elements.c.order_index, document_elements.c.id)
             ).mappings()
             return tuple(self._element_from_row(row) for row in rows)
@@ -541,6 +698,45 @@ class PaperRepository:
             current = connection.execute(
                 select(func.max(table.c.order_index)).where(table.c.paper_id == paper_id)
             ).scalar_one()
+        return 0 if current is None else current + 1
+
+    @staticmethod
+    def _require_owned_conversation(connection, paper_id: str, conversation_id: str) -> None:
+        conversation = connection.execute(
+            select(conversations.c.id)
+            .where(conversations.c.paper_id == paper_id)
+            .where(conversations.c.id == conversation_id)
+        ).scalar_one_or_none()
+        if conversation is None:
+            raise ConversationReferenceError("conversation does not belong to paper")
+
+    @staticmethod
+    def _require_located_conversation_citations(
+        connection, paper_id: str, element_ids: tuple[str, ...]
+    ) -> None:
+        expected = set(element_ids)
+        if not expected:
+            return
+        found = set(
+            connection.execute(
+                select(document_elements.c.id)
+                .where(document_elements.c.paper_id == paper_id)
+                .where(document_elements.c.location_status == "located")
+                .where(document_elements.c.id.in_(expected))
+            ).scalars()
+        )
+        if found != expected:
+            raise ConversationReferenceError(
+                "citation must be a located element owned by paper"
+            )
+
+    @staticmethod
+    def _next_conversation_sequence(connection, conversation_id: str) -> int:
+        current = connection.execute(
+            select(func.max(conversation_messages.c.sequence)).where(
+                conversation_messages.c.conversation_id == conversation_id
+            )
+        ).scalar_one()
         return 0 if current is None else current + 1
 
     @staticmethod
@@ -850,6 +1046,26 @@ class PaperRepository:
             stored_filename=row["stored_filename"],
             status=ProcessingStatus(row["status"]),
             source_published=bool(row["source_published"]),
+        )
+
+    @staticmethod
+    def _conversation_from_row(row) -> Conversation:
+        return Conversation(
+            id=row["id"], paper_id=row["paper_id"], mode=AgentMode(row["mode"])
+        )
+
+    @staticmethod
+    def _conversation_message_from_row(
+        row, citation_element_ids: tuple[str, ...]
+    ) -> ConversationMessage:
+        return ConversationMessage(
+            id=row["id"],
+            conversation_id=row["conversation_id"],
+            paper_id=row["paper_id"],
+            role=AgentMessageRole(row["role"]),
+            content=row["content"],
+            citation_element_ids=citation_element_ids,
+            sequence=row["sequence"],
         )
 
     @staticmethod

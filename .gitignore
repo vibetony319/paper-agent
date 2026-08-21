@@ -17,6 +17,13 @@ data/
 node_modules/
 .next/
 dist/
+web/.npm-cache/
+web/node_modules/
+web/dist/
+
+# Isolated feature workspaces
+.worktrees/
+.superpowers/sdd/2026-08-13-web-ui/
 
 # Editor and operating-system files
 .DS_Store
