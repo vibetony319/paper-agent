@@ -27,27 +27,15 @@ class ModelProfileRepository:
 
     def create(self, profile: ModelProfile) -> ModelProfile:
         with self.engine.begin() as connection:
-            connection.execute(
-                insert(model_profiles).values(
-                    id=profile.id,
-                    display_name=profile.display_name,
-                    base_url=profile.base_url,
-                    model_name=profile.model_name,
-                    secret_ref=profile.secret_ref,
-                    enabled=profile.enabled,
-                    is_default=profile.is_default,
-                    revision=profile.revision,
-                    basic_chat=profile.capabilities.basic_chat,
-                    structured_output=profile.capabilities.structured_output,
-                    tool_calling=profile.capabilities.tool_calling,
-                    capabilities_checked_at=_serialize_datetime(
-                        profile.capabilities.checked_at
-                    ),
-                    created_at=_serialize_datetime(profile.created_at),
-                    updated_at=_serialize_datetime(profile.updated_at),
-                    deleted_at=_serialize_datetime(profile.deleted_at),
-                )
-            )
+            self._insert(connection, profile)
+        return profile
+
+    def create_replacing_default(self, profile: ModelProfile) -> ModelProfile:
+        if not profile.is_default:
+            raise ValueError("replacement profile must be default")
+        with self.engine.begin() as connection:
+            self._clear_other_defaults(connection, profile.id, profile.updated_at)
+            self._insert(connection, profile)
         return profile
 
     def get(self, profile_id: str) -> ModelProfile | None:
@@ -142,6 +130,19 @@ class ModelProfileRepository:
             return self._require_profile(connection, profile_id)
 
     def soft_delete(self, profile_id: str, *, expected_revision: int) -> ModelProfile:
+        return self.soft_delete_and_set_default(
+            profile_id,
+            expected_revision=expected_revision,
+            replacement_profile_id=None,
+        )
+
+    def soft_delete_and_set_default(
+        self,
+        profile_id: str,
+        *,
+        expected_revision: int,
+        replacement_profile_id: str | None,
+    ) -> ModelProfile:
         now = datetime.now(UTC)
         with self.engine.begin() as connection:
             result = connection.execute(
@@ -157,7 +158,44 @@ class ModelProfileRepository:
                 )
             )
             self._require_one_row(result.rowcount)
+            if replacement_profile_id is not None:
+                replacement = connection.execute(
+                    update(model_profiles)
+                    .where(model_profiles.c.id == replacement_profile_id)
+                    .where(model_profiles.c.enabled.is_(True))
+                    .where(model_profiles.c.deleted_at.is_(None))
+                    .values(
+                        is_default=True,
+                        revision=model_profiles.c.revision + 1,
+                        updated_at=_serialize_datetime(now),
+                    )
+                )
+                self._require_one_row(replacement.rowcount)
             return self._require_profile(connection, profile_id)
+
+    @staticmethod
+    def _insert(connection: Connection, profile: ModelProfile) -> None:
+        connection.execute(
+            insert(model_profiles).values(
+                id=profile.id,
+                display_name=profile.display_name,
+                base_url=profile.base_url,
+                model_name=profile.model_name,
+                secret_ref=profile.secret_ref,
+                enabled=profile.enabled,
+                is_default=profile.is_default,
+                revision=profile.revision,
+                basic_chat=profile.capabilities.basic_chat,
+                structured_output=profile.capabilities.structured_output,
+                tool_calling=profile.capabilities.tool_calling,
+                capabilities_checked_at=_serialize_datetime(
+                    profile.capabilities.checked_at
+                ),
+                created_at=_serialize_datetime(profile.created_at),
+                updated_at=_serialize_datetime(profile.updated_at),
+                deleted_at=_serialize_datetime(profile.deleted_at),
+            )
+        )
 
     @staticmethod
     def _require_one_row(rowcount: int) -> None:

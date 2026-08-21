@@ -1,8 +1,16 @@
 from dataclasses import dataclass
-from typing import Literal
+from datetime import datetime
+from typing import Literal, TYPE_CHECKING
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    HttpUrl,
+    field_validator,
+    model_validator,
+)
 
 from paper_agent.domain import (
     AgentMessageRole,
@@ -20,6 +28,10 @@ from paper_agent.domain import (
     ProcessingStatus,
     Section,
 )
+
+if TYPE_CHECKING:
+    from paper_agent.model_profiles import ModelCapabilities
+    from paper_agent.services.model_profiles import ModelProfileView
 
 
 @dataclass(frozen=True)
@@ -269,6 +281,114 @@ class ConversationResponse(BaseModel):
 
 class AgentHealthResponse(BaseModel):
     status: str = "ok"
+
+
+class ModelProfileCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    display_name: str = Field(min_length=1, max_length=80)
+    base_url: HttpUrl
+    model_name: str = Field(min_length=1, max_length=200)
+    api_key: str | None = Field(default=None, max_length=4096)
+    enabled: bool = True
+    is_default: bool = False
+
+    @field_validator("display_name", "model_name")
+    @classmethod
+    def _normalize_required_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("value must not be blank")
+        return normalized
+
+
+class ModelProfilePatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    display_name: str | None = Field(default=None, min_length=1, max_length=80)
+    base_url: HttpUrl | None = None
+    model_name: str | None = Field(default=None, min_length=1, max_length=200)
+    api_key: str | None = Field(default=None, max_length=4096)
+    enabled: bool | None = None
+    is_default: bool | None = None
+
+    @field_validator("display_name", "model_name")
+    @classmethod
+    def _normalize_optional_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("value must not be blank")
+        return normalized
+
+    @model_validator(mode="after")
+    def _require_explicit_non_null_changes(self) -> "ModelProfilePatchRequest":
+        if not self.model_fields_set:
+            raise ValueError("at least one change is required")
+        nullable = {"api_key"}
+        if any(
+            field_name not in nullable and getattr(self, field_name) is None
+            for field_name in self.model_fields_set
+        ):
+            raise ValueError("profile fields cannot be null")
+        return self
+
+
+class ModelCapabilitiesResponse(BaseModel):
+    basic_chat: bool
+    structured_output: bool
+    tool_calling: bool
+    checked_at: datetime | None
+
+    @classmethod
+    def from_capabilities(
+        cls, capabilities: "ModelCapabilities"
+    ) -> "ModelCapabilitiesResponse":
+        return cls(
+            basic_chat=capabilities.basic_chat,
+            structured_output=capabilities.structured_output,
+            tool_calling=capabilities.tool_calling,
+            checked_at=capabilities.checked_at,
+        )
+
+
+class ModelProfileResponse(BaseModel):
+    id: UUID
+    display_name: str
+    base_url: str
+    model_name: str
+    enabled: bool
+    is_default: bool
+    revision: int
+    has_api_key: bool
+    api_key_mask: str | None
+    capabilities: ModelCapabilitiesResponse
+    read_only: bool
+
+    @classmethod
+    def from_view(cls, view: "ModelProfileView") -> "ModelProfileResponse":
+        profile = view.profile
+        return cls(
+            id=UUID(profile.id),
+            display_name=profile.display_name,
+            base_url=profile.base_url,
+            model_name=profile.model_name,
+            enabled=profile.enabled,
+            is_default=profile.is_default,
+            revision=profile.revision,
+            has_api_key=view.has_api_key,
+            api_key_mask=view.api_key_mask,
+            capabilities=ModelCapabilitiesResponse.from_capabilities(
+                profile.capabilities
+            ),
+            read_only=view.read_only,
+        )
+
+
+class ModelProfileErrorResponse(BaseModel):
+    code: str
+    detail: str
 
 
 class PageResponse(BaseModel):

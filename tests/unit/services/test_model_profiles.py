@@ -6,6 +6,7 @@ import pytest
 from paper_agent.model_profile_storage import ModelProfileRepository, ModelProfileRevisionError
 from paper_agent.model_profiles import ModelCapabilities, ModelProfile, ModelProfileChanges
 from paper_agent.services.model_profiles import ModelProfileService
+from paper_agent.services.model_secrets import ModelSecretStore
 from paper_agent.services.reasoning_clients import ENVIRONMENT_FALLBACK_PROFILE_ID
 
 
@@ -205,3 +206,80 @@ def test_capability_test_rejects_a_revision_changed_during_its_probes(repository
     assert current.display_name == "Edited while testing"
     assert current.revision == 2
     assert current.capabilities == ModelCapabilities()
+
+
+def test_failed_creation_removes_the_newly_written_secret(repository, tmp_path, monkeypatch):
+    """Breaks if a database create failure leaves an orphaned plaintext key."""
+    store = ModelSecretStore(tmp_path / "secrets.json")
+    service = ModelProfileService(repository, StaticProvider(None), store)
+    captured_profile_id: list[str] = []
+
+    def fail_create(profile):
+        captured_profile_id.append(profile.id)
+        raise RuntimeError("database-create-secret")
+
+    monkeypatch.setattr(repository, "create", fail_create)
+
+    with pytest.raises(RuntimeError):
+        service.create_profile(
+            display_name="Local",
+            base_url="http://127.0.0.1:8000/v1",
+            model_name="model",
+            api_key="new-secret",
+        )
+
+    assert len(captured_profile_id) == 1
+    assert store.get(f"model-profile:{captured_profile_id[0]}") == ""
+
+
+@pytest.mark.parametrize("replacement", ["new-secret", None])
+def test_failed_update_restores_secret_state(
+    repository, tmp_path, monkeypatch, replacement
+):
+    """Breaks if a failed CAS overwrites or clears the current profile secret."""
+    store = ModelSecretStore(tmp_path / "secrets.json")
+    profile = _profile()
+    secret_ref = store.set(profile.id, "current-secret")
+    profile = repository.create(_profile(id=profile.id, secret_ref=secret_ref))
+    service = ModelProfileService(repository, StaticProvider(None), store)
+
+    def fail_update(*_args, **_kwargs):
+        raise ModelProfileRevisionError()
+
+    monkeypatch.setattr(repository, "update", fail_update)
+
+    with pytest.raises(ModelProfileRevisionError):
+        service.update_profile(
+            profile.id,
+            expected_revision=profile.revision,
+            changes=ModelProfileChanges(display_name="Changed"),
+            api_key=replacement,
+        )
+
+    assert store.get(secret_ref) == "current-secret"
+    assert repository.get(profile.id) == profile
+
+
+def test_failed_delete_restores_secret_and_successful_delete_removes_it(
+    repository, tmp_path, monkeypatch
+):
+    """Breaks if delete compensation loses a live key or successful deletion retains it."""
+    store = ModelSecretStore(tmp_path / "secrets.json")
+    profile = _profile(is_default=True)
+    secret_ref = store.set(profile.id, "delete-secret")
+    profile = repository.create(_profile(id=profile.id, secret_ref=secret_ref, is_default=True))
+    service = ModelProfileService(repository, StaticProvider(None), store)
+    real_soft_delete = repository.soft_delete
+
+    def fail_delete(*_args, **_kwargs):
+        raise ModelProfileRevisionError()
+
+    monkeypatch.setattr(repository, "soft_delete", fail_delete)
+    with pytest.raises(ModelProfileRevisionError):
+        service.delete_profile(profile.id, expected_revision=profile.revision)
+    assert store.get(secret_ref) == "delete-secret"
+    assert repository.get(profile.id) == profile
+
+    monkeypatch.setattr(repository, "soft_delete", real_soft_delete)
+    service.delete_profile(profile.id, expected_revision=profile.revision)
+    assert store.get(secret_ref) == ""

@@ -87,6 +87,13 @@ class ReasoningClientProvider:
     def is_read_only_profile(self, profile_id: str) -> bool:
         return is_read_only_model_profile(profile_id)
 
+    def environment_fallback_profile(self) -> ModelProfile | None:
+        if self.reasoning_model is None or any(
+            profile.enabled for profile in self.repository.list_active()
+        ):
+            return None
+        return self._environment_fallback()[0]
+
     def _active_profile_and_config(self, profile_id: str) -> tuple[ModelProfile, VllmModelConfig]:
         if profile_id == ENVIRONMENT_FALLBACK_PROFILE_ID:
             return self._environment_fallback()
