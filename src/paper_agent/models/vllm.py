@@ -26,9 +26,22 @@ class VllmResponseError(RuntimeError):
 class VllmChatClient:
     def __init__(self, config: VllmModelConfig, client: OpenAI | None = None) -> None:
         self.config = config
-        self.client = client if client is not None else _create_openai_client(config)
+        if client is not None:
+            self.client = client
+            return
+        failed = False
+        transport: OpenAI | None = None
+        try:
+            transport = _create_openai_client(config)
+        except Exception:
+            failed = True
+        if failed:
+            raise VllmResponseError("vLLM chat client initialization failed.")
+        self.client = transport
 
     def complete(self, messages: list[dict[str, str]]) -> str:
+        failed = False
+        content: object = None
         try:
             response = self.client.chat.completions.create(
                 model=self.config.model,
@@ -38,11 +51,15 @@ class VllmChatClient:
             content = response.choices[0].message.content
             if not isinstance(content, str) or not content.strip():
                 raise TypeError
-            return content
         except Exception:
-            raise VllmResponseError("vLLM could not complete text generation.") from None
+            failed = True
+        if failed:
+            raise VllmResponseError("vLLM could not complete text generation.")
+        return content
 
     def stream_text(self, messages: list[dict[str, str]]) -> Iterator[str]:
+        failed = False
+        yielded_text = False
         try:
             stream = self.client.chat.completions.create(
                 model=self.config.model,
@@ -56,9 +73,14 @@ class VllmChatClient:
                     continue
                 if not isinstance(delta, str):
                     raise TypeError
+                if not delta:
+                    continue
+                yielded_text = True
                 yield delta
         except Exception:
-            raise VllmResponseError("vLLM could not stream text generation.") from None
+            failed = True
+        if failed or not yielded_text:
+            raise VllmResponseError("vLLM could not stream text generation.")
 
 
 @dataclass(frozen=True)
@@ -81,11 +103,24 @@ class VllmToolCallingError(RuntimeError):
 class VllmStructuredClient:
     def __init__(self, config: VllmModelConfig, client: OpenAI | None = None) -> None:
         self.config = config
-        self.client = client if client is not None else _create_openai_client(config)
+        if client is not None:
+            self.client = client
+            return
+        failed = False
+        transport: OpenAI | None = None
+        try:
+            transport = _create_openai_client(config)
+        except Exception:
+            failed = True
+        if failed:
+            raise VllmResponseError("vLLM structured client initialization failed.")
+        self.client = transport
 
     def generate_json(
         self, *, system_prompt: str, user_prompt: str, schema_name: str, schema: dict
     ) -> dict:
+        failed = False
+        result: object = None
         try:
             response = self.client.chat.completions.create(
                 model=self.config.model,
@@ -104,8 +139,10 @@ class VllmStructuredClient:
                 },
             )
             result = json.loads(response.choices[0].message.content)
-        except Exception as error:
-            raise VllmResponseError("vLLM returned an invalid structured response.") from error
+        except Exception:
+            failed = True
+        if failed:
+            raise VllmResponseError("vLLM returned an invalid structured response.")
         if not isinstance(result, dict):
             raise VllmResponseError("vLLM structured response must be a JSON object.")
         return result
@@ -114,10 +151,13 @@ class VllmStructuredClient:
 class VllmToolCallingClient:
     def __init__(self, config: VllmModelConfig, client: OpenAI | None = None) -> None:
         self.config = config
+        failed = False
         try:
             self.client = client if client is not None else _create_openai_client(config)
         except Exception:
-            raise VllmToolCallingError("vLLM tool client initialization failed.") from None
+            failed = True
+        if failed:
+            raise VllmToolCallingError("vLLM tool client initialization failed.")
 
     def request_tool_turn(
         self,
@@ -126,6 +166,9 @@ class VllmToolCallingClient:
         tools: tuple[dict[str, object]],
         tool_choice: str | dict[str, object],
     ) -> VllmToolTurn:
+        failed = False
+        content: str | None = None
+        tool_calls: tuple[VllmToolCall, ...] = ()
         try:
             response = self.client.chat.completions.create(
                 model=self.config.model,
@@ -144,7 +187,9 @@ class VllmToolCallingClient:
                 raw_tool_calls = ()
             tool_calls = tuple(self._parse_tool_call(tool_call) for tool_call in raw_tool_calls)
         except Exception:
-            raise VllmToolCallingError("vLLM returned an invalid tool response.") from None
+            failed = True
+        if failed:
+            raise VllmToolCallingError("vLLM returned an invalid tool response.")
         return VllmToolTurn(content=content, tool_calls=tool_calls)
 
     def generate_json_messages(
@@ -154,6 +199,8 @@ class VllmToolCallingClient:
         schema_name: str,
         schema: dict[str, object],
     ) -> dict[str, object]:
+        failed = False
+        result: object = None
         try:
             response = self.client.chat.completions.create(
                 model=self.config.model,
@@ -172,7 +219,9 @@ class VllmToolCallingClient:
             if not isinstance(result, dict):
                 raise TypeError
         except Exception:
-            raise VllmToolCallingError("vLLM returned an invalid final JSON response.") from None
+            failed = True
+        if failed:
+            raise VllmToolCallingError("vLLM returned an invalid final JSON response.")
         return result
 
     def validate_tool_calling(self) -> None:
@@ -189,6 +238,8 @@ class VllmToolCallingClient:
                 "strict": True,
             },
         }
+        tool_error: VllmToolCallingError | None = None
+        failed = False
         try:
             turn = self.request_tool_turn(
                 messages=[
@@ -206,13 +257,21 @@ class VllmToolCallingClient:
                 or turn.tool_calls[0].arguments != {}
             ):
                 raise VllmToolCallingError("vLLM tool calling health validation failed.")
-        except VllmToolCallingError:
-            raise
+        except VllmToolCallingError as error:
+            tool_error = error
         except Exception:
-            raise VllmToolCallingError("vLLM tool calling health validation failed.") from None
+            failed = True
+        if tool_error is not None:
+            raise tool_error
+        if failed:
+            raise VllmToolCallingError("vLLM tool calling health validation failed.")
 
     @staticmethod
     def _parse_tool_call(tool_call: object) -> VllmToolCall:
+        failed = False
+        call_id: object = None
+        name: object = None
+        arguments: object = None
         try:
             call_id = getattr(tool_call, "id")
             function = getattr(tool_call, "function")
@@ -226,7 +285,9 @@ class VllmToolCallingClient:
             ):
                 raise TypeError
         except Exception:
-            raise VllmToolCallingError("vLLM returned an invalid tool response.") from None
+            failed = True
+        if failed:
+            raise VllmToolCallingError("vLLM returned an invalid tool response.")
         return VllmToolCall(id=call_id, name=name, arguments=arguments)
 
 

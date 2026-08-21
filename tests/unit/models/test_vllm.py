@@ -41,6 +41,17 @@ def _response(content: str, *additional_contents: str):
     )
 
 
+def _exception_chain_text(error: BaseException) -> str:
+    messages: list[str] = []
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        messages.append(str(current))
+        current = current.__cause__ or current.__context__
+    return "\n".join(messages)
+
+
 @pytest.mark.parametrize(
     "environment",
     [
@@ -146,7 +157,7 @@ def test_structured_client_wraps_failures_without_exposing_request_or_response_d
             system_prompt="extract", user_prompt="source", schema_name="nodes", schema={}
         )
 
-    assert secret not in str(caught.value)
+    assert secret not in _exception_chain_text(caught.value)
 
 
 def test_chat_client_completes_only_the_first_nonempty_text_choice(fake_openai_client):
@@ -187,6 +198,44 @@ def test_chat_client_hides_invalid_completion_payloads(response):
     assert "prompt-secret" not in str(caught.value)
 
 
+def test_chat_client_hides_provider_errors_from_the_complete_exception_chain():
+    """Breaks if a public chat failure retains raw provider text in its exception chain."""
+    client = VllmChatClient(
+        _config(),
+        client=FakeOpenAIClient(error=RuntimeError("complete-provider-secret")),
+    )
+
+    with pytest.raises(VllmResponseError) as caught:
+        client.complete([{"role": "user", "content": "prompt-secret"}])
+
+    assert "complete-provider-secret" not in _exception_chain_text(caught.value)
+    assert "prompt-secret" not in _exception_chain_text(caught.value)
+
+
+@pytest.mark.parametrize(
+    ("client_class", "message"),
+    [
+        (VllmChatClient, "chat client initialization failed"),
+        (VllmStructuredClient, "structured client initialization failed"),
+    ],
+)
+def test_text_clients_hide_transport_construction_failures_from_exception_chains(
+    monkeypatch, client_class, message
+):
+    """Breaks if direct client construction leaks a raw transport configuration failure."""
+    import paper_agent.models.vllm as vllm_module
+
+    def fail_client_creation(_config):
+        raise RuntimeError("transport-construction-secret")
+
+    monkeypatch.setattr(vllm_module, "_create_openai_client", fail_client_creation)
+
+    with pytest.raises(VllmResponseError, match=message) as caught:
+        client_class(_config())
+
+    assert "transport-construction-secret" not in _exception_chain_text(caught.value)
+
+
 def test_chat_stream_yields_text_deltas_and_skips_empty_deltas(fake_openai_client):
     """Breaks if stream responses are not requested or valid text deltas are lost."""
     fake_openai_client.response = iter(
@@ -211,6 +260,54 @@ def test_chat_stream_rejects_non_text_deltas(fake_openai_client):
     """Breaks if malformed streaming deltas are forwarded as text."""
     fake_openai_client.response = iter([object()])
     client = VllmChatClient(_config(), client=fake_openai_client)
+
+    with pytest.raises(VllmResponseError, match="could not stream text"):
+        list(client.stream_text([{"role": "user", "content": "explain"}]))
+
+
+def test_chat_stream_hides_creation_failures_from_the_complete_exception_chain():
+    """Breaks if stream creation exposes raw provider details through exception context."""
+    client = VllmChatClient(
+        _config(), client=FakeOpenAIClient(error=RuntimeError("stream-create-secret"))
+    )
+
+    with pytest.raises(VllmResponseError) as caught:
+        list(client.stream_text([{"role": "user", "content": "prompt-secret"}]))
+
+    assert "stream-create-secret" not in _exception_chain_text(caught.value)
+    assert "prompt-secret" not in _exception_chain_text(caught.value)
+
+
+def test_chat_stream_hides_late_iterator_failures_after_text_was_yielded():
+    """Breaks if a provider failure after a valid delta leaks through stream context."""
+    def chunks():
+        yield SimpleNamespace(
+            choices=[SimpleNamespace(delta=SimpleNamespace(content="first"))]
+        )
+        raise RuntimeError("late-stream-secret")
+
+    client = VllmChatClient(_config(), client=FakeOpenAIClient(response=chunks()))
+    stream = client.stream_text([{"role": "user", "content": "prompt-secret"}])
+
+    assert next(stream) == "first"
+    with pytest.raises(VllmResponseError) as caught:
+        next(stream)
+
+    assert "late-stream-secret" not in _exception_chain_text(caught.value)
+    assert "prompt-secret" not in _exception_chain_text(caught.value)
+
+
+@pytest.mark.parametrize(
+    "stream",
+    [
+        iter(()),
+        iter([SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content=None))])]),
+        iter([SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content=""))])]),
+    ],
+)
+def test_chat_stream_rejects_streams_without_usable_text(stream):
+    """Breaks if an empty or no-content stream is reported as a successful response."""
+    client = VllmChatClient(_config(), client=FakeOpenAIClient(response=stream))
 
     with pytest.raises(VllmResponseError, match="could not stream text"):
         list(client.stream_text([{"role": "user", "content": "explain"}]))

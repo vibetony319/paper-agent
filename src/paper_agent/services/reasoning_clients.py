@@ -11,6 +11,7 @@ from paper_agent.models.vllm import (
     VllmModelConfig,
     VllmStructuredClient,
     VllmToolCallingClient,
+    _create_openai_client,
 )
 from paper_agent.services.model_secrets import ModelSecretStore
 
@@ -63,16 +64,20 @@ class ReasoningClientProvider:
             self._cache.move_to_end(cache_key)
             return cached
 
+        failed = False
         try:
+            transport = self._create_client(config)
             resolved = ResolvedReasoningClients(
                 profile=profile,
                 snapshot=profile.snapshot(),
-                chat=VllmChatClient(config, client=self._create_client(config)),
-                structured=VllmStructuredClient(config, client=self._create_client(config)),
-                tools=VllmToolCallingClient(config, client=self._create_client(config)),
+                chat=VllmChatClient(config, client=transport),
+                structured=VllmStructuredClient(config, client=transport),
+                tools=VllmToolCallingClient(config, client=transport),
             )
         except Exception:
-            raise ReasoningClientResolutionError("Reasoning model client is unavailable.") from None
+            failed = True
+        if failed:
+            raise ReasoningClientResolutionError("Reasoning model client is unavailable.")
         self._cache[cache_key] = resolved
         self._cache.move_to_end(cache_key)
         if len(self._cache) > _CACHE_LIMIT:
@@ -93,10 +98,17 @@ class ReasoningClientProvider:
             raise ReasoningClientResolutionError("Model profile is deleted.")
         if not profile.enabled:
             raise ReasoningClientResolutionError("Model profile is disabled.")
-        try:
-            api_key = self.secrets.get(profile.secret_ref) or "EMPTY"
-        except Exception:
-            raise ReasoningClientResolutionError("Model profile credentials are unavailable.") from None
+        if profile.secret_ref is None:
+            api_key = "EMPTY"
+        else:
+            credentials_failed = False
+            api_key = ""
+            try:
+                api_key = self.secrets.get(profile.secret_ref)
+            except Exception:
+                credentials_failed = True
+            if credentials_failed or not api_key:
+                raise ReasoningClientResolutionError("Model profile credentials are unavailable.")
         return profile, VllmModelConfig(
             base_url=profile.base_url,
             model=profile.model_name,
@@ -120,5 +132,7 @@ class ReasoningClientProvider:
             config,
         )
 
-    def _create_client(self, config: VllmModelConfig) -> OpenAI | None:
-        return None if self.client_factory is None else self.client_factory(config)
+    def _create_client(self, config: VllmModelConfig) -> OpenAI:
+        if self.client_factory is None:
+            return _create_openai_client(config)
+        return self.client_factory(config)

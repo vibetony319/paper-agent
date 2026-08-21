@@ -3,17 +3,20 @@ from pathlib import Path
 
 import pytest
 
-from paper_agent.model_profile_storage import ModelProfileRepository
-from paper_agent.model_profiles import ModelCapabilities, ModelProfile
+from paper_agent.model_profile_storage import ModelProfileRepository, ModelProfileRevisionError
+from paper_agent.model_profiles import ModelCapabilities, ModelProfile, ModelProfileChanges
 from paper_agent.services.model_profiles import ModelProfileService
 from paper_agent.services.reasoning_clients import ENVIRONMENT_FALLBACK_PROFILE_ID
 
 
 class ProbeChat:
-    def __init__(self, response: str | Exception) -> None:
+    def __init__(self, response: str | Exception, on_complete=None) -> None:
         self.response = response
+        self.on_complete = on_complete
 
     def complete(self, _messages: list[dict[str, str]]) -> str:
+        if self.on_complete is not None:
+            self.on_complete()
         if isinstance(self.response, Exception):
             raise self.response
         return self.response
@@ -169,3 +172,36 @@ def test_fallback_capabilities_are_returned_without_sqlite_persistence(repositor
     assert isinstance(capabilities.checked_at, datetime)
     assert capabilities.checked_at.tzinfo is UTC
     assert repository.get(ENVIRONMENT_FALLBACK_PROFILE_ID) is None
+
+
+def test_capability_test_rejects_a_revision_changed_during_its_probes(repository):
+    """Breaks if stale probe results overwrite a profile edit that occurs mid-test."""
+    profile = repository.create(_profile())
+
+    def revise_profile() -> None:
+        repository.update(
+            profile.id,
+            expected_revision=profile.revision,
+            changes=ModelProfileChanges(display_name="Edited while testing"),
+        )
+
+    service = ModelProfileService(
+        repository,
+        StaticProvider(
+            Resolved(
+                profile,
+                ProbeChat("OK", on_complete=revise_profile),
+                ProbeStructured({"status": "ok"}),
+                ProbeTools(),
+            )
+        ),
+    )
+
+    with pytest.raises(ModelProfileRevisionError):
+        service.test_capabilities(profile.id)
+
+    current = repository.get(profile.id)
+    assert current is not None
+    assert current.display_name == "Edited while testing"
+    assert current.revision == 2
+    assert current.capabilities == ModelCapabilities()

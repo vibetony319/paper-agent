@@ -59,6 +59,17 @@ def _config() -> VllmModelConfig:
     )
 
 
+def _exception_chain_text(error: BaseException) -> str:
+    messages: list[str] = []
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        messages.append(str(current))
+        current = current.__cause__ or current.__context__
+    return "\n".join(messages)
+
+
 def _read_element_tool() -> dict[str, object]:
     return {
         "type": "function",
@@ -245,6 +256,7 @@ def test_tool_client_wraps_provider_protocol_and_argument_failures_safely(
             tool_choice="auto",
         )
 
-    assert "response-secret" not in str(error.value)
-    assert "provider-secret" not in str(error.value)
-    assert "prompt-secret" not in str(error.value)
+    chain = _exception_chain_text(error.value)
+    assert "response-secret" not in chain
+    assert "provider-secret" not in chain
+    assert "prompt-secret" not in chain

@@ -54,6 +54,17 @@ def _profile(**changes: object) -> ModelProfile:
     return ModelProfile(**values)
 
 
+def _exception_chain_text(error: BaseException) -> str:
+    messages: list[str] = []
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        messages.append(str(current))
+        current = current.__cause__ or current.__context__
+    return "\n".join(messages)
+
+
 def test_provider_caches_by_profile_revision(repository, secrets, client_factory):
     """Breaks if a profile edit can reuse clients built for an older revision."""
     profile = repository.create(_profile())
@@ -71,6 +82,23 @@ def test_provider_caches_by_profile_revision(repository, secrets, client_factory
     assert first is second
     assert third is not first
     assert third.snapshot.revision == 2
+
+
+def test_provider_uses_one_transport_for_every_client_in_a_resolved_bundle(
+    repository, secrets, client_factory
+):
+    """Breaks if one resolve creates partial independent transports for its three clients."""
+    profile = repository.create(_profile())
+
+    resolved = ReasoningClientProvider(
+        repository, secrets, client_factory=client_factory
+    ).resolve(profile.id)
+
+    assert len(client_factory.created) == 1
+    transport = client_factory.created[0][1]
+    assert resolved.chat.client is transport
+    assert resolved.structured.client is transport
+    assert resolved.tools.client is transport
 
 
 def test_provider_revalidates_cached_profiles_before_returning_them(
@@ -149,4 +177,17 @@ def test_provider_wraps_client_factory_errors_without_exposing_configuration_sec
     with pytest.raises(ReasoningClientResolutionError) as caught:
         ReasoningClientProvider(repository, secrets, client_factory=fail_factory).resolve(profile.id)
 
-    assert "provider-key-secret" not in str(caught.value)
+    assert "provider-key-secret" not in _exception_chain_text(caught.value)
+
+
+def test_provider_rejects_a_missing_secret_for_a_referenced_profile(repository, secrets, client_factory):
+    """Breaks if a configured secret reference silently downgrades to the EMPTY API key."""
+    profile = repository.create(
+        _profile(secret_ref="model-profile:00000000-0000-4000-8000-000000000001")
+    )
+    provider = ReasoningClientProvider(repository, secrets, client_factory=client_factory)
+
+    with pytest.raises(ReasoningClientResolutionError, match="credentials are unavailable"):
+        provider.resolve(profile.id)
+
+    assert client_factory.created == []
