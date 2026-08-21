@@ -2,6 +2,7 @@ import pytest
 from sqlalchemy import Column, Integer, MetaData, String, Table, insert
 from sqlalchemy.exc import IntegrityError
 
+from paper_agent import migrations
 from paper_agent.migrations import run_schema_migrations
 from paper_agent.database import (
     create_database_engine,
@@ -9,6 +10,25 @@ from paper_agent.database import (
     initialize_database,
     model_profiles,
 )
+
+
+MODEL_PROFILE_COLUMNS = {
+    "id",
+    "display_name",
+    "base_url",
+    "model_name",
+    "secret_ref",
+    "enabled",
+    "is_default",
+    "revision",
+    "basic_chat",
+    "structured_output",
+    "tool_calling",
+    "capabilities_checked_at",
+    "created_at",
+    "updated_at",
+    "deleted_at",
+}
 
 
 def test_model_profile_migration_upgrades_an_existing_database(tmp_path):
@@ -73,6 +93,27 @@ def test_model_profile_migration_records_each_version_once_when_rerun(tmp_path):
     assert versions == [1]
 
 
+def test_model_profile_migration_uses_frozen_schema_not_live_metadata(
+    tmp_path, monkeypatch
+):
+    """Breaks if migration 1 adopts a model_profiles column added after its release."""
+    future_metadata = MetaData()
+    future_model_profiles = model_profiles.to_metadata(future_metadata)
+    future_model_profiles.append_column(Column("future_metadata_column", String))
+    monkeypatch.setattr(migrations, "model_profiles", future_model_profiles, raising=False)
+    engine = create_database_engine(database_url_for(tmp_path))
+
+    migrations.run_schema_migrations(engine)
+
+    with engine.connect() as connection:
+        columns = {
+            column[1]
+            for column in connection.exec_driver_sql("PRAGMA table_info(model_profiles)")
+        }
+
+    assert columns == MODEL_PROFILE_COLUMNS
+
+
 def test_initialize_database_creates_model_profiles_and_all_provenance_columns(tmp_path):
     """Breaks if fresh database initialization omits migration-era schema."""
     engine = initialize_database(database_url_for(tmp_path))
@@ -94,8 +135,13 @@ def test_initialize_database_creates_model_profiles_and_all_provenance_columns(t
             column[1]
             for column in connection.exec_driver_sql("PRAGMA table_info(processing_runs)")
         }
+        profile_columns = {
+            column[1]
+            for column in connection.exec_driver_sql("PRAGMA table_info(model_profiles)")
+        }
 
     assert "model_profiles" in tables
+    assert profile_columns == MODEL_PROFILE_COLUMNS
     assert {"model_profile_id", "model_snapshot_json", "request_id"} <= message_columns
     assert {"model_profile_id", "model_snapshot_json", "request_id"} <= run_columns
 
@@ -103,7 +149,7 @@ def test_initialize_database_creates_model_profiles_and_all_provenance_columns(t
 def test_model_profiles_allows_only_one_active_default(tmp_path):
     """Breaks if two non-deleted profiles can both be the default."""
     engine = initialize_database(database_url_for(tmp_path))
-    first_profile = {
+    deleted_default_profile = {
         "id": "profile-a",
         "display_name": "First",
         "base_url": "http://localhost:8000/v1",
@@ -116,10 +162,22 @@ def test_model_profiles_allows_only_one_active_default(tmp_path):
         "tool_calling": False,
         "created_at": "2026-08-21T00:00:00+00:00",
         "updated_at": "2026-08-21T00:00:00+00:00",
+        "deleted_at": "2026-08-21T01:00:00+00:00",
     }
-    second_profile = {**first_profile, "id": "profile-b", "display_name": "Second"}
+    active_default_profile = {
+        **deleted_default_profile,
+        "id": "profile-b",
+        "display_name": "Second",
+        "deleted_at": None,
+    }
+    duplicate_active_default_profile = {
+        **active_default_profile,
+        "id": "profile-c",
+        "display_name": "Third",
+    }
 
     with engine.begin() as connection:
-        connection.execute(insert(model_profiles).values(first_profile))
+        connection.execute(insert(model_profiles).values(deleted_default_profile))
+        connection.execute(insert(model_profiles).values(active_default_profile))
         with pytest.raises(IntegrityError):
-            connection.execute(insert(model_profiles).values(second_profile))
+            connection.execute(insert(model_profiles).values(duplicate_active_default_profile))

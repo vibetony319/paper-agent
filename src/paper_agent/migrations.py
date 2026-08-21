@@ -5,9 +5,6 @@ from datetime import UTC, datetime
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
 
-from paper_agent.database import model_profiles
-
-
 @dataclass(frozen=True)
 class Migration:
     version: int
@@ -42,7 +39,25 @@ def run_schema_migrations(engine: Engine) -> None:
 
 
 def _apply_model_profiles_and_provenance_columns(connection: Connection) -> None:
-    model_profiles.create(connection, checkfirst=True)
+    connection.exec_driver_sql(
+        "CREATE TABLE IF NOT EXISTS model_profiles ("
+        "id VARCHAR(36) NOT NULL, "
+        "display_name VARCHAR NOT NULL, "
+        "base_url VARCHAR NOT NULL, "
+        "model_name VARCHAR NOT NULL, "
+        "secret_ref VARCHAR, "
+        "enabled BOOLEAN NOT NULL DEFAULT '1', "
+        "is_default BOOLEAN NOT NULL DEFAULT '0', "
+        "revision INTEGER NOT NULL, "
+        "basic_chat BOOLEAN NOT NULL DEFAULT '0', "
+        "structured_output BOOLEAN NOT NULL DEFAULT '0', "
+        "tool_calling BOOLEAN NOT NULL DEFAULT '0', "
+        "capabilities_checked_at VARCHAR, "
+        "created_at VARCHAR NOT NULL, "
+        "updated_at VARCHAR NOT NULL, "
+        "deleted_at VARCHAR, "
+        "PRIMARY KEY (id))"
+    )
     connection.exec_driver_sql(
         "CREATE UNIQUE INDEX IF NOT EXISTS model_profiles_one_default "
         "ON model_profiles(is_default) "
