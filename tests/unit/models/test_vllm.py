@@ -4,6 +4,7 @@ import pytest
 
 from paper_agent.config import get_settings
 from paper_agent.models.vllm import (
+    VllmChatClient,
     VllmConfigurationError,
     VllmModelConfig,
     VllmResponseError,
@@ -146,6 +147,73 @@ def test_structured_client_wraps_failures_without_exposing_request_or_response_d
         )
 
     assert secret not in str(caught.value)
+
+
+def test_chat_client_completes_only_the_first_nonempty_text_choice(fake_openai_client):
+    """Breaks if normal text completion accepts empty or non-text provider output."""
+    fake_openai_client.response = _response("OK", "ignored")
+
+    result = VllmChatClient(_config(), client=fake_openai_client).complete(
+        [{"role": "user", "content": "health check"}]
+    )
+
+    assert result == "OK"
+    assert fake_openai_client.requests == [
+        {
+            "model": "qwen-test",
+            "messages": [{"role": "user", "content": "health check"}],
+            "temperature": 0,
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        _response(""),
+        _response(None),
+        SimpleNamespace(choices=[]),
+    ],
+)
+def test_chat_client_hides_invalid_completion_payloads(response):
+    """Breaks if provider completion payload text leaks from a public client error."""
+    client = VllmChatClient(
+        _config(), client=FakeOpenAIClient(response=response, error=None)
+    )
+
+    with pytest.raises(VllmResponseError, match="could not complete text") as caught:
+        client.complete([{"role": "user", "content": "prompt-secret"}])
+
+    assert "prompt-secret" not in str(caught.value)
+
+
+def test_chat_stream_yields_text_deltas_and_skips_empty_deltas(fake_openai_client):
+    """Breaks if stream responses are not requested or valid text deltas are lost."""
+    fake_openai_client.response = iter(
+        [
+            SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content="one"))]),
+            SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content=None))]),
+            SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content=" two"))]),
+        ]
+    )
+
+    result = list(
+        VllmChatClient(_config(), client=fake_openai_client).stream_text(
+            [{"role": "user", "content": "explain"}]
+        )
+    )
+
+    assert result == ["one", " two"]
+    assert fake_openai_client.requests[0]["stream"] is True
+
+
+def test_chat_stream_rejects_non_text_deltas(fake_openai_client):
+    """Breaks if malformed streaming deltas are forwarded as text."""
+    fake_openai_client.response = iter([object()])
+    client = VllmChatClient(_config(), client=fake_openai_client)
+
+    with pytest.raises(VllmResponseError, match="could not stream text"):
+        list(client.stream_text([{"role": "user", "content": "explain"}]))
 
 
 @pytest.fixture

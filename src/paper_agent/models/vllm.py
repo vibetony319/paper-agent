@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Iterator
 
 if TYPE_CHECKING:
     from openai import OpenAI
@@ -21,6 +21,44 @@ class VllmConfigurationError(ValueError):
 
 class VllmResponseError(RuntimeError):
     """Raised when vLLM does not provide a valid structured response."""
+
+
+class VllmChatClient:
+    def __init__(self, config: VllmModelConfig, client: OpenAI | None = None) -> None:
+        self.config = config
+        self.client = client if client is not None else _create_openai_client(config)
+
+    def complete(self, messages: list[dict[str, str]]) -> str:
+        try:
+            response = self.client.chat.completions.create(
+                model=self.config.model,
+                messages=messages,
+                temperature=0,
+            )
+            content = response.choices[0].message.content
+            if not isinstance(content, str) or not content.strip():
+                raise TypeError
+            return content
+        except Exception:
+            raise VllmResponseError("vLLM could not complete text generation.") from None
+
+    def stream_text(self, messages: list[dict[str, str]]) -> Iterator[str]:
+        try:
+            stream = self.client.chat.completions.create(
+                model=self.config.model,
+                messages=messages,
+                temperature=0,
+                stream=True,
+            )
+            for chunk in stream:
+                delta = chunk.choices[0].delta.content
+                if delta is None:
+                    continue
+                if not isinstance(delta, str):
+                    raise TypeError
+                yield delta
+        except Exception:
+            raise VllmResponseError("vLLM could not stream text generation.") from None
 
 
 @dataclass(frozen=True)

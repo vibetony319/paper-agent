@@ -1,6 +1,7 @@
 """Model client integrations."""
 
 from .vllm import (
+    VllmChatClient,
     VllmModelConfig,
     VllmToolCall,
     VllmToolCallingClient,
@@ -9,6 +10,7 @@ from .vllm import (
 )
 
 __all__ = [
+    "VllmChatClient",
     "VllmModelConfig",
     "VllmToolCall",
     "VllmToolCallingClient",
