@@ -6,7 +6,7 @@ import pytest
 from paper_agent.model_profile_storage import ModelProfileRepository, ModelProfileRevisionError
 from paper_agent.model_profiles import ModelCapabilities, ModelProfile, ModelProfileChanges
 from paper_agent.services.model_profiles import ModelProfileService
-from paper_agent.services.model_secrets import ModelSecretStore
+from paper_agent.services.model_secrets import ModelSecretStore, ModelSecretStoreError
 from paper_agent.services.reasoning_clients import ENVIRONMENT_FALLBACK_PROFILE_ID
 
 
@@ -62,6 +62,22 @@ class Resolved:
         self.chat = chat
         self.structured = structured
         self.tools = tools
+
+
+class FailingGetSecretStore:
+    def __init__(self, delegate: ModelSecretStore) -> None:
+        self.delegate = delegate
+        self.get_calls = 0
+
+    def set(self, profile_id: str, secret: str) -> str:
+        return self.delegate.set(profile_id, secret)
+
+    def get(self, secret_ref: str | None) -> str:
+        self.get_calls += 1
+        raise ModelSecretStoreError()
+
+    def delete(self, secret_ref: str | None) -> None:
+        self.delegate.delete(secret_ref)
 
 
 @pytest.fixture
@@ -283,3 +299,213 @@ def test_failed_delete_restores_secret_and_successful_delete_removes_it(
     monkeypatch.setattr(repository, "soft_delete", real_soft_delete)
     service.delete_profile(profile.id, expected_revision=profile.revision)
     assert store.get(secret_ref) == ""
+
+
+def test_update_preflights_secret_state_before_database_commit(repository, tmp_path):
+    """Breaks if a failed response-view key read occurs after an update commits."""
+    real_store = ModelSecretStore(tmp_path / "secrets.json")
+    profile = _profile()
+    secret_ref = real_store.set(profile.id, "current-secret")
+    profile = repository.create(_profile(id=profile.id, secret_ref=secret_ref))
+    store = FailingGetSecretStore(real_store)
+    service = ModelProfileService(repository, StaticProvider(None), store)
+
+    with pytest.raises(ModelSecretStoreError):
+        service.update_profile(
+            profile.id,
+            expected_revision=profile.revision,
+            changes=ModelProfileChanges(display_name="Must not commit"),
+        )
+
+    assert store.get_calls == 1
+    assert repository.get(profile.id) == profile
+
+
+def test_set_default_preflights_secret_state_before_database_commit(
+    repository, tmp_path
+):
+    """Breaks if a failed response-view key read occurs after a default switch commits."""
+    first = repository.create(_profile(display_name="First", is_default=True))
+    real_store = ModelSecretStore(tmp_path / "secrets.json")
+    second = _profile(display_name="Second")
+    secret_ref = real_store.set(second.id, "second-secret")
+    second = repository.create(
+        _profile(id=second.id, display_name="Second", secret_ref=secret_ref)
+    )
+    store = FailingGetSecretStore(real_store)
+    service = ModelProfileService(repository, StaticProvider(None), store)
+
+    with pytest.raises(ModelSecretStoreError):
+        service.set_default(second.id, expected_revision=second.revision)
+
+    assert store.get_calls == 1
+    assert repository.get(first.id) == first
+    assert repository.get(second.id) == second
+
+
+def test_create_builds_response_from_known_key_state_without_read_back(
+    repository, tmp_path
+):
+    """Breaks if successful create reads its just-written key after the DB commit."""
+    real_store = ModelSecretStore(tmp_path / "secrets.json")
+    store = FailingGetSecretStore(real_store)
+    service = ModelProfileService(repository, StaticProvider(None), store)
+
+    created = service.create_profile(
+        display_name="Created",
+        base_url="http://127.0.0.1:8000/v1",
+        model_name="model",
+        api_key="known-secret",
+    )
+
+    assert created.has_api_key is True
+    assert created.api_key_mask == "••••••••"
+    assert store.get_calls == 0
+    assert repository.get(created.profile.id) == created.profile
+
+
+def test_profile_capability_view_preflights_secret_before_capability_commit(
+    repository, tmp_path
+):
+    """Breaks if capability persistence commits before response key state is readable."""
+    real_store = ModelSecretStore(tmp_path / "secrets.json")
+    profile = _profile()
+    secret_ref = real_store.set(profile.id, "probe-secret")
+    profile = repository.create(_profile(id=profile.id, secret_ref=secret_ref))
+    store = FailingGetSecretStore(real_store)
+    service = ModelProfileService(
+        repository,
+        StaticProvider(
+            Resolved(
+                profile,
+                ProbeChat("OK"),
+                ProbeStructured({"status": "ok"}),
+                ProbeTools(),
+            )
+        ),
+        store,
+    )
+
+    with pytest.raises(ModelSecretStoreError):
+        service.test_profile(profile.id, expected_revision=profile.revision)
+
+    assert store.get_calls == 1
+    assert repository.get(profile.id) == profile
+
+
+def test_default_create_set_failure_does_not_change_existing_default(
+    repository, tmp_path, monkeypatch
+):
+    """Breaks if a secret set failure reaches the combined default DB transaction."""
+    current = repository.create(_profile(display_name="Current", is_default=True))
+    store = ModelSecretStore(tmp_path / "secrets.json")
+    service = ModelProfileService(repository, StaticProvider(None), store)
+
+    def fail_set(_profile_id: str, _secret: str) -> str:
+        raise ModelSecretStoreError()
+
+    monkeypatch.setattr(store, "set", fail_set)
+
+    with pytest.raises(ModelSecretStoreError):
+        service.create_profile(
+            display_name="Replacement",
+            base_url="http://127.0.0.1:8000/v1",
+            model_name="model",
+            api_key="new-secret",
+            is_default=True,
+        )
+
+    assert repository.list_active() == (current,)
+
+
+def test_failed_combined_default_create_compensates_new_secret(
+    repository, tmp_path, monkeypatch
+):
+    """Breaks if create_replacing_default failure leaves a key or changes the default."""
+    current = repository.create(_profile(display_name="Current", is_default=True))
+    store = ModelSecretStore(tmp_path / "secrets.json")
+    service = ModelProfileService(repository, StaticProvider(None), store)
+    attempted_ids: list[str] = []
+
+    def fail_create(profile: ModelProfile) -> ModelProfile:
+        attempted_ids.append(profile.id)
+        raise RuntimeError("combined-create-failure-secret")
+
+    monkeypatch.setattr(repository, "create_replacing_default", fail_create)
+
+    with pytest.raises(RuntimeError):
+        service.create_profile(
+            display_name="Replacement",
+            base_url="http://127.0.0.1:8000/v1",
+            model_name="model",
+            api_key="new-secret",
+            is_default=True,
+        )
+
+    assert len(attempted_ids) == 1
+    assert store.get(f"model-profile:{attempted_ids[0]}") == ""
+    assert repository.list_active() == (current,)
+
+
+def test_default_delete_secret_failure_prevents_delete_and_promotion(
+    repository, tmp_path, monkeypatch
+):
+    """Breaks if a failed key delete still commits the combined default transition."""
+    store = ModelSecretStore(tmp_path / "secrets.json")
+    current = _profile(display_name="Current", is_default=True)
+    secret_ref = store.set(current.id, "current-secret")
+    current = repository.create(
+        _profile(
+            id=current.id,
+            display_name="Current",
+            is_default=True,
+            secret_ref=secret_ref,
+        )
+    )
+    replacement = repository.create(_profile(display_name="Replacement"))
+    service = ModelProfileService(repository, StaticProvider(None), store)
+
+    def fail_delete(_secret_ref: str | None) -> None:
+        raise ModelSecretStoreError()
+
+    monkeypatch.setattr(store, "delete", fail_delete)
+
+    with pytest.raises(ModelSecretStoreError):
+        service.delete_profile(current.id, expected_revision=current.revision)
+
+    assert store.get(secret_ref) == "current-secret"
+    assert repository.get(current.id) == current
+    assert repository.get(replacement.id) == replacement
+
+
+def test_failed_combined_default_delete_restores_secret_and_database_state(
+    repository, tmp_path, monkeypatch
+):
+    """Breaks if promotion failure loses the deleted key or partially deletes default."""
+    store = ModelSecretStore(tmp_path / "secrets.json")
+    current = _profile(display_name="Current", is_default=True)
+    secret_ref = store.set(current.id, "current-secret")
+    current = repository.create(
+        _profile(
+            id=current.id,
+            display_name="Current",
+            is_default=True,
+            secret_ref=secret_ref,
+        )
+    )
+    replacement = repository.create(_profile(display_name="Replacement"))
+    service = ModelProfileService(repository, StaticProvider(None), store)
+
+    def fail_combined_delete(*_args, **_kwargs) -> ModelProfile:
+        raise ModelProfileRevisionError()
+
+    monkeypatch.setattr(
+        repository, "soft_delete_and_set_default", fail_combined_delete
+    )
+
+    with pytest.raises(ModelProfileRevisionError):
+        service.delete_profile(current.id, expected_revision=current.revision)
+
+    assert store.get(secret_ref) == "current-secret"
+    assert repository.get(current.id) == current
+    assert repository.get(replacement.id) == replacement

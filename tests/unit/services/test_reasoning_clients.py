@@ -1,4 +1,6 @@
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event, Lock
 
 import pytest
 
@@ -82,6 +84,41 @@ def test_provider_caches_by_profile_revision(repository, secrets, client_factory
     assert first is second
     assert third is not first
     assert third.snapshot.revision == 2
+
+
+def test_provider_serializes_concurrent_cache_miss_construction(
+    repository, secrets
+):
+    """Breaks if concurrent /test requests build and publish duplicate client bundles."""
+    profile = repository.create(_profile())
+    first_factory_entered = Event()
+    second_factory_entered = Event()
+    calls_lock = Lock()
+    calls: list[VllmModelConfig] = []
+
+    def blocking_factory(config: VllmModelConfig) -> FakeOpenAI:
+        with calls_lock:
+            calls.append(config)
+            call_number = len(calls)
+        if call_number == 1:
+            first_factory_entered.set()
+            second_factory_entered.wait(timeout=1)
+        else:
+            second_factory_entered.set()
+        return FakeOpenAI()
+
+    provider = ReasoningClientProvider(
+        repository, secrets, client_factory=blocking_factory
+    )
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first_future = executor.submit(provider.resolve, profile.id)
+        assert first_factory_entered.wait(timeout=1)
+        second_future = executor.submit(provider.resolve, profile.id)
+        first = first_future.result(timeout=2)
+        second = second_future.result(timeout=2)
+
+    assert first is second
+    assert len(calls) == 1
 
 
 def test_provider_uses_one_transport_for_every_client_in_a_resolved_bundle(

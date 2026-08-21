@@ -110,7 +110,9 @@ class ModelProfileService:
                 if secret_written:
                     self._secret_store().delete(profile.secret_ref)
                 raise
-            return self._view(created)
+            return self._view_with_key_state(
+                created, has_api_key=self._is_real_api_key(normalized_key or "")
+            )
 
     def update_profile(
         self,
@@ -139,11 +141,16 @@ class ModelProfileService:
 
             secret_changed = api_key is not UNCHANGED
             old_secret = ""
+            normalized_key: str | None = None
             if secret_changed and current.secret_ref is not None:
                 old_secret = self._secret_store().get(current.secret_ref)
+            if secret_changed:
+                normalized_key = self._normalized_api_key(api_key)
+                has_api_key = self._is_real_api_key(normalized_key or "")
+            else:
+                has_api_key = self._profile_has_api_key(current)
             try:
                 if secret_changed:
-                    normalized_key = self._normalized_api_key(api_key)
                     if normalized_key is None:
                         self._secret_store().delete(current.secret_ref)
                         effective_changes = replace(effective_changes, secret_ref=None)
@@ -163,7 +170,7 @@ class ModelProfileService:
                 if secret_changed:
                     self._restore_secret(current, old_secret)
                 raise
-            return self._view(updated)
+            return self._view_with_key_state(updated, has_api_key=has_api_key)
 
     def delete_profile(self, profile_id: str, *, expected_revision: int) -> None:
         self._require_mutable(profile_id)
@@ -208,11 +215,11 @@ class ModelProfileService:
             current = self._require_current(profile_id, expected_revision)
             if not current.enabled:
                 raise ModelProfileInputError("disabled profile cannot be default")
-            return self._view(
-                self.repository.set_default(
-                    profile_id, expected_revision=expected_revision
-                )
+            has_api_key = self._profile_has_api_key(current)
+            selected = self.repository.set_default(
+                profile_id, expected_revision=expected_revision
             )
+            return self._view_with_key_state(selected, has_api_key=has_api_key)
 
     def test_profile(
         self, profile_id: str, *, expected_revision: int
@@ -222,15 +229,19 @@ class ModelProfileService:
         resolved = self.provider.resolve(profile_id)
         if resolved.profile.revision != expected_revision:
             raise ModelProfileRevisionError()
+        has_api_key = self._profile_has_api_key(resolved.profile)
         capabilities = self._probe_capabilities(resolved)
         if self.provider.is_read_only_profile(resolved.profile.id):
-            return self._view(replace(resolved.profile, capabilities=capabilities))
+            return self._view_with_key_state(
+                replace(resolved.profile, capabilities=capabilities),
+                has_api_key=has_api_key,
+            )
         updated = self.repository.update_capabilities(
             resolved.profile.id,
             expected_revision=resolved.profile.revision,
             capabilities=capabilities,
         )
-        return self._view(updated)
+        return self._view_with_key_state(updated, has_api_key=has_api_key)
 
     def resolve_default_clients(self) -> ResolvedReasoningClients | None:
         profiles = self.repository.list_active()
@@ -273,6 +284,11 @@ class ModelProfileService:
         return capabilities
 
     def _view(self, profile: ModelProfile) -> ModelProfileView:
+        return self._view_with_key_state(
+            profile, has_api_key=self._profile_has_api_key(profile)
+        )
+
+    def _profile_has_api_key(self, profile: ModelProfile) -> bool:
         read_only = self.provider.is_read_only_profile(profile.id)
         if read_only:
             config = self.provider.reasoning_model
@@ -281,12 +297,16 @@ class ModelProfileService:
             api_key = ""
         else:
             api_key = self._secret_store().get(profile.secret_ref)
-        has_api_key = self._is_real_api_key(api_key)
+        return self._is_real_api_key(api_key)
+
+    def _view_with_key_state(
+        self, profile: ModelProfile, *, has_api_key: bool
+    ) -> ModelProfileView:
         return ModelProfileView(
             profile=profile,
             has_api_key=has_api_key,
             api_key_mask=_API_KEY_MASK if has_api_key else None,
-            read_only=read_only,
+            read_only=self.provider.is_read_only_profile(profile.id),
         )
 
     def _require_mutable(self, profile_id: str) -> None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from dataclasses import dataclass
+from threading import RLock
 from typing import Callable, TYPE_CHECKING
 
 from paper_agent.model_profile_storage import ModelProfileRepository
@@ -55,34 +56,38 @@ class ReasoningClientProvider:
         self.reasoning_model = reasoning_model
         self.client_factory = client_factory
         self._cache: OrderedDict[tuple[str, int], ResolvedReasoningClients] = OrderedDict()
+        self._cache_lock = RLock()
 
     def resolve(self, profile_id: str) -> ResolvedReasoningClients:
         profile, config = self._active_profile_and_config(profile_id)
         cache_key = (profile.id, profile.revision)
-        cached = self._cache.get(cache_key)
-        if cached is not None:
-            self._cache.move_to_end(cache_key)
-            return cached
+        with self._cache_lock:
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                self._cache.move_to_end(cache_key)
+                return cached
 
-        failed = False
-        try:
-            transport = self._create_client(config)
-            resolved = ResolvedReasoningClients(
-                profile=profile,
-                snapshot=profile.snapshot(),
-                chat=VllmChatClient(config, client=transport),
-                structured=VllmStructuredClient(config, client=transport),
-                tools=VllmToolCallingClient(config, client=transport),
-            )
-        except Exception:
-            failed = True
-        if failed:
-            raise ReasoningClientResolutionError("Reasoning model client is unavailable.")
-        self._cache[cache_key] = resolved
-        self._cache.move_to_end(cache_key)
-        if len(self._cache) > _CACHE_LIMIT:
-            self._cache.popitem(last=False)
-        return resolved
+            failed = False
+            try:
+                transport = self._create_client(config)
+                resolved = ResolvedReasoningClients(
+                    profile=profile,
+                    snapshot=profile.snapshot(),
+                    chat=VllmChatClient(config, client=transport),
+                    structured=VllmStructuredClient(config, client=transport),
+                    tools=VllmToolCallingClient(config, client=transport),
+                )
+            except Exception:
+                failed = True
+            if failed:
+                raise ReasoningClientResolutionError(
+                    "Reasoning model client is unavailable."
+                )
+            self._cache[cache_key] = resolved
+            self._cache.move_to_end(cache_key)
+            if len(self._cache) > _CACHE_LIMIT:
+                self._cache.popitem(last=False)
+            return resolved
 
     def is_read_only_profile(self, profile_id: str) -> bool:
         return is_read_only_model_profile(profile_id)

@@ -1,5 +1,4 @@
-from contextlib import contextmanager
-from typing import Callable, Iterator
+from typing import Callable, TypeVar
 from uuid import UUID
 
 from fastapi import APIRouter, Header, Request, Response
@@ -23,6 +22,9 @@ from paper_agent.services.reasoning_clients import ReasoningClientResolutionErro
 
 
 router = APIRouter(prefix="/api/model-profiles", tags=["model-profiles"])
+_Result = TypeVar("_Result")
+_MAX_REVISION = 9_223_372_036_854_775_807
+_MAX_REVISION_DIGITS = len(str(_MAX_REVISION))
 _ERROR_RESPONSES = {
     400: {"model": ModelProfileErrorResponse},
     404: {"model": ModelProfileErrorResponse},
@@ -50,65 +52,73 @@ def _revision(if_match: str | None) -> int:
         raise ModelProfileHttpError(
             428, "if_match_required", "缺少 If-Match 修订号。"
         )
-    if not if_match.isascii() or not if_match.isdecimal():
+    if (
+        len(if_match) > _MAX_REVISION_DIGITS
+        or not if_match.isascii()
+        or not if_match.isdecimal()
+    ):
         raise ModelProfileHttpError(
             400, "invalid_if_match", "If-Match 必须是正整数修订号。"
         )
     revision = int(if_match)
-    if revision < 1:
+    if revision < 1 or revision > _MAX_REVISION:
         raise ModelProfileHttpError(
             400, "invalid_if_match", "If-Match 必须是正整数修订号。"
         )
     return revision
 
 
-@contextmanager
-def _safe_errors() -> Iterator[None]:
+def _safe_errors(action: Callable[[], _Result]) -> _Result:
+    caught_error: Exception | None = None
     try:
-        yield
-    except ModelProfileHttpError:
-        raise
-    except ModelProfileNotFoundError:
-        raise ModelProfileHttpError(
-            404, "profile_not_found", "模型档案不存在。"
-        ) from None
-    except ModelProfileReadOnlyError:
-        raise ModelProfileHttpError(
+        return action()
+    except Exception as error:
+        caught_error = error
+    if caught_error is not None:
+        raise _safe_http_error(caught_error) from None
+    raise RuntimeError("unreachable")
+
+
+def _safe_http_error(error: Exception) -> ModelProfileHttpError:
+    if isinstance(error, ModelProfileHttpError):
+        return ModelProfileHttpError(error.status_code, error.code, error.detail)
+    if isinstance(error, ModelProfileNotFoundError):
+        return ModelProfileHttpError(404, "profile_not_found", "模型档案不存在。")
+    if isinstance(error, ModelProfileReadOnlyError):
+        return ModelProfileHttpError(
             409,
             "profile_read_only",
             "环境变量模型档案为只读，不能修改。",
-        ) from None
-    except ModelProfileRevisionError:
-        raise ModelProfileHttpError(
+        )
+    if isinstance(error, ModelProfileRevisionError):
+        return ModelProfileHttpError(
             409,
             "revision_conflict",
             "模型档案已被其他操作修改，请刷新后重试。",
-        ) from None
-    except ModelProfileInputError:
-        raise ModelProfileHttpError(
+        )
+    if isinstance(error, ModelProfileInputError):
+        return ModelProfileHttpError(
             422, "validation_error", "模型档案请求无效。"
-        ) from None
-    except ModelSecretStoreError:
-        raise ModelProfileHttpError(
+        )
+    if isinstance(error, ModelSecretStoreError):
+        return ModelProfileHttpError(
             503, "secret_store_unavailable", "模型密钥存储暂不可用。"
-        ) from None
-    except ReasoningClientResolutionError:
-        raise ModelProfileHttpError(
+        )
+    if isinstance(error, ReasoningClientResolutionError):
+        return ModelProfileHttpError(
             503, "model_unavailable", "模型服务暂不可用。"
-        ) from None
-    except ValueError:
-        raise ModelProfileHttpError(
+        )
+    if isinstance(error, ValueError):
+        return ModelProfileHttpError(
             422, "validation_error", "模型档案请求无效。"
-        ) from None
-    except Exception:
-        raise ModelProfileHttpError(
-            500, "model_profile_error", "模型档案操作失败。"
-        ) from None
+        )
+    return ModelProfileHttpError(
+        500, "model_profile_error", "模型档案操作失败。"
+    )
 
 
 def _response(action: Callable[[], object]) -> ModelProfileResponse:
-    with _safe_errors():
-        return ModelProfileResponse.from_view(action())
+    return _safe_errors(lambda: ModelProfileResponse.from_view(action()))
 
 
 @router.get(
@@ -117,11 +127,12 @@ def _response(action: Callable[[], object]) -> ModelProfileResponse:
     responses=_ERROR_RESPONSES,
 )
 def list_model_profiles(request: Request) -> list[ModelProfileResponse]:
-    with _safe_errors():
-        return [
+    return _safe_errors(
+        lambda: [
             ModelProfileResponse.from_view(view)
             for view in _service(request).list_profiles()
         ]
+    )
 
 
 @router.post(
@@ -185,10 +196,12 @@ def delete_model_profile(
     request: Request,
     if_match: str | None = Header(default=None, alias="If-Match"),
 ) -> Response:
-    with _safe_errors():
+    def delete() -> None:
         _service(request).delete_profile(
             str(profile_id), expected_revision=_revision(if_match)
         )
+
+    _safe_errors(delete)
     return Response(status_code=204)
 
 

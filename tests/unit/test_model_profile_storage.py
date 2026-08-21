@@ -230,3 +230,41 @@ def test_set_default_clears_previous_default_and_revises_both_profiles(repositor
     assert previous is not None
     assert previous.is_default is False
     assert previous.revision == 2
+
+
+def test_create_replacing_default_rolls_back_prior_default_on_insert_failure(
+    repository,
+):
+    """Breaks if clearing the old default commits when insertion fails."""
+    first = repository.create(_profile(display_name="First", is_default=True))
+    duplicate = repository.create(_profile(display_name="Duplicate ID"))
+
+    with pytest.raises(IntegrityError):
+        repository.create_replacing_default(
+            _profile(
+                id=duplicate.id,
+                display_name="Replacement",
+                is_default=True,
+            )
+        )
+
+    assert repository.get(first.id) == first
+    assert repository.get(duplicate.id) == duplicate
+
+
+def test_soft_delete_and_set_default_rolls_back_delete_when_promotion_fails(
+    repository,
+):
+    """Breaks if deleting the current default commits without its replacement."""
+    current = repository.create(_profile(display_name="Current", is_default=True))
+    replacement = repository.create(_profile(display_name="Replacement"))
+
+    with pytest.raises(ModelProfileRevisionError):
+        repository.soft_delete_and_set_default(
+            current.id,
+            expected_revision=current.revision,
+            replacement_profile_id="00000000-0000-4000-8000-000000000099",
+        )
+
+    assert repository.get(current.id) == current
+    assert repository.get(replacement.id) == replacement

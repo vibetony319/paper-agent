@@ -2,10 +2,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
+import pytest
 
 from paper_agent.app import create_app
 from paper_agent.config import Settings
 from paper_agent.models.vllm import VllmModelConfig
+from paper_agent.routes.model_profiles import ModelProfileHttpError, _safe_errors
 from paper_agent.services.reasoning_clients import ENVIRONMENT_FALLBACK_PROFILE_ID
 
 
@@ -22,6 +24,17 @@ PROFILE_FIELDS = {
     "capabilities",
     "read_only",
 }
+
+
+def _exception_chain_text(error: BaseException) -> str:
+    messages: list[str] = []
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        messages.append(str(current))
+        current = current.__cause__ or current.__context__
+    return "\n".join(messages)
 
 
 def _profile_payload(**changes: object) -> dict[str, object]:
@@ -176,6 +189,46 @@ def test_revisioned_routes_require_if_match_and_reject_stale_revisions(
         "detail": "模型档案已被其他操作修改，请刷新后重试。",
     }
     assert "Current" in client.get("/api/model-profiles").text
+
+
+def test_model_profile_error_translation_drops_raw_exception_chain() -> None:
+    """Breaks if a stable HTTP error retains provider, database, or secret text."""
+    raw_secret = "raw-storage-api-key-secret"
+
+    def fail() -> None:
+        raise RuntimeError(raw_secret)
+
+    with pytest.raises(ModelProfileHttpError) as caught:
+        _safe_errors(fail)
+
+    error = caught.value
+    assert error.status_code == 500
+    assert error.code == "model_profile_error"
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    assert raw_secret not in _exception_chain_text(error)
+
+
+def test_arbitrarily_long_if_match_is_a_stable_invalid_header(
+    client: TestClient,
+) -> None:
+    """Breaks if integer conversion limits turn hostile revision text into 422/500."""
+    created = _create_profile(client)
+
+    response = client.patch(
+        f"/api/model-profiles/{created['id']}",
+        headers={"If-Match": "9" * 5000},
+        json={"display_name": "Must not update"},
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "code": "invalid_if_match",
+        "detail": "If-Match 必须是正整数修订号。",
+    }
+    assert client.get("/api/model-profiles").json()[0]["revision"] == created[
+        "revision"
+    ]
 
 
 def test_stale_capability_test_wins_over_missing_credentials(
