@@ -7,6 +7,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     ForeignKeyConstraint,
+    Index,
     Integer,
     MetaData,
     String,
@@ -14,6 +15,7 @@ from sqlalchemy import (
     UniqueConstraint,
     create_engine,
     event,
+    text,
 )
 from sqlalchemy.engine import Engine
 
@@ -39,6 +41,9 @@ processing_runs = Table(
     Column("stage", String(16)),
     Column("status", String(16), nullable=False),
     Column("error_summary", String),
+    Column("model_profile_id", String(36)),
+    Column("model_snapshot_json", String),
+    Column("request_id", String(36)),
     UniqueConstraint("paper_id", "sequence"),
 )
 
@@ -200,12 +205,42 @@ conversation_messages = Table(
     Column("role", String(16), nullable=False),
     Column("content", String, nullable=False),
     Column("sequence", Integer, nullable=False),
+    Column("model_profile_id", String(36)),
+    Column("model_snapshot_json", String),
+    Column("request_id", String(36)),
     ForeignKeyConstraint(
         ["paper_id", "conversation_id"],
         ["conversations.paper_id", "conversations.id"],
     ),
     UniqueConstraint("paper_id", "id"),
     UniqueConstraint("conversation_id", "sequence"),
+)
+
+model_profiles = Table(
+    "model_profiles",
+    metadata,
+    Column("id", String(36), primary_key=True),
+    Column("display_name", String, nullable=False),
+    Column("base_url", String, nullable=False),
+    Column("model_name", String, nullable=False),
+    Column("secret_ref", String),
+    Column("enabled", Boolean, nullable=False, server_default="1"),
+    Column("is_default", Boolean, nullable=False, server_default="0"),
+    Column("revision", Integer, nullable=False),
+    Column("basic_chat", Boolean, nullable=False, server_default="0"),
+    Column("structured_output", Boolean, nullable=False, server_default="0"),
+    Column("tool_calling", Boolean, nullable=False, server_default="0"),
+    Column("capabilities_checked_at", String),
+    Column("created_at", String, nullable=False),
+    Column("updated_at", String, nullable=False),
+    Column("deleted_at", String),
+)
+
+Index(
+    "model_profiles_one_default",
+    model_profiles.c.is_default,
+    unique=True,
+    sqlite_where=text("is_default = 1 AND deleted_at IS NULL"),
 )
 
 conversation_message_citations = Table(
@@ -242,6 +277,9 @@ def initialize_database(database_url: str) -> Engine:
     if database_url.startswith("sqlite"):
         _migrate_legacy_processing_runs(engine)
         _migrate_legacy_papers(engine)
+    from paper_agent.migrations import run_schema_migrations
+
+    run_schema_migrations(engine)
     return engine
 
 
