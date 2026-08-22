@@ -4,6 +4,8 @@ from typing import Literal
 from unicodedata import normalize
 from uuid import uuid4
 
+from paper_agent.model_profiles import ModelSnapshot
+
 
 class ProcessingStatus(StrEnum):
     queued = "queued"
@@ -179,6 +181,9 @@ class ConversationMessage:
     role: AgentMessageRole
     content: str
     citation_element_ids: tuple[str, ...] = ()
+    model_profile_id: str | None = None
+    model_snapshot: ModelSnapshot | None = None
+    request_id: str | None = None
     sequence: int | None = None
     id: str = field(default_factory=lambda: str(uuid4()))
 

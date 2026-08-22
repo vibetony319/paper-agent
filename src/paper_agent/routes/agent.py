@@ -10,13 +10,21 @@ from paper_agent.schemas import (
     CitationResponse,
     ConversationMessageResponse,
     ConversationResponse,
+    ModelSnapshotResponse,
 )
 from paper_agent.services.agent_runtime import (
     AgentQuestion,
+    AgentRuntimeConflictError,
     AgentRuntimePrerequisiteError,
     AgentRuntimeResponseError,
     AgentRuntimeUnavailableError,
+    AgentTurn,
     PaperAgentRuntime,
+)
+from paper_agent.services.model_profiles import ModelProfileService
+from paper_agent.services.reasoning_clients import (
+    ReasoningClientProvider,
+    ResolvedReasoningClients,
 )
 from paper_agent.storage import PaperRepository
 
@@ -30,6 +38,14 @@ def _runtime(request: Request) -> PaperAgentRuntime:
 
 def _repository(request: Request) -> PaperRepository:
     return request.app.state.paper_repository
+
+
+def _provider(request: Request) -> ReasoningClientProvider:
+    return request.app.state.reasoning_client_provider
+
+
+def _model_profile_service(request: Request) -> ModelProfileService:
+    return request.app.state.model_profile_service
 
 
 def _not_found() -> HTTPException:
@@ -48,6 +64,34 @@ def _require_conversation(
     if conversation is None:
         raise _not_found()
     return conversation
+
+
+def _request_conflict() -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail="Request state conflicts with its stored retry. Use a new request_id.",
+    )
+
+
+def _resolve_agent_model(
+    provider: ReasoningClientProvider, profile_id: str
+) -> ResolvedReasoningClients:
+    try:
+        resolved = provider.resolve(profile_id)
+    except Exception:
+        raise HTTPException(
+            status_code=503,
+            detail="Reasoning model is not configured.",
+        ) from None
+    capabilities = resolved.profile.capabilities
+    if not provider.is_read_only_profile(resolved.profile.id) and not (
+        capabilities.structured_output and capabilities.tool_calling
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Selected model does not support Agent requests.",
+        )
+    return resolved
 
 
 def _citations(
@@ -104,10 +148,49 @@ def ask_paper_agent(
     paper_id_text = str(paper_id)
     repository = _repository(request)
     _require_paper(repository, paper_id_text)
-    if payload.conversation_id is not None:
-        _require_conversation(repository, paper_id_text, str(payload.conversation_id))
+    runtime = _runtime(request)
+    request_id = str(payload.request_id)
+    existing = repository.get_agent_turn_by_request(paper_id_text, request_id)
+    if existing is not None:
+        return _agent_message_response(
+            repository,
+            paper_id_text,
+            runtime.turn_from_messages(paper_id=paper_id_text, messages=existing),
+        )
+
+    partial_user = repository.get_agent_user_message_by_request(
+        paper_id_text, request_id
+    )
+    if partial_user is None:
+        if payload.conversation_id is not None:
+            _require_conversation(
+                repository, paper_id_text, str(payload.conversation_id)
+            )
+        profile_id = str(payload.model_profile_id)
+    else:
+        conversation = repository.get_conversation(
+            paper_id_text, partial_user.conversation_id
+        )
+        if (
+            partial_user.model_profile_id is None
+            or partial_user.model_snapshot is None
+            or str(payload.model_profile_id) != partial_user.model_profile_id
+            or payload.content != partial_user.content
+            or (
+                payload.conversation_id is not None
+                and str(payload.conversation_id) != partial_user.conversation_id
+            )
+            or conversation is None
+            or conversation.mode is not payload.mode
+        ):
+            raise _request_conflict()
+        profile_id = partial_user.model_profile_id
+
+    resolved = _resolve_agent_model(_provider(request), profile_id)
+    if partial_user is not None and partial_user.model_snapshot != resolved.snapshot:
+        raise _request_conflict()
     try:
-        turn = _runtime(request).ask(
+        turn = runtime.ask(
             paper_id=paper_id_text,
             question=AgentQuestion(
                 content=payload.content,
@@ -118,22 +201,35 @@ def ask_paper_agent(
                     else str(payload.conversation_id)
                 ),
             ),
+            client=resolved.tools,
+            model_snapshot=resolved.snapshot,
+            request_id=request_id,
         )
-    except AgentRuntimePrerequisiteError as error:
+    except AgentRuntimePrerequisiteError:
         raise HTTPException(
             status_code=409, detail="Paper agent prerequisites are not complete."
-        ) from error
-    except AgentRuntimeUnavailableError as error:
+        ) from None
+    except AgentRuntimeUnavailableError:
         raise HTTPException(
             status_code=503, detail="Reasoning model is not configured."
-        ) from error
-    except AgentRuntimeResponseError as error:
+        ) from None
+    except AgentRuntimeConflictError:
+        raise _request_conflict() from None
+    except AgentRuntimeResponseError:
         raise HTTPException(
             status_code=502,
             detail="Reasoning model could not complete the request.",
-        ) from error
+        ) from None
+    return _agent_message_response(repository, paper_id_text, turn)
+
+
+def _agent_message_response(
+    repository: PaperRepository,
+    paper_id: str,
+    turn: AgentTurn,
+) -> AgentMessageResponse:
     citation_elements = _citation_elements(
-        repository, paper_id_text, (turn.assistant_message,)
+        repository, paper_id, (turn.assistant_message,)
     )
     return AgentMessageResponse(
         conversation_id=turn.conversation.id,
@@ -144,6 +240,13 @@ def ask_paper_agent(
         citations=_citations(
             citation_elements,
             turn.assistant_message.citation_element_ids,
+        ),
+        model=(
+            None
+            if turn.assistant_message.model_snapshot is None
+            else ModelSnapshotResponse.from_snapshot(
+                turn.assistant_message.model_snapshot
+            )
         ),
     )
 
@@ -180,10 +283,11 @@ def get_conversation(
 @router.post("/agent/health", response_model=AgentHealthResponse)
 def validate_agent_health(request: Request) -> AgentHealthResponse:
     try:
-        _runtime(request).validate_tool_calling()
-    except AgentRuntimeUnavailableError as error:
+        clients = _model_profile_service(request).resolve_default_clients()
+        _runtime(request).validate_tool_calling(client=None if clients is None else clients.tools)
+    except Exception:
         raise HTTPException(
             status_code=503,
             detail="Reasoning model tool calling is unavailable.",
-        ) from error
+        ) from None
     return AgentHealthResponse()

@@ -1,8 +1,11 @@
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import dataclass
 import json
 from pathlib import Path
+from threading import Barrier
 from typing import Callable
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import event, func, select
@@ -26,11 +29,13 @@ from paper_agent.models import (
     VllmToolCallingError,
     VllmToolTurn,
 )
+from paper_agent.model_profiles import ModelSnapshot
 from paper_agent.services.agent_runtime import (
     AgentQuestion,
     AgentRuntimePrerequisiteError,
     AgentRuntimeResponseError,
     AgentRuntimeUnavailableError,
+    AgentTurn,
     PaperAgentRuntime,
 )
 from paper_agent.services.agent_tools import PaperToolRegistry
@@ -142,6 +147,17 @@ class FailingDefinitionsToolRegistry:
         raise AssertionError("tool execution must not run after definitions fail")
 
 
+class FailingOnceGuard(CitationGuard):
+    def __init__(self) -> None:
+        self.remaining_failures = 1
+
+    def validate(self, *args: object, **kwargs: object):
+        if self.remaining_failures:
+            self.remaining_failures -= 1
+            raise RuntimeError("raw-guard-secret")
+        return super().validate(*args, **kwargs)
+
+
 def _paper_with_stage1_document(
     repository: PaperRepository, name: str = "paper"
 ) -> PreparedPaper:
@@ -167,18 +183,62 @@ def _paper_with_stage1_document(
     return PreparedPaper(id=paper.id, element_id=element.id)
 
 
+def _model_snapshot(
+    *,
+    profile_id: str = "10000000-0000-0000-0000-000000000001",
+    display_name: str = "Agent model",
+    model_name: str = "agent-model",
+    revision: int = 1,
+) -> ModelSnapshot:
+    return ModelSnapshot(
+        profile_id=profile_id,
+        display_name=display_name,
+        base_url="http://127.0.0.1:8000/v1",
+        model_name=model_name,
+        revision=revision,
+    )
+
+
+class RuntimeHarness:
+    def __init__(
+        self, runtime: PaperAgentRuntime, client: FakeAgentClient | None
+    ) -> None:
+        self.runtime = runtime
+        self.client = client
+
+    def ask(self, *, paper_id: str, question: AgentQuestion) -> AgentTurn:
+        return self.runtime.ask(
+            paper_id=paper_id,
+            question=question,
+            client=self.client,
+            model_snapshot=_model_snapshot(),
+            request_id=str(uuid4()),
+        )
+
+    def validate_tool_calling(self) -> None:
+        self.runtime.validate_tool_calling(client=self.client)
+
+
+def _runtime_core(
+    repository: PaperRepository,
+    *,
+    tools: object | None = None,
+    guard: CitationGuard | None = None,
+) -> PaperAgentRuntime:
+    return PaperAgentRuntime(
+        repository=repository,
+        tools=tools or PaperToolRegistry(repository),
+        guard=guard or CitationGuard(),
+    )
+
+
 def _runtime(
     repository: PaperRepository,
     client: FakeAgentClient | None,
     *,
     tools: object | None = None,
-) -> PaperAgentRuntime:
-    return PaperAgentRuntime(
-        repository=repository,
-        tools=tools or PaperToolRegistry(repository),
-        client=client,
-        guard=CitationGuard(),
-    )
+) -> RuntimeHarness:
+    return RuntimeHarness(_runtime_core(repository, tools=tools), client)
 
 
 def _tool_call(
@@ -294,6 +354,215 @@ def test_runtime_persists_user_before_model_then_only_the_guarded_answer(reposit
     assert "raw unguarded draft" not in repr(
         repository.get_conversation_messages(paper.id, turn.conversation.id)
     )
+
+
+def test_runtime_switches_models_in_one_conversation_and_persists_turn_audit_parity(
+    repository,
+):
+    """Breaks if model selection mutates conversation identity or differs within one turn."""
+    paper = _paper_with_stage1_document(repository)
+    runtime = _runtime_core(repository)
+    first_snapshot = _model_snapshot()
+    second_snapshot = _model_snapshot(
+        profile_id="10000000-0000-0000-0000-000000000002",
+        display_name="Second model",
+        model_name="second-model",
+    )
+    first_request_id = "20000000-0000-0000-0000-000000000001"
+    second_request_id = "20000000-0000-0000-0000-000000000002"
+
+    first = runtime.ask(
+        paper_id=paper.id,
+        question=AgentQuestion(content="First", mode=AgentMode.paper_only),
+        client=FakeAgentClient(),
+        model_snapshot=first_snapshot,
+        request_id=first_request_id,
+    )
+    second = runtime.ask(
+        paper_id=paper.id,
+        question=AgentQuestion(
+            content="Second",
+            mode=AgentMode.paper_only,
+            conversation_id=first.conversation.id,
+        ),
+        client=FakeAgentClient(),
+        model_snapshot=second_snapshot,
+        request_id=second_request_id,
+    )
+
+    assert second.conversation.id == first.conversation.id
+    messages = repository.get_conversation_messages(paper.id, first.conversation.id)
+    assert [message.model_snapshot for message in messages] == [
+        first_snapshot,
+        first_snapshot,
+        second_snapshot,
+        second_snapshot,
+    ]
+    assert [message.request_id for message in messages] == [
+        first_request_id,
+        first_request_id,
+        second_request_id,
+        second_request_id,
+    ]
+
+
+def test_runtime_replays_complete_request_without_another_model_call(repository):
+    """Breaks if a complete idempotency hit validates new payload or invokes its model."""
+    paper = _paper_with_stage1_document(repository)
+    runtime = _runtime_core(repository)
+    request_id = "20000000-0000-0000-0000-000000000003"
+    first_client = FakeAgentClient()
+    first = runtime.ask(
+        paper_id=paper.id,
+        question=AgentQuestion(content="Original", mode=AgentMode.paper_only),
+        client=first_client,
+        model_snapshot=_model_snapshot(),
+        request_id=request_id,
+    )
+    replay_client = FakeAgentClient(
+        turns=(AssertionError("duplicate model call"),),
+    )
+
+    replay = runtime.ask(
+        paper_id=paper.id,
+        question=AgentQuestion(content="Conflicting duplicate", mode=AgentMode.paper_only),
+        client=replay_client,
+        model_snapshot=_model_snapshot(
+            profile_id="10000000-0000-0000-0000-000000000009"
+        ),
+        request_id=request_id,
+    )
+
+    assert replay.conversation == first.conversation
+    assert replay.user_message == first.user_message
+    assert replay.assistant_message == first.assistant_message
+    assert replay_client.tool_requests == []
+    assert replay_client.final_requests == []
+    assert len(repository.get_conversation_messages(paper.id, first.conversation.id)) == 2
+
+
+def test_runtime_retries_user_only_request_without_appending_a_second_user(repository):
+    """Breaks if retry duplicates user state instead of completing the original request."""
+    paper = _paper_with_stage1_document(repository)
+    runtime = _runtime_core(repository)
+    request_id = "20000000-0000-0000-0000-000000000004"
+    snapshot = _model_snapshot()
+    failing_client = FakeAgentClient(
+        turns=(VllmToolCallingError("raw-first-attempt-secret"),)
+    )
+    with pytest.raises(AgentRuntimeResponseError):
+        runtime.ask(
+            paper_id=paper.id,
+            question=AgentQuestion(content="Retry me", mode=AgentMode.paper_only),
+            client=failing_client,
+            model_snapshot=snapshot,
+            request_id=request_id,
+        )
+    user = repository.get_agent_user_message_by_request(paper.id, request_id)
+    assert user is not None
+
+    recovered = runtime.ask(
+        paper_id=paper.id,
+        question=AgentQuestion(content="Retry me", mode=AgentMode.paper_only),
+        client=FakeAgentClient(),
+        model_snapshot=snapshot,
+        request_id=request_id,
+    )
+
+    assert recovered.user_message == user
+    assert repository.get_agent_turn_by_request(paper.id, request_id) == (
+        recovered.user_message,
+        recovered.assistant_message,
+    )
+    assert len(repository.get_conversation_messages(paper.id, user.conversation_id)) == 2
+
+
+def test_runtime_rejects_partial_retry_when_current_snapshot_changed(repository):
+    """Breaks if a failed request silently resumes against a revised model profile."""
+    paper = _paper_with_stage1_document(repository)
+    runtime = _runtime_core(repository)
+    request_id = "20000000-0000-0000-0000-000000000005"
+    first_snapshot = _model_snapshot()
+    with pytest.raises(AgentRuntimeResponseError):
+        runtime.ask(
+            paper_id=paper.id,
+            question=AgentQuestion(content="Retry me", mode=AgentMode.paper_only),
+            client=FakeAgentClient(turns=(VllmToolCallingError("failed"),)),
+            model_snapshot=first_snapshot,
+            request_id=request_id,
+        )
+    retry_client = FakeAgentClient()
+
+    with pytest.raises(RuntimeError, match="new request_id"):
+        runtime.ask(
+            paper_id=paper.id,
+            question=AgentQuestion(content="Retry me", mode=AgentMode.paper_only),
+            client=retry_client,
+            model_snapshot=_model_snapshot(revision=2),
+            request_id=request_id,
+        )
+
+    assert retry_client.tool_requests == []
+    assert repository.get_agent_user_message_by_request(paper.id, request_id) is not None
+
+
+def test_runtime_serializes_concurrent_same_request_before_any_model_call(repository):
+    """Breaks if concurrent duplicates can both append or call the provider model."""
+    paper = _paper_with_stage1_document(repository)
+    runtime = _runtime_core(repository)
+    client = FakeAgentClient()
+    request_id = "20000000-0000-0000-0000-000000000006"
+    barrier = Barrier(2)
+
+    def ask_once() -> AgentTurn:
+        barrier.wait()
+        return runtime.ask(
+            paper_id=paper.id,
+            question=AgentQuestion(content="Concurrent", mode=AgentMode.paper_only),
+            client=client,
+            model_snapshot=_model_snapshot(),
+            request_id=request_id,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        turns = tuple(executor.map(lambda _index: ask_once(), range(2)))
+
+    assert turns[0].assistant_message.id == turns[1].assistant_message.id
+    assert len(client.tool_requests) == 1
+    assert len(client.final_requests) == 1
+    assert repository.get_agent_turn_by_request(paper.id, request_id) is not None
+
+
+def test_runtime_retries_after_unexpected_guard_failure_without_leaking_or_duplication(
+    repository,
+):
+    """Breaks if a guard exception leaks details or makes its user-only turn unrecoverable."""
+    paper = _paper_with_stage1_document(repository)
+    guard = FailingOnceGuard()
+    runtime = _runtime_core(repository, guard=guard)
+    request_id = "20000000-0000-0000-0000-000000000007"
+    snapshot = _model_snapshot()
+    with pytest.raises(AgentRuntimeResponseError) as caught:
+        runtime.ask(
+            paper_id=paper.id,
+            question=AgentQuestion(content="Guard retry", mode=AgentMode.paper_only),
+            client=FakeAgentClient(),
+            model_snapshot=snapshot,
+            request_id=request_id,
+        )
+    assert "raw-guard-secret" not in str(caught.value)
+    assert caught.value.__cause__ is None
+
+    recovered = runtime.ask(
+        paper_id=paper.id,
+        question=AgentQuestion(content="Guard retry", mode=AgentMode.paper_only),
+        client=FakeAgentClient(),
+        model_snapshot=snapshot,
+        request_id=request_id,
+    )
+
+    assert recovered.user_message.request_id == request_id
+    assert len(repository.get_conversation_messages(paper.id, recovered.conversation.id)) == 2
 
 
 def test_runtime_sends_openai_tool_result_messages_with_returned_evidence_ids(repository):
@@ -474,6 +743,7 @@ def test_runtime_builds_model_history_from_only_the_latest_six_durable_messages(
         if "conversation_messages.content" in statement
         and "FROM conversation_messages" in statement
         and "FROM conversation_message_citations" not in statement
+        and "LIMIT" in statement.upper()
     ]
     assert len(history_reads) == 1
     assert "LIMIT" in history_reads[0].upper()

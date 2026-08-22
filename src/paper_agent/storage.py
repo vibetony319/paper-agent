@@ -1,4 +1,6 @@
 from dataclasses import replace
+import json
+from urllib.parse import urlparse
 from uuid import uuid4
 
 from sqlalchemy import delete, func, insert, select, update
@@ -39,6 +41,79 @@ from paper_agent.domain import (
     Section,
     normalize_graph_node_name,
 )
+from paper_agent.model_profiles import ModelSnapshot, validate_model_profile_id
+
+
+_MODEL_SNAPSHOT_KEYS = frozenset(
+    {"profile_id", "display_name", "base_url", "model_name", "revision"}
+)
+
+
+def _snapshot_values(snapshot: ModelSnapshot) -> dict[str, object]:
+    validate_model_profile_id(snapshot.profile_id)
+    if any(
+        not isinstance(value, str) or not value.strip()
+        for value in (snapshot.display_name, snapshot.base_url, snapshot.model_name)
+    ):
+        raise ValueError("model snapshot text fields must be nonempty")
+    if (
+        not isinstance(snapshot.revision, int)
+        or isinstance(snapshot.revision, bool)
+        or snapshot.revision < 1
+    ):
+        raise ValueError("model snapshot revision must be positive")
+    try:
+        parsed_url = urlparse(snapshot.base_url)
+        hostname = parsed_url.hostname
+        parsed_url.port
+    except ValueError:
+        raise ValueError("model snapshot base URL is invalid") from None
+    if (
+        parsed_url.scheme not in {"http", "https"}
+        or not parsed_url.netloc
+        or hostname is None
+        or parsed_url.username is not None
+        or parsed_url.password is not None
+        or parsed_url.query
+        or parsed_url.fragment
+    ):
+        raise ValueError("model snapshot base URL is invalid")
+    return {
+        "profile_id": snapshot.profile_id,
+        "display_name": snapshot.display_name,
+        "base_url": snapshot.base_url,
+        "model_name": snapshot.model_name,
+        "revision": snapshot.revision,
+    }
+
+
+def _serialize_model_snapshot(snapshot: ModelSnapshot | None) -> str | None:
+    if snapshot is None:
+        return None
+    try:
+        payload = _snapshot_values(snapshot)
+    except (TypeError, ValueError):
+        raise ConversationReferenceError("message model snapshot is invalid") from None
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def _parse_model_snapshot(payload: str | None) -> ModelSnapshot | None:
+    if payload is None:
+        return None
+    try:
+        values = json.loads(payload)
+        if not isinstance(values, dict) or set(values) != _MODEL_SNAPSHOT_KEYS:
+            return None
+        snapshot = ModelSnapshot(**values)
+        _snapshot_values(snapshot)
+        return snapshot
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
 
 
 class PageReferenceError(ValueError):
@@ -190,6 +265,11 @@ class PaperRepository:
             raise ConversationReferenceError("user messages cannot cite source elements")
         if len(set(message.citation_element_ids)) != len(message.citation_element_ids):
             raise ConversationReferenceError("assistant citations must not contain duplicates")
+        if message.model_snapshot is not None and (
+            message.model_profile_id != message.model_snapshot.profile_id
+        ):
+            raise ConversationReferenceError("message model metadata must match")
+        model_snapshot_json = _serialize_model_snapshot(message.model_snapshot)
         with self.engine.begin() as connection:
             self._require_owned_conversation(
                 connection, message.paper_id, message.conversation_id
@@ -206,6 +286,9 @@ class PaperRepository:
                     role=message.role.value,
                     content=message.content,
                     sequence=sequence,
+                    model_profile_id=message.model_profile_id,
+                    model_snapshot_json=model_snapshot_json,
+                    request_id=message.request_id,
                 )
             )
             if message.citation_element_ids:
@@ -287,6 +370,66 @@ class PaperRepository:
                 )
                 for row in rows
             )
+
+    def get_agent_turn_by_request(
+        self, paper_id: str, request_id: str
+    ) -> tuple[ConversationMessage, ConversationMessage] | None:
+        messages = self._get_agent_messages_by_request(paper_id, request_id)
+        if (
+            len(messages) != 2
+            or messages[0].role is not AgentMessageRole.user
+            or messages[1].role is not AgentMessageRole.assistant
+            or messages[0].conversation_id != messages[1].conversation_id
+        ):
+            return None
+        return messages[0], messages[1]
+
+    def get_agent_user_message_by_request(
+        self, paper_id: str, request_id: str
+    ) -> ConversationMessage | None:
+        messages = self._get_agent_messages_by_request(paper_id, request_id)
+        if len(messages) != 1 or messages[0].role is not AgentMessageRole.user:
+            return None
+        return messages[0]
+
+    def _get_agent_messages_by_request(
+        self, paper_id: str, request_id: str
+    ) -> tuple[ConversationMessage, ...]:
+        with self.engine.connect() as connection:
+            rows = tuple(
+                connection.execute(
+                    select(conversation_messages)
+                    .where(conversation_messages.c.paper_id == paper_id)
+                    .where(conversation_messages.c.request_id == request_id)
+                    .order_by(conversation_messages.c.sequence)
+                ).mappings()
+            )
+            if not rows:
+                return ()
+            message_ids = tuple(row["id"] for row in rows)
+            citation_rows = connection.execute(
+                select(
+                    conversation_message_citations.c.message_id,
+                    conversation_message_citations.c.element_id,
+                )
+                .where(conversation_message_citations.c.paper_id == paper_id)
+                .where(conversation_message_citations.c.message_id.in_(message_ids))
+                .order_by(
+                    conversation_message_citations.c.message_id,
+                    conversation_message_citations.c.element_id,
+                )
+            ).mappings()
+            citations_by_message: dict[str, list[str]] = {}
+            for citation_row in citation_rows:
+                citations_by_message.setdefault(citation_row["message_id"], []).append(
+                    citation_row["element_id"]
+                )
+        return tuple(
+            self._conversation_message_from_row(
+                row, tuple(citations_by_message.get(row["id"], ()))
+            )
+            for row in rows
+        )
 
     def save_page(self, paper_id: str, page: Page) -> Page:
         with self.engine.begin() as connection:
@@ -1065,6 +1208,9 @@ class PaperRepository:
             role=AgentMessageRole(row["role"]),
             content=row["content"],
             citation_element_ids=citation_element_ids,
+            model_profile_id=row["model_profile_id"],
+            model_snapshot=_parse_model_snapshot(row["model_snapshot_json"]),
+            request_id=row["request_id"],
             sequence=row["sequence"],
         )
 

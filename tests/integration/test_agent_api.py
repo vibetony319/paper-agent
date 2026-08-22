@@ -1,6 +1,7 @@
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -14,7 +15,13 @@ from paper_agent.domain import (
     ConversationMessage,
 )
 from paper_agent.models import VllmToolCall, VllmToolCallingError, VllmToolTurn
+from paper_agent.model_profiles import ModelCapabilities, ModelProfile
 from paper_agent.services.agent_runtime import PaperAgentRuntime
+from paper_agent.services.reasoning_clients import ReasoningClientResolutionError
+
+
+DEFAULT_PROFILE_ID = "10000000-0000-0000-0000-000000000001"
+SECOND_PROFILE_ID = "10000000-0000-0000-0000-000000000002"
 
 
 class FakeAgentClient:
@@ -35,6 +42,8 @@ class FakeAgentClient:
         }
         self.health_calls = 0
         self.health_error: Exception | None = None
+        self.tool_requests = 0
+        self.final_requests = 0
 
     def request_tool_turn(
         self,
@@ -43,6 +52,7 @@ class FakeAgentClient:
         tools: tuple[dict[str, object], ...],
         tool_choice: str | dict[str, object],
     ) -> VllmToolTurn:
+        self.tool_requests += 1
         turn = (
             self.remaining_turns.pop(0)
             if self.remaining_turns
@@ -59,6 +69,7 @@ class FakeAgentClient:
         schema_name: str,
         schema: dict[str, object],
     ) -> dict[str, object]:
+        self.final_requests += 1
         if isinstance(self.final_payload, Exception):
             raise self.final_payload
         return deepcopy(self.final_payload)
@@ -73,6 +84,63 @@ class FakeAgentClient:
 class UploadedPaper:
     id: str
     element_id: str
+
+
+@dataclass(frozen=True)
+class FakeResolvedClients:
+    profile: ModelProfile
+    snapshot: object
+    tools: FakeAgentClient
+
+
+class FakeReasoningProvider:
+    def __init__(self, resolved: dict[str, FakeResolvedClients]) -> None:
+        self.resolved = resolved
+        self.resolve_calls: list[str] = []
+
+    def resolve(self, profile_id: str) -> FakeResolvedClients:
+        self.resolve_calls.append(profile_id)
+        try:
+            return self.resolved[profile_id]
+        except KeyError:
+            raise ReasoningClientResolutionError("raw-provider-profile-detail") from None
+
+    @staticmethod
+    def is_read_only_profile(_profile_id: str) -> bool:
+        return False
+
+
+class ExplodingReasoningProvider:
+    @staticmethod
+    def resolve(_profile_id: str):
+        raise RuntimeError("raw-provider-resolution-secret")
+
+
+class FakeDefaultModelService:
+    def __init__(self, resolved: FakeResolvedClients | None) -> None:
+        self.resolved = resolved
+
+    def resolve_default_clients(self) -> FakeResolvedClients | None:
+        return self.resolved
+
+
+def _agent_payload(
+    content: str = "Question",
+    *,
+    mode: str = "paper_only",
+    conversation_id: str | None = None,
+    model_profile_id: str = DEFAULT_PROFILE_ID,
+    request_id: str | None = None,
+) -> dict[str, str]:
+    payload = {
+        "content": content,
+        "mode": mode,
+        "model_profile_id": model_profile_id,
+        "request_id": request_id or str(uuid4()),
+    }
+    if conversation_id is not None:
+        payload["conversation_id"] = conversation_id
+    return payload
 
 
 def _upload_pdf(client: TestClient, sample_pdf: Path, filename: str = "paper.pdf") -> UploadedPaper:
@@ -125,14 +193,62 @@ def _grounded_tool_flow(paper: UploadedPaper) -> FakeAgentClient:
     )
 
 
-def _configure_fake_agent_runtime(app, fake: FakeAgentClient) -> None:
-    """Replace the app-state runtime only; never connect an external model in tests."""
+def _model_profile(
+    profile_id: str,
+    *,
+    display_name: str = "Agent model",
+    model_name: str = "agent-model",
+    revision: int = 1,
+    enabled: bool = True,
+    structured_output: bool = True,
+    tool_calling: bool = True,
+) -> ModelProfile:
+    return ModelProfile(
+        id=profile_id,
+        display_name=display_name,
+        base_url="http://127.0.0.1:8000/v1",
+        model_name=model_name,
+        revision=revision,
+        enabled=enabled,
+        capabilities=ModelCapabilities(
+            basic_chat=True,
+            structured_output=structured_output,
+            tool_calling=tool_calling,
+        ),
+    )
+
+
+def _configure_fake_agent_models(
+    app, clients: dict[str, FakeAgentClient], *, profiles: dict[str, ModelProfile] | None = None
+) -> FakeReasoningProvider:
+    configured: dict[str, FakeResolvedClients] = {}
+    for profile_id, fake in clients.items():
+        profile = (
+            _model_profile(profile_id)
+            if profiles is None
+            else profiles[profile_id]
+        )
+        configured[profile_id] = FakeResolvedClients(
+            profile=profile,
+            snapshot=profile.snapshot(),
+            tools=fake,
+        )
+    provider = FakeReasoningProvider(configured)
+    app.state.reasoning_client_provider = provider
+    app.state.model_profile_service = FakeDefaultModelService(
+        next(iter(configured.values()), None)
+    )
     app.state.paper_agent_runtime = PaperAgentRuntime(
         repository=app.state.paper_repository,
         tools=app.state.paper_tool_registry,
-        client=fake,
         guard=app.state.citation_guard,
     )
+    return provider
+
+
+def _configure_fake_agent_runtime(app, fake: FakeAgentClient) -> FakeReasoningProvider:
+    """Resolve one deterministic tools client without any external model connection."""
+    return _configure_fake_agent_models(app, {DEFAULT_PROFILE_ID: fake})
 
 
 def _chat_row_counts(repository) -> tuple[int, int]:
@@ -165,7 +281,7 @@ def test_agent_returns_locatable_same_paper_citations_without_paths(
     try:
         response = client.post(
             f"/api/papers/{uploaded_paper.id}/agent/messages",
-            json={"content": "Explain the method.", "mode": "paper_only"},
+            json=_agent_payload("Explain the method."),
         )
     finally:
         event.remove(repository.engine, "before_cursor_execute", capture_statement)
@@ -205,21 +321,290 @@ def test_agent_returns_locatable_same_paper_citations_without_paths(
     assert history.json()["messages"][-1]["citations"] == body["citations"]
 
 
+def test_same_conversation_can_continue_with_a_different_model(
+    client: TestClient, uploaded_paper: UploadedPaper
+) -> None:
+    """Breaks if a selected model is fixed to a conversation instead of a request turn."""
+    first_profile = _model_profile(DEFAULT_PROFILE_ID)
+    second_profile = _model_profile(
+        SECOND_PROFILE_ID,
+        display_name="Second model",
+        model_name="second-model",
+    )
+    _configure_fake_agent_models(
+        client.app,
+        {
+            DEFAULT_PROFILE_ID: _grounded_tool_flow(uploaded_paper),
+            SECOND_PROFILE_ID: FakeAgentClient(),
+        },
+        profiles={
+            DEFAULT_PROFILE_ID: first_profile,
+            SECOND_PROFILE_ID: second_profile,
+        },
+    )
+
+    first = client.post(
+        f"/api/papers/{uploaded_paper.id}/agent/messages",
+        json=_agent_payload("What is the method?"),
+    ).json()
+    second = client.post(
+        f"/api/papers/{uploaded_paper.id}/agent/messages",
+        json=_agent_payload(
+            "Continue.",
+            conversation_id=first["conversation_id"],
+            model_profile_id=SECOND_PROFILE_ID,
+        ),
+    ).json()
+
+    assert second["conversation_id"] == first["conversation_id"]
+    assert first["model"]["profile_id"] == DEFAULT_PROFILE_ID
+    assert second["model"]["profile_id"] == SECOND_PROFILE_ID
+    history = client.get(
+        f"/api/papers/{uploaded_paper.id}/agent/conversations/{first['conversation_id']}"
+    ).json()
+    assert [message["model"]["profile_id"] for message in history["messages"]] == [
+        DEFAULT_PROFILE_ID,
+        DEFAULT_PROFILE_ID,
+        SECOND_PROFILE_ID,
+        SECOND_PROFILE_ID,
+    ]
+
+
+def test_complete_request_duplicate_replays_stored_citations_before_provider_resolution(
+    client: TestClient, uploaded_paper: UploadedPaper
+) -> None:
+    """Breaks if a complete duplicate resolves or calls a model instead of replaying storage."""
+    fake = _grounded_tool_flow(uploaded_paper)
+    provider = _configure_fake_agent_runtime(client.app, fake)
+    request_id = "20000000-0000-0000-0000-000000000011"
+    first = client.post(
+        f"/api/papers/{uploaded_paper.id}/agent/messages",
+        json=_agent_payload("Original", request_id=request_id),
+    )
+    assert first.status_code == 200
+    provider.resolved.clear()
+
+    replay = client.post(
+        f"/api/papers/{uploaded_paper.id}/agent/messages",
+        json=_agent_payload(
+            "Conflicting duplicate",
+            model_profile_id=SECOND_PROFILE_ID,
+            request_id=request_id,
+        ),
+    )
+
+    assert replay.status_code == 200
+    assert replay.json() == first.json()
+    assert provider.resolve_calls == [DEFAULT_PROFILE_ID]
+    assert fake.tool_requests == 2
+    assert fake.final_requests == 1
+
+
+def test_agent_rejects_insufficient_capabilities_before_chat_write(
+    client: TestClient, uploaded_paper: UploadedPaper
+) -> None:
+    """Breaks if an untested model writes a user row before Agent capability gating."""
+    profile = _model_profile(DEFAULT_PROFILE_ID, structured_output=False)
+    fake = FakeAgentClient()
+    _configure_fake_agent_models(
+        client.app,
+        {DEFAULT_PROFILE_ID: fake},
+        profiles={DEFAULT_PROFILE_ID: profile},
+    )
+    before = _chat_row_counts(client.app.state.paper_repository)
+
+    response = client.post(
+        f"/api/papers/{uploaded_paper.id}/agent/messages",
+        json=_agent_payload(),
+    )
+
+    assert response.status_code == 409
+    assert _chat_row_counts(client.app.state.paper_repository) == before
+    assert fake.tool_requests == 0
+    assert fake.final_requests == 0
+
+
+def test_agent_rejects_missing_disabled_and_deleted_profiles_before_chat_write(
+    client: TestClient, uploaded_paper: UploadedPaper
+) -> None:
+    """Breaks if unusable selected profiles create durable conversation state."""
+    repository = client.app.state.model_profile_repository
+    disabled_id = "10000000-0000-0000-0000-000000000003"
+    deleted_id = "10000000-0000-0000-0000-000000000004"
+    repository.create(_model_profile(disabled_id, enabled=False))
+    repository.create(_model_profile(deleted_id))
+    repository.soft_delete(deleted_id, expected_revision=1)
+    before = _chat_row_counts(client.app.state.paper_repository)
+
+    statuses = [
+        client.post(
+            f"/api/papers/{uploaded_paper.id}/agent/messages",
+            json=_agent_payload(model_profile_id=profile_id),
+        ).status_code
+        for profile_id in (
+            "10000000-0000-0000-0000-000000000099",
+            disabled_id,
+            deleted_id,
+        )
+    ]
+
+    assert statuses == [503, 503, 503]
+    assert _chat_row_counts(client.app.state.paper_repository) == before
+
+
+def test_agent_sanitizes_unexpected_provider_resolution_failure_before_chat_write(
+    client: TestClient, uploaded_paper: UploadedPaper
+) -> None:
+    """Breaks if an unexpected provider exception or its chain crosses the HTTP boundary."""
+    client.app.state.reasoning_client_provider = ExplodingReasoningProvider()
+    safe_client = TestClient(client.app, raise_server_exceptions=False)
+    before = _chat_row_counts(client.app.state.paper_repository)
+
+    response = safe_client.post(
+        f"/api/papers/{uploaded_paper.id}/agent/messages",
+        json=_agent_payload(),
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Reasoning model is not configured."}
+    assert "raw-provider-resolution-secret" not in response.text
+    assert _chat_row_counts(client.app.state.paper_repository) == before
+
+
+def test_partial_retry_requires_the_original_unchanged_model_snapshot(
+    client: TestClient, uploaded_paper: UploadedPaper
+) -> None:
+    """Breaks if a user-only retry silently switches to a revised profile snapshot."""
+    request_id = "20000000-0000-0000-0000-000000000012"
+    first_profile = _model_profile(DEFAULT_PROFILE_ID)
+    _configure_fake_agent_models(
+        client.app,
+        {
+            DEFAULT_PROFILE_ID: FakeAgentClient(
+                turns=(VllmToolCallingError("raw-model-secret"),)
+            )
+        },
+        profiles={DEFAULT_PROFILE_ID: first_profile},
+    )
+    payload = _agent_payload("Retry", request_id=request_id)
+    failed = client.post(
+        f"/api/papers/{uploaded_paper.id}/agent/messages", json=payload
+    )
+    assert failed.status_code == 502
+
+    retry_client = FakeAgentClient()
+    revised_profile = _model_profile(DEFAULT_PROFILE_ID, revision=2)
+    _configure_fake_agent_models(
+        client.app,
+        {DEFAULT_PROFILE_ID: retry_client},
+        profiles={DEFAULT_PROFILE_ID: revised_profile},
+    )
+    conflict = client.post(
+        f"/api/papers/{uploaded_paper.id}/agent/messages", json=payload
+    )
+
+    assert conflict.status_code == 409
+    assert "new request_id" in conflict.json()["detail"]
+    assert retry_client.tool_requests == 0
+    assert retry_client.final_requests == 0
+    user = client.app.state.paper_repository.get_agent_user_message_by_request(
+        uploaded_paper.id, request_id
+    )
+    assert user is not None
+
+
+@pytest.mark.parametrize(
+    "conflict",
+    ("content", "conversation", "model", "mode"),
+)
+def test_partial_retry_rejects_rebinding_original_request_state(
+    client: TestClient,
+    uploaded_paper: UploadedPaper,
+    conflict: str,
+) -> None:
+    """Breaks if user-only recovery rebinds content, conversation, model, or mode."""
+    request_id = "20000000-0000-0000-0000-000000000013"
+    _configure_fake_agent_runtime(
+        client.app,
+        FakeAgentClient(turns=(VllmToolCallingError("first attempt failed"),)),
+    )
+    original = _agent_payload("Original", request_id=request_id)
+    assert client.post(
+        f"/api/papers/{uploaded_paper.id}/agent/messages", json=original
+    ).status_code == 502
+    other_conversation = client.app.state.paper_repository.create_conversation(
+        Conversation(paper_id=uploaded_paper.id, mode=AgentMode.paper_only)
+    )
+    retry_client = FakeAgentClient()
+    _configure_fake_agent_models(
+        client.app,
+        {
+            DEFAULT_PROFILE_ID: retry_client,
+            SECOND_PROFILE_ID: FakeAgentClient(),
+        },
+    )
+    retry = dict(original)
+    if conflict == "content":
+        retry["content"] = "Changed"
+    elif conflict == "conversation":
+        retry["conversation_id"] = other_conversation.id
+    elif conflict == "model":
+        retry["model_profile_id"] = SECOND_PROFILE_ID
+    else:
+        retry["mode"] = "external_knowledge"
+
+    response = client.post(
+        f"/api/papers/{uploaded_paper.id}/agent/messages", json=retry
+    )
+
+    assert response.status_code == 409
+    assert "new request_id" in response.json()["detail"]
+    assert retry_client.tool_requests == 0
+    assert retry_client.final_requests == 0
+
+
+def test_conversation_history_exposes_legacy_model_as_null(
+    client: TestClient, uploaded_paper: UploadedPaper
+) -> None:
+    """Breaks if pre-provenance rows become unreadable through the conversation API."""
+    repository = client.app.state.paper_repository
+    conversation = repository.create_conversation(
+        Conversation(paper_id=uploaded_paper.id, mode=AgentMode.paper_only)
+    )
+    repository.append_conversation_message(
+        ConversationMessage(
+            conversation_id=conversation.id,
+            paper_id=uploaded_paper.id,
+            role=AgentMessageRole.user,
+            content="Legacy question",
+        )
+    )
+
+    history = client.get(
+        f"/api/papers/{uploaded_paper.id}/agent/conversations/{conversation.id}"
+    )
+
+    assert history.status_code == 200
+    assert history.json()["messages"][0]["model"] is None
+
+
 def test_agent_maps_preflight_and_configuration_failures_without_chat_writes(
     client: TestClient, uploaded_paper: UploadedPaper, stage1_incomplete_paper
 ) -> None:
     """Breaks if a failed preflight is a 5xx or creates a conversation before validation."""
+    _configure_fake_agent_runtime(client.app, FakeAgentClient())
     before = _chat_row_counts(client.app.state.paper_repository)
 
     assert client.post(
         f"/api/papers/{stage1_incomplete_paper.id}/agent/messages",
-        json={"content": "Question", "mode": "paper_only"},
+        json=_agent_payload(),
     ).status_code == 409
     assert _chat_row_counts(client.app.state.paper_repository) == before
 
+    client.app.state.reasoning_client_provider = FakeReasoningProvider({})
     assert client.post(
         f"/api/papers/{uploaded_paper.id}/agent/messages",
-        json={"content": "Question", "mode": "paper_only"},
+        json=_agent_payload(),
     ).status_code == 503
     assert _chat_row_counts(client.app.state.paper_repository) == before
 
@@ -362,7 +747,7 @@ def test_agent_maps_resource_validation_and_model_failures_to_safe_boundaries(
     _configure_fake_agent_runtime(client.app, first_client)
     created = client.post(
         f"/api/papers/{uploaded_paper.id}/agent/messages",
-        json={"content": "Question", "mode": "paper_only"},
+        json=_agent_payload(),
     )
     assert created.status_code == 200
     conversation_id = created.json()["conversation_id"]
@@ -370,7 +755,7 @@ def test_agent_maps_resource_validation_and_model_failures_to_safe_boundaries(
 
     assert client.post(
         "/api/papers/00000000-0000-0000-0000-000000000999/agent/messages",
-        json={"content": "Question", "mode": "paper_only"},
+        json=_agent_payload(),
     ).status_code == 404
     assert client.get(
         f"/api/papers/{uploaded_paper.id}/agent/conversations/00000000-0000-0000-0000-000000000999"
@@ -380,33 +765,28 @@ def test_agent_maps_resource_validation_and_model_failures_to_safe_boundaries(
     ).status_code == 404
     assert client.post(
         f"/api/papers/{other_paper.id}/agent/messages",
-        json={
-            "content": "Question",
-            "mode": "paper_only",
-            "conversation_id": conversation_id,
-        },
+        json=_agent_payload(conversation_id=conversation_id),
     ).status_code == 404
     assert client.post(
         f"/api/papers/{uploaded_paper.id}/agent/messages",
-        json={
-            "content": "Question",
-            "mode": "external_knowledge",
-            "conversation_id": conversation_id,
-        },
+        json=_agent_payload(
+            mode="external_knowledge", conversation_id=conversation_id
+        ),
     ).status_code == 409
 
     for payload in (
-        {"content": "", "mode": "paper_only"},
-        {"content": "Question", "mode": "unsupported"},
-        {"content": "Question", "mode": "paper_only", "conversation_id": "not-a-uuid"},
-        {"content": "Question", "mode": "paper_only", "unexpected": "field"},
+        _agent_payload(""),
+        _agent_payload(mode="unsupported"),
+        _agent_payload(conversation_id="not-a-uuid"),
+        {**_agent_payload(), "unexpected": "field"},
+        {"content": "Question", "mode": "paper_only"},
     ):
         assert client.post(
             f"/api/papers/{uploaded_paper.id}/agent/messages", json=payload
         ).status_code == 422
     assert client.post(
         "/api/papers/not-a-uuid/agent/messages",
-        json={"content": "Question", "mode": "paper_only"},
+        json=_agent_payload(),
     ).status_code == 422
 
     _configure_fake_agent_runtime(
@@ -415,7 +795,7 @@ def test_agent_maps_resource_validation_and_model_failures_to_safe_boundaries(
     )
     failure = client.post(
         f"/api/papers/{uploaded_paper.id}/agent/messages",
-        json={"content": "Question", "mode": "paper_only"},
+        json=_agent_payload(),
     )
     assert failure.status_code == 502
     assert "raw model endpoint secret" not in failure.text
@@ -439,7 +819,7 @@ def test_agent_keeps_citation_guard_fallback_as_a_successful_safe_answer(
 
     response = client.post(
         f"/api/papers/{uploaded_paper.id}/agent/messages",
-        json={"content": "Question", "mode": "paper_only"},
+        json=_agent_payload(),
     )
 
     assert response.status_code == 200

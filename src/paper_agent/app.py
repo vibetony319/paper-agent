@@ -73,7 +73,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.paper_agent_runtime = PaperAgentRuntime(
         repository=repository,
         tools=app.state.paper_tool_registry,
-        client=None if compatibility_clients is None else compatibility_clients.tools,
         guard=app.state.citation_guard,
     )
     app.state.paper_ingestion_service = _GraphAwarePaperIngestionService(

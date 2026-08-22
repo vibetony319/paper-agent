@@ -30,7 +30,7 @@ from paper_agent.domain import (
 )
 
 if TYPE_CHECKING:
-    from paper_agent.model_profiles import ModelCapabilities
+    from paper_agent.model_profiles import ModelCapabilities, ModelSnapshot
     from paper_agent.services.model_profiles import ModelProfileView
 
 
@@ -197,6 +197,8 @@ class AgentMessageRequest(BaseModel):
     content: str = Field(min_length=1)
     mode: AgentMode
     conversation_id: UUID | None = None
+    model_profile_id: UUID
+    request_id: UUID
 
     @field_validator("content")
     @classmethod
@@ -232,6 +234,24 @@ class CitationResponse(BaseModel):
         )
 
 
+class ModelSnapshotResponse(BaseModel):
+    profile_id: UUID
+    display_name: str
+    base_url: str
+    model_name: str
+    revision: int
+
+    @classmethod
+    def from_snapshot(cls, snapshot: "ModelSnapshot") -> "ModelSnapshotResponse":
+        return cls(
+            profile_id=UUID(snapshot.profile_id),
+            display_name=snapshot.display_name,
+            base_url=snapshot.base_url,
+            model_name=snapshot.model_name,
+            revision=snapshot.revision,
+        )
+
+
 class AgentMessageResponse(BaseModel):
     conversation_id: str
     message_id: str
@@ -239,6 +259,7 @@ class AgentMessageResponse(BaseModel):
     paper_answer: str
     background_explanation: str | None
     citations: list[CitationResponse]
+    model: ModelSnapshotResponse | None
 
 
 class ConversationMessageResponse(BaseModel):
@@ -246,6 +267,7 @@ class ConversationMessageResponse(BaseModel):
     role: AgentMessageRole
     content: str
     citations: list[CitationResponse]
+    model: ModelSnapshotResponse | None
 
     @classmethod
     def from_message(
@@ -256,6 +278,11 @@ class ConversationMessageResponse(BaseModel):
             role=message.role,
             content=message.content,
             citations=citations,
+            model=(
+                None
+                if message.model_snapshot is None
+                else ModelSnapshotResponse.from_snapshot(message.model_snapshot)
+            ),
         )
 
 

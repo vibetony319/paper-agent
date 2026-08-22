@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from pathlib import Path
 
@@ -5,7 +6,13 @@ import pytest
 from sqlalchemy import event, insert, select
 from sqlalchemy.exc import IntegrityError
 
-from paper_agent.database import document_elements, graph_nodes, notes, sections
+from paper_agent.database import (
+    conversation_messages,
+    document_elements,
+    graph_nodes,
+    notes,
+    sections,
+)
 from paper_agent.domain import (
     AgentMessageRole,
     AgentMode,
@@ -22,6 +29,7 @@ from paper_agent.domain import (
     ProcessingStatus,
     Section,
 )
+from paper_agent.model_profiles import ModelSnapshot
 from paper_agent.storage import ConversationReferenceError, GraphReferenceError, PaperRepository
 
 
@@ -653,18 +661,33 @@ def _conversation_for_paper(repository: PaperRepository):
     return paper, element, conversation
 
 
-def _user_message(conversation, content: str, citation_element_ids: tuple[str, ...] = ()):
+def _user_message(
+    conversation,
+    content: str,
+    citation_element_ids: tuple[str, ...] = (),
+    *,
+    model_snapshot: ModelSnapshot | None = None,
+    request_id: str | None = None,
+):
     return ConversationMessage(
         conversation_id=conversation.id,
         paper_id=conversation.paper_id,
         role=AgentMessageRole.user,
         content=content,
         citation_element_ids=citation_element_ids,
+        model_profile_id=None if model_snapshot is None else model_snapshot.profile_id,
+        model_snapshot=model_snapshot,
+        request_id=request_id,
     )
 
 
 def _assistant_message(
-    conversation, content: str, citation_element_ids: tuple[str, ...] = ()
+    conversation,
+    content: str,
+    citation_element_ids: tuple[str, ...] = (),
+    *,
+    model_snapshot: ModelSnapshot | None = None,
+    request_id: str | None = None,
 ):
     return ConversationMessage(
         conversation_id=conversation.id,
@@ -672,6 +695,19 @@ def _assistant_message(
         role=AgentMessageRole.assistant,
         content=content,
         citation_element_ids=citation_element_ids,
+        model_profile_id=None if model_snapshot is None else model_snapshot.profile_id,
+        model_snapshot=model_snapshot,
+        request_id=request_id,
+    )
+
+
+def _model_snapshot() -> ModelSnapshot:
+    return ModelSnapshot(
+        profile_id="10000000-0000-0000-0000-000000000001",
+        display_name="Agent model",
+        base_url="http://127.0.0.1:8000/v1",
+        model_name="agent-model",
+        revision=3,
     )
 
 
@@ -686,6 +722,134 @@ def test_repository_round_trips_paper_conversations_and_located_message_citation
     assert repository.get_conversation(paper.id, conversation.id) == conversation
     assert repository.get_conversation("another-paper", conversation.id) is None
     assert repository.get_conversation_messages(paper.id, conversation.id) == (user, assistant)
+
+
+def test_repository_round_trips_agent_model_audit_metadata_without_secrets(repository):
+    """Breaks if a durable Agent turn loses audit parity or serializes credential fields."""
+    paper, element, conversation = _conversation_for_paper(repository)
+    snapshot = _model_snapshot()
+    request_id = "20000000-0000-0000-0000-000000000002"
+    user = repository.append_conversation_message(
+        _user_message(
+            conversation,
+            "Explain it.",
+            model_snapshot=snapshot,
+            request_id=request_id,
+        )
+    )
+    assistant = repository.append_conversation_message(
+        _assistant_message(
+            conversation,
+            "It routes tokens.",
+            (element.id,),
+            model_snapshot=snapshot,
+            request_id=request_id,
+        )
+    )
+
+    assert repository.get_conversation_messages(paper.id, conversation.id) == (
+        user,
+        assistant,
+    )
+    with repository.engine.connect() as connection:
+        payloads = connection.execute(
+            select(conversation_messages.c.model_snapshot_json).order_by(
+                conversation_messages.c.sequence
+            )
+        ).scalars().all()
+    assert [set(json.loads(payload)) for payload in payloads] == [
+        {"profile_id", "display_name", "base_url", "model_name", "revision"},
+        {"profile_id", "display_name", "base_url", "model_name", "revision"},
+    ]
+    assert "secret" not in "".join(payloads).casefold()
+    assert "api_key" not in "".join(payloads).casefold()
+
+
+def test_repository_returns_only_a_complete_agent_pair_for_a_request(repository):
+    """Breaks if complete replay accepts a partial, cross-paper, or malformed request set."""
+    paper, element, conversation = _conversation_for_paper(repository)
+    snapshot = _model_snapshot()
+    request_id = "20000000-0000-0000-0000-000000000003"
+    user = repository.append_conversation_message(
+        _user_message(
+            conversation,
+            "Explain it.",
+            model_snapshot=snapshot,
+            request_id=request_id,
+        )
+    )
+
+    assert repository.get_agent_turn_by_request(paper.id, request_id) is None
+    assert repository.get_agent_user_message_by_request(paper.id, request_id) == user
+    assert repository.get_agent_user_message_by_request("another-paper", request_id) is None
+
+    assistant = repository.append_conversation_message(
+        _assistant_message(
+            conversation,
+            "It routes tokens.",
+            (element.id,),
+            model_snapshot=snapshot,
+            request_id=request_id,
+        )
+    )
+
+    assert repository.get_agent_turn_by_request(paper.id, request_id) == (
+        user,
+        assistant,
+    )
+    assert repository.get_agent_user_message_by_request(paper.id, request_id) is None
+    assert repository.get_agent_turn_by_request("another-paper", request_id) is None
+
+
+def test_repository_reads_legacy_and_corrupt_snapshot_rows_as_model_null(repository):
+    """Breaks if old rows fail history reads or corrupt/secret-bearing JSON reaches callers."""
+    paper, _, conversation = _conversation_for_paper(repository)
+    legacy = repository.append_conversation_message(
+        _user_message(conversation, "Legacy question")
+    )
+    corrupt = repository.append_conversation_message(
+        _assistant_message(
+            conversation,
+            "Corrupt snapshot answer",
+            model_snapshot=_model_snapshot(),
+            request_id="20000000-0000-0000-0000-000000000004",
+        )
+    )
+    credential_url = repository.append_conversation_message(
+        _assistant_message(
+            conversation,
+            "Credential URL snapshot answer",
+            model_snapshot=_model_snapshot(),
+            request_id="20000000-0000-0000-0000-000000000005",
+        )
+    )
+    with repository.engine.begin() as connection:
+        connection.execute(
+            conversation_messages.update()
+            .where(conversation_messages.c.id == corrupt.id)
+            .values(model_snapshot_json='{"api_key":"do-not-expose"}')
+        )
+        connection.execute(
+            conversation_messages.update()
+            .where(conversation_messages.c.id == credential_url.id)
+            .values(
+                model_snapshot_json=(
+                    '{"base_url":"http://credential-secret@127.0.0.1:8000/v1",'
+                    '"display_name":"Agent model","model_name":"agent-model",'
+                    '"profile_id":"10000000-0000-0000-0000-000000000001",'
+                    '"revision":3}'
+                )
+            )
+        )
+
+    reloaded = repository.get_conversation_messages(paper.id, conversation.id)
+
+    assert reloaded[0] == legacy
+    assert reloaded[0].model_snapshot is None
+    assert reloaded[1].model_snapshot is None
+    assert reloaded[2].model_snapshot is None
+    assert "do-not-expose" not in repr(reloaded)
+    assert "credential-secret" not in repr(reloaded)
 
 
 def test_repository_returns_messages_in_durable_sequence_order(repository):
