@@ -180,11 +180,149 @@ notes = Table(
     Column("page_number", Integer),
     Column("body", String, nullable=False),
     Column("order_index", Integer, nullable=False),
+    Column("note_type", String(32), nullable=False, server_default="manual"),
+    Column("model_profile_id", String(36)),
+    Column("model_snapshot_json", String),
+    Column("ai_generated", Boolean, nullable=False, server_default="0"),
+    Column("user_edited", Boolean, nullable=False, server_default="0"),
+    Column("created_at", String),
+    Column("updated_at", String),
     ForeignKeyConstraint(
         ["paper_id", "element_id"],
         ["document_elements.paper_id", "document_elements.id"],
     ),
     UniqueConstraint("paper_id", "order_index"),
+)
+
+text_anchors = Table(
+    "text_anchors",
+    metadata,
+    Column("id", String(36), primary_key=True),
+    Column("paper_id", String(36), ForeignKey("papers.id"), nullable=False),
+    Column("quote", String, nullable=False),
+    Column("quote_hash", String(64), nullable=False),
+    Column("element_id", String(36)),
+    Column("page_number", Integer, nullable=False),
+    Column("created_at", String, nullable=False),
+    ForeignKeyConstraint(
+        ["paper_id", "element_id"],
+        ["document_elements.paper_id", "document_elements.id"],
+    ),
+    UniqueConstraint("paper_id", "id"),
+)
+
+text_anchor_rects = Table(
+    "text_anchor_rects",
+    metadata,
+    Column("anchor_id", String(36), primary_key=True),
+    Column("order_index", Integer, primary_key=True),
+    Column("x0", Float, nullable=False),
+    Column("y0", Float, nullable=False),
+    Column("x1", Float, nullable=False),
+    Column("y1", Float, nullable=False),
+    ForeignKeyConstraint(
+        ["anchor_id"],
+        ["text_anchors.id"],
+    ),
+    CheckConstraint(
+        "0 <= x0 AND x0 <= x1 AND x1 <= 1 AND 0 <= y0 AND y0 <= y1 AND y1 <= 1",
+        name="text_anchor_rect_normalized",
+    ),
+)
+
+highlights = Table(
+    "highlights",
+    metadata,
+    Column("id", String(36), primary_key=True),
+    Column("paper_id", String(36), ForeignKey("papers.id"), nullable=False),
+    Column("anchor_id", String(36), nullable=False),
+    Column("color", String(16), nullable=False),
+    Column("created_at", String, nullable=False),
+    Column("updated_at", String),
+    ForeignKeyConstraint(
+        ["anchor_id"],
+        ["text_anchors.id"],
+    ),
+    UniqueConstraint("paper_id", "id"),
+    UniqueConstraint("anchor_id"),
+)
+
+note_anchors = Table(
+    "note_anchors",
+    metadata,
+    Column("note_id", String(36), primary_key=True),
+    Column("paper_id", String(36), primary_key=True),
+    Column("anchor_id", String(36), primary_key=True),
+    ForeignKeyConstraint(
+        ["note_id"],
+        ["notes.id"],
+    ),
+    ForeignKeyConstraint(
+        ["paper_id"],
+        ["papers.id"],
+    ),
+    ForeignKeyConstraint(
+        ["anchor_id"],
+        ["text_anchors.id"],
+    ),
+)
+
+selection_assist_requests = Table(
+    "selection_assist_requests",
+    metadata,
+    Column("id", String(36), primary_key=True),
+    Column("paper_id", String(36), ForeignKey("papers.id"), nullable=False),
+    Column("request_id", String(36), nullable=False),
+    Column("action", String(16), nullable=False),
+    Column("status", String(16), nullable=False),
+    Column("anchor_id", String(36)),
+    Column("note_id", String(36)),
+    Column("model_profile_id", String(36)),
+    Column("model_snapshot_json", String),
+    Column("created_at", String, nullable=False),
+    Column("updated_at", String),
+    ForeignKeyConstraint(
+        ["anchor_id"],
+        ["text_anchors.id"],
+    ),
+    ForeignKeyConstraint(
+        ["note_id"],
+        ["notes.id"],
+    ),
+    UniqueConstraint("paper_id", "request_id"),
+)
+
+conversation_message_note_citations = Table(
+    "conversation_message_note_citations",
+    metadata,
+    Column("paper_id", String(36), primary_key=True),
+    Column("message_id", String(36), primary_key=True),
+    Column("note_id", String(36), primary_key=True),
+    Column("ordinal", Integer),
+    ForeignKeyConstraint(
+        ["paper_id", "message_id"],
+        ["conversation_messages.paper_id", "conversation_messages.id"],
+    ),
+    ForeignKeyConstraint(
+        ["note_id"],
+        ["notes.id"],
+    ),
+)
+
+conversation_message_anchors = Table(
+    "conversation_message_anchors",
+    metadata,
+    Column("paper_id", String(36), primary_key=True),
+    Column("message_id", String(36), primary_key=True),
+    Column("anchor_id", String(36), primary_key=True),
+    ForeignKeyConstraint(
+        ["paper_id", "message_id"],
+        ["conversation_messages.paper_id", "conversation_messages.id"],
+    ),
+    ForeignKeyConstraint(
+        ["anchor_id"],
+        ["text_anchors.id"],
+    ),
 )
 
 conversations = Table(

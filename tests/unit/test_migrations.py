@@ -11,6 +11,7 @@ from paper_agent.database import (
     database_url_for,
     initialize_database,
     model_profiles,
+    notes,
 )
 
 
@@ -77,7 +78,7 @@ def test_model_profile_migration_upgrades_an_existing_database(tmp_path):
 
     assert {"model_profile_id", "model_snapshot_json", "request_id"} <= message_columns
     assert {"model_profile_id", "model_snapshot_json", "request_id"} <= run_columns
-    assert versions == [1, 2]
+    assert versions == [1, 2, 3]
 
 
 def test_model_profile_migration_records_each_version_once_when_rerun(tmp_path):
@@ -92,7 +93,7 @@ def test_model_profile_migration_records_each_version_once_when_rerun(tmp_path):
             "SELECT version FROM schema_migrations ORDER BY version"
         ).scalars().all()
 
-    assert versions == [1, 2]
+    assert versions == [1, 2, 3]
 
 
 def test_model_profile_migration_uses_frozen_schema_not_live_metadata(
@@ -147,6 +148,10 @@ def test_initialize_database_creates_model_profiles_and_all_provenance_columns(t
             column[1]
             for column in connection.exec_driver_sql("PRAGMA table_info(model_profiles)")
         }
+        note_columns = {
+            column[1]
+            for column in connection.exec_driver_sql("PRAGMA table_info(notes)")
+        }
 
     assert "model_profiles" in tables
     assert profile_columns == MODEL_PROFILE_COLUMNS
@@ -158,6 +163,24 @@ def test_initialize_database_creates_model_profiles_and_all_provenance_columns(t
     } <= message_columns
     assert {"ordinal", "citation_snapshot_json"} <= citation_columns
     assert {"model_profile_id", "model_snapshot_json", "request_id"} <= run_columns
+    assert {
+        "note_type",
+        "model_profile_id",
+        "model_snapshot_json",
+        "ai_generated",
+        "user_edited",
+        "created_at",
+        "updated_at",
+    } <= note_columns
+    assert {
+        "text_anchors",
+        "text_anchor_rects",
+        "highlights",
+        "note_anchors",
+        "selection_assist_requests",
+        "conversation_message_note_citations",
+        "conversation_message_anchors",
+    } <= tables
 
 
 def test_agent_response_snapshot_migration_upgrades_legacy_conversation_tables(
@@ -206,7 +229,7 @@ def test_agent_response_snapshot_migration_upgrades_legacy_conversation_tables(
 
     assert "background_explanation" in message_columns
     assert {"ordinal", "citation_snapshot_json"} <= citation_columns
-    assert versions == [1, 2]
+    assert versions == [1, 2, 3]
 
 
 def test_agent_response_snapshot_migration_uses_frozen_schema_not_live_metadata(
@@ -282,3 +305,98 @@ def test_model_profiles_allows_only_one_active_default(tmp_path):
         connection.execute(insert(model_profiles).values(active_default_profile))
         with pytest.raises(IntegrityError):
             connection.execute(insert(model_profiles).values(duplicate_active_default_profile))
+
+
+def test_annotation_migration_upgrades_legacy_notes_and_creates_tables(tmp_path):
+    """Breaks if migration 3 loses legacy notes or omits annotation tables."""
+    engine = create_database_engine(database_url_for(tmp_path))
+    legacy = MetaData()
+    legacy_notes = Table(
+        "notes",
+        legacy,
+        Column("id", String(36), primary_key=True),
+        Column("paper_id", String(36), nullable=False),
+        Column("element_id", String(36)),
+        Column("page_number", Integer),
+        Column("body", String, nullable=False),
+        Column("order_index", Integer, nullable=False),
+    )
+    legacy.create_all(engine)
+    with engine.begin() as connection:
+        connection.execute(
+            insert(legacy_notes).values(
+                id="legacy-note",
+                paper_id="paper-a",
+                body="旧手写笔记",
+                order_index=0,
+            )
+        )
+
+    run_schema_migrations(engine)
+
+    with engine.connect() as connection:
+        note_columns = {
+            column[1]
+            for column in connection.exec_driver_sql("PRAGMA table_info(notes)")
+        }
+        tables = {
+            row[0]
+            for row in connection.exec_driver_sql(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        legacy_row = connection.exec_driver_sql(
+            "SELECT note_type, ai_generated, body FROM notes WHERE id = 'legacy-note'"
+        ).mappings().one()
+
+    assert {
+        "note_type",
+        "model_profile_id",
+        "model_snapshot_json",
+        "ai_generated",
+        "user_edited",
+        "created_at",
+        "updated_at",
+    } <= note_columns
+    assert {
+        "text_anchors",
+        "text_anchor_rects",
+        "highlights",
+        "note_anchors",
+        "selection_assist_requests",
+        "conversation_message_note_citations",
+        "conversation_message_anchors",
+    } <= tables
+    assert legacy_row["note_type"] == "manual"
+    assert legacy_row["ai_generated"] == 0
+    assert legacy_row["body"] == "旧手写笔记"
+
+
+def test_annotation_migration_uses_frozen_schema_not_live_metadata(
+    tmp_path, monkeypatch
+):
+    """Breaks if migration 3 adopts future live-table columns."""
+    engine = create_database_engine(database_url_for(tmp_path))
+    legacy = MetaData()
+    legacy_notes = Table(
+        "notes",
+        legacy,
+        Column("id", String(36), primary_key=True),
+        Column("paper_id", String(36), nullable=False),
+        Column("body", String, nullable=False),
+        Column("order_index", Integer, nullable=False),
+    )
+    legacy.create_all(engine)
+    future_metadata = MetaData()
+    future_notes = notes.to_metadata(future_metadata)
+    future_notes.append_column(Column("future_note_column", String))
+    monkeypatch.setattr(migrations, "notes", future_notes, raising=False)
+
+    run_schema_migrations(engine)
+
+    with engine.connect() as connection:
+        columns = {
+            column[1]
+            for column in connection.exec_driver_sql("PRAGMA table_info(notes)")
+        }
+    assert "future_note_column" not in columns

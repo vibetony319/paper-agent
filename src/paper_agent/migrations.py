@@ -115,6 +115,113 @@ def _apply_agent_response_snapshots(connection: Connection) -> None:
     )
 
 
+def _apply_text_anchors_and_annotations(connection: Connection) -> None:
+    """Frozen migration 3 schema for anchors, highlights, and generated notes."""
+    existing_notes_columns = {
+        row[1]
+        for row in connection.exec_driver_sql("PRAGMA table_info(notes)")
+    }
+    if existing_notes_columns:
+        if "note_type" not in existing_notes_columns:
+            connection.exec_driver_sql(
+                "ALTER TABLE notes ADD COLUMN note_type VARCHAR(32) "
+                "NOT NULL DEFAULT 'manual'"
+            )
+        if "model_profile_id" not in existing_notes_columns:
+            connection.exec_driver_sql(
+                "ALTER TABLE notes ADD COLUMN model_profile_id VARCHAR(36)"
+            )
+        if "model_snapshot_json" not in existing_notes_columns:
+            connection.exec_driver_sql(
+                "ALTER TABLE notes ADD COLUMN model_snapshot_json VARCHAR"
+            )
+        if "ai_generated" not in existing_notes_columns:
+            connection.exec_driver_sql(
+                "ALTER TABLE notes ADD COLUMN ai_generated BOOLEAN NOT NULL DEFAULT '0'"
+            )
+        if "user_edited" not in existing_notes_columns:
+            connection.exec_driver_sql(
+                "ALTER TABLE notes ADD COLUMN user_edited BOOLEAN NOT NULL DEFAULT '0'"
+            )
+        if "created_at" not in existing_notes_columns:
+            connection.exec_driver_sql("ALTER TABLE notes ADD COLUMN created_at VARCHAR")
+        if "updated_at" not in existing_notes_columns:
+            connection.exec_driver_sql("ALTER TABLE notes ADD COLUMN updated_at VARCHAR")
+
+    connection.exec_driver_sql(
+        "CREATE TABLE IF NOT EXISTS text_anchors ("
+        "id VARCHAR(36) NOT NULL, "
+        "paper_id VARCHAR(36) NOT NULL, "
+        "quote VARCHAR NOT NULL, "
+        "quote_hash VARCHAR(64) NOT NULL, "
+        "element_id VARCHAR(36), "
+        "page_number INTEGER NOT NULL, "
+        "created_at VARCHAR NOT NULL, "
+        "PRIMARY KEY (id))"
+    )
+    connection.exec_driver_sql(
+        "CREATE TABLE IF NOT EXISTS text_anchor_rects ("
+        "anchor_id VARCHAR(36) NOT NULL, "
+        "order_index INTEGER NOT NULL, "
+        "x0 FLOAT NOT NULL, "
+        "y0 FLOAT NOT NULL, "
+        "x1 FLOAT NOT NULL, "
+        "y1 FLOAT NOT NULL, "
+        "PRIMARY KEY (anchor_id, order_index), "
+        "CHECK (0 <= x0 AND x0 <= x1 AND x1 <= 1 "
+        "AND 0 <= y0 AND y0 <= y1 AND y1 <= 1))"
+    )
+    connection.exec_driver_sql(
+        "CREATE TABLE IF NOT EXISTS highlights ("
+        "id VARCHAR(36) NOT NULL, "
+        "paper_id VARCHAR(36) NOT NULL, "
+        "anchor_id VARCHAR(36) NOT NULL, "
+        "color VARCHAR(16) NOT NULL, "
+        "created_at VARCHAR NOT NULL, "
+        "updated_at VARCHAR, "
+        "PRIMARY KEY (id), "
+        "UNIQUE (anchor_id))"
+    )
+    connection.exec_driver_sql(
+        "CREATE TABLE IF NOT EXISTS note_anchors ("
+        "note_id VARCHAR(36) NOT NULL, "
+        "paper_id VARCHAR(36) NOT NULL, "
+        "anchor_id VARCHAR(36) NOT NULL, "
+        "PRIMARY KEY (note_id, paper_id, anchor_id))"
+    )
+    connection.exec_driver_sql(
+        "CREATE TABLE IF NOT EXISTS selection_assist_requests ("
+        "id VARCHAR(36) NOT NULL, "
+        "paper_id VARCHAR(36) NOT NULL, "
+        "request_id VARCHAR(36) NOT NULL, "
+        "action VARCHAR(16) NOT NULL, "
+        "status VARCHAR(16) NOT NULL, "
+        "anchor_id VARCHAR(36), "
+        "note_id VARCHAR(36), "
+        "model_profile_id VARCHAR(36), "
+        "model_snapshot_json VARCHAR, "
+        "created_at VARCHAR NOT NULL, "
+        "updated_at VARCHAR, "
+        "PRIMARY KEY (id), "
+        "UNIQUE (paper_id, request_id))"
+    )
+    connection.exec_driver_sql(
+        "CREATE TABLE IF NOT EXISTS conversation_message_note_citations ("
+        "paper_id VARCHAR(36) NOT NULL, "
+        "message_id VARCHAR(36) NOT NULL, "
+        "note_id VARCHAR(36) NOT NULL, "
+        "ordinal INTEGER, "
+        "PRIMARY KEY (paper_id, message_id, note_id))"
+    )
+    connection.exec_driver_sql(
+        "CREATE TABLE IF NOT EXISTS conversation_message_anchors ("
+        "paper_id VARCHAR(36) NOT NULL, "
+        "message_id VARCHAR(36) NOT NULL, "
+        "anchor_id VARCHAR(36) NOT NULL, "
+        "PRIMARY KEY (paper_id, message_id, anchor_id))"
+    )
+
+
 MIGRATIONS = (
     Migration(
         version=1,
@@ -125,5 +232,10 @@ MIGRATIONS = (
         version=2,
         name="add_agent_response_snapshots",
         apply=_apply_agent_response_snapshots,
+    ),
+    Migration(
+        version=3,
+        name="add_text_anchors_and_annotations",
+        apply=_apply_text_anchors_and_annotations,
     ),
 )

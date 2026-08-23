@@ -1,10 +1,12 @@
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import StrEnum
 from typing import Literal
 from unicodedata import normalize
 from uuid import uuid4
 
 from paper_agent.model_profiles import ModelSnapshot
+from paper_agent.annotations import NoteType
 
 
 class ProcessingStatus(StrEnum):
@@ -268,6 +270,14 @@ class Note:
     body: str
     element_id: str | None = None
     page_number: int | None = None
+    note_type: NoteType = NoteType.manual
+    anchor_ids: tuple[str, ...] = ()
+    model_profile_id: str | None = None
+    model_snapshot: ModelSnapshot | None = None
+    ai_generated: bool = False
+    user_edited: bool = False
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
     id: str = field(default_factory=lambda: str(uuid4()))
 
 
