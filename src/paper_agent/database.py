@@ -185,6 +185,7 @@ notes = Table(
     Column("model_snapshot_json", String),
     Column("ai_generated", Boolean, nullable=False, server_default="0"),
     Column("user_edited", Boolean, nullable=False, server_default="0"),
+    Column("request_id", String(36)),
     Column("created_at", String),
     Column("updated_at", String),
     ForeignKeyConstraint(
@@ -237,6 +238,7 @@ highlights = Table(
     Column("paper_id", String(36), ForeignKey("papers.id"), nullable=False),
     Column("anchor_id", String(36), nullable=False),
     Column("color", String(16), nullable=False),
+    Column("request_id", String(36)),
     Column("created_at", String, nullable=False),
     Column("updated_at", String),
     ForeignKeyConstraint(
@@ -245,6 +247,22 @@ highlights = Table(
     ),
     UniqueConstraint("paper_id", "id"),
     UniqueConstraint("anchor_id"),
+)
+
+Index(
+    "notes_one_request_per_paper",
+    notes.c.paper_id,
+    notes.c.request_id,
+    unique=True,
+    sqlite_where=text("request_id IS NOT NULL"),
+)
+
+Index(
+    "highlights_one_request_per_paper",
+    highlights.c.paper_id,
+    highlights.c.request_id,
+    unique=True,
+    sqlite_where=text("request_id IS NOT NULL"),
 )
 
 note_anchors = Table(

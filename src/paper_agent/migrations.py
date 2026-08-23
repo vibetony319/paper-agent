@@ -222,6 +222,36 @@ def _apply_text_anchors_and_annotations(connection: Connection) -> None:
     )
 
 
+def _apply_annotation_request_ids(connection: Connection) -> None:
+    """Frozen migration 4 schema for idempotent note and highlight requests."""
+    notes_columns = {
+        row[1]
+        for row in connection.exec_driver_sql("PRAGMA table_info(notes)")
+    }
+    if notes_columns:
+        if "request_id" not in notes_columns:
+            connection.exec_driver_sql(
+                "ALTER TABLE notes ADD COLUMN request_id VARCHAR(36)"
+            )
+        connection.exec_driver_sql(
+            "CREATE UNIQUE INDEX IF NOT EXISTS notes_one_request_per_paper "
+            "ON notes(paper_id, request_id) WHERE request_id IS NOT NULL"
+        )
+    highlight_columns = {
+        row[1]
+        for row in connection.exec_driver_sql("PRAGMA table_info(highlights)")
+    }
+    if highlight_columns:
+        if "request_id" not in highlight_columns:
+            connection.exec_driver_sql(
+                "ALTER TABLE highlights ADD COLUMN request_id VARCHAR(36)"
+            )
+        connection.exec_driver_sql(
+            "CREATE UNIQUE INDEX IF NOT EXISTS highlights_one_request_per_paper "
+            "ON highlights(paper_id, request_id) WHERE request_id IS NOT NULL"
+        )
+
+
 MIGRATIONS = (
     Migration(
         version=1,
@@ -237,5 +267,10 @@ MIGRATIONS = (
         version=3,
         name="add_text_anchors_and_annotations",
         apply=_apply_text_anchors_and_annotations,
+    ),
+    Migration(
+        version=4,
+        name="add_annotation_request_ids",
+        apply=_apply_annotation_request_ids,
     ),
 )

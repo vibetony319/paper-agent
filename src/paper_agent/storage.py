@@ -1,4 +1,5 @@
 from dataclasses import replace
+from datetime import datetime
 import json
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -6,6 +7,7 @@ from uuid import uuid4
 from sqlalchemy import delete, func, insert, select, update
 from sqlalchemy.engine import Engine
 
+from paper_agent.annotations import NoteType
 from paper_agent.database import (
     conversation_message_citations,
     conversation_messages,
@@ -16,6 +18,7 @@ from paper_agent.database import (
     graph_node_evidence,
     graph_nodes,
     initialize_database,
+    note_anchors,
     notes,
     pages,
     papers,
@@ -1040,8 +1043,38 @@ class PaperRepository:
             rows = connection.execute(
                 select(notes).where(notes.c.paper_id == paper_id).order_by(notes.c.order_index, notes.c.id)
             ).mappings()
+            anchor_ids_by_note: dict[str, list[str]] = {}
+            for anchor_row in connection.execute(
+                select(note_anchors)
+                .where(note_anchors.c.paper_id == paper_id)
+                .order_by(note_anchors.c.note_id, note_anchors.c.anchor_id)
+            ).mappings():
+                anchor_ids_by_note.setdefault(anchor_row["note_id"], []).append(
+                    anchor_row["anchor_id"]
+                )
             return tuple(
-                Note(id=row["id"], body=row["body"], element_id=row["element_id"], page_number=row["page_number"])
+                Note(
+                    id=row["id"],
+                    body=row["body"],
+                    element_id=row["element_id"],
+                    page_number=row["page_number"],
+                    note_type=NoteType(row["note_type"]),
+                    anchor_ids=tuple(anchor_ids_by_note.get(row["id"], ())),
+                    model_profile_id=row["model_profile_id"],
+                    model_snapshot=_parse_model_snapshot(row["model_snapshot_json"]),
+                    ai_generated=bool(row["ai_generated"]),
+                    user_edited=bool(row["user_edited"]),
+                    created_at=(
+                        None
+                        if row["created_at"] is None
+                        else datetime.fromisoformat(row["created_at"])
+                    ),
+                    updated_at=(
+                        None
+                        if row["updated_at"] is None
+                        else datetime.fromisoformat(row["updated_at"])
+                    ),
+                )
                 for row in rows
             )
 

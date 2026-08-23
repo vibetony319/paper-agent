@@ -78,7 +78,7 @@ def test_model_profile_migration_upgrades_an_existing_database(tmp_path):
 
     assert {"model_profile_id", "model_snapshot_json", "request_id"} <= message_columns
     assert {"model_profile_id", "model_snapshot_json", "request_id"} <= run_columns
-    assert versions == [1, 2, 3]
+    assert versions == [1, 2, 3, 4]
 
 
 def test_model_profile_migration_records_each_version_once_when_rerun(tmp_path):
@@ -93,7 +93,7 @@ def test_model_profile_migration_records_each_version_once_when_rerun(tmp_path):
             "SELECT version FROM schema_migrations ORDER BY version"
         ).scalars().all()
 
-    assert versions == [1, 2, 3]
+    assert versions == [1, 2, 3, 4]
 
 
 def test_model_profile_migration_uses_frozen_schema_not_live_metadata(
@@ -229,7 +229,7 @@ def test_agent_response_snapshot_migration_upgrades_legacy_conversation_tables(
 
     assert "background_explanation" in message_columns
     assert {"ordinal", "citation_snapshot_json"} <= citation_columns
-    assert versions == [1, 2, 3]
+    assert versions == [1, 2, 3, 4]
 
 
 def test_agent_response_snapshot_migration_uses_frozen_schema_not_live_metadata(
