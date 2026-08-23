@@ -1,13 +1,17 @@
 import { useCallback, useState } from 'react';
 
 import type { PaperSummary } from './api/types';
+import { ModelSelector } from './components/ModelSelector';
+import { ModelSettingsDialog } from './components/ModelSettingsDialog';
 import { PaperLibrary } from './components/PaperLibrary';
 import { WorkspaceShell } from './components/WorkspaceShell';
+import { useModelProfiles } from './modelProfiles/useModelProfiles';
 import { usePaperWorkspace } from './workspace/usePaperWorkspace';
 
 export function App() {
   const [activePaper, setActivePaper] = useState<PaperSummary | null>(null);
   const [workspaceLoadRevision, setWorkspaceLoadRevision] = useState(0);
+  const [modelSettingsOpen, setModelSettingsOpen] = useState(false);
   const updateActivePaperSummary = useCallback((paper: PaperSummary) => {
     setActivePaper((current) => current?.id === paper.id ? paper : current);
   }, []);
@@ -16,6 +20,7 @@ export function App() {
     workspaceLoadRevision,
     updateActivePaperSummary,
   );
+  const modelProfiles = useModelProfiles(activePaper?.id ?? null);
 
   const selectPaper = (paper: PaperSummary) => {
     const isActivePaper = activePaper?.id === paper.id;
@@ -43,6 +48,16 @@ export function App() {
         onPaperSelected={selectPaper}
       />
       <main className="app-content">
+        <header className="app-topbar">
+          <ModelSelector
+            profiles={modelProfiles.profiles}
+            value={modelProfiles.selectedProfileId}
+            onChange={modelProfiles.selectProfile}
+          />
+          <button type="button" onClick={() => setModelSettingsOpen(true)}>
+            模型设置
+          </button>
+        </header>
         {activePaper === null ? (
           <section className="app-empty" aria-labelledby="app-empty-title">
             <p className="app-empty__label">Paper reading workbench</p>
@@ -60,6 +75,16 @@ export function App() {
           />
         )}
       </main>
+      <ModelSettingsDialog
+        open={modelSettingsOpen}
+        profiles={modelProfiles.profiles}
+        onClose={() => setModelSettingsOpen(false)}
+        onRefresh={modelProfiles.refresh}
+        onCreate={modelProfiles.createProfile}
+        onUpdate={modelProfiles.updateProfile}
+        onDelete={modelProfiles.deleteProfile}
+        onTest={modelProfiles.testProfile}
+      />
     </div>
   );
 }

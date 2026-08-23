@@ -1,11 +1,12 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, delay, http } from 'msw';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 import type {
   AgentMessage,
   DocumentElement,
+  ModelProfile,
   PaperDocument,
   PaperGraph,
   PaperSummary,
@@ -67,6 +68,26 @@ const readyPaper: PaperSummary = {
   error: null,
 };
 
+const modelProfileFixture = (overrides: Partial<ModelProfile> = {}): ModelProfile => ({
+  id: 'qwen',
+  display_name: '本地 Qwen',
+  base_url: 'http://127.0.0.1:8001/v1',
+  model_name: 'qwen3',
+  enabled: true,
+  is_default: true,
+  revision: 3,
+  has_api_key: false,
+  api_key_mask: null,
+  capabilities: {
+    basic_chat: true,
+    structured_output: true,
+    tool_calling: true,
+    checked_at: '2026-08-21T09:30:00Z',
+  },
+  read_only: false,
+  ...overrides,
+});
+
 const locatedElement: DocumentElement = {
   id: 'element-2',
   kind: 'paragraph',
@@ -124,6 +145,11 @@ function useReadyWorkspaceHandlers(paper: PaperSummary = readyPaper) {
 }
 
 afterEach(cleanup);
+
+beforeEach(() => {
+  window.localStorage.clear();
+  server.use(http.get('/api/model-profiles', () => HttpResponse.json([])));
+});
 
 it('loads the paper library and opens an existing paper with readable stage states', async () => {
   const user = userEvent.setup();
@@ -469,4 +495,51 @@ it('turns a workspace network failure into a public-safe error state', async () 
     'Unable to load the paper workspace.',
   );
   expect(screen.queryByLabelText('Paper reader')).not.toBeInTheDocument();
+});
+
+it('selects the default model near the chat box and keeps the choice per paper', async () => {
+  const user = userEvent.setup();
+  useReadyWorkspaceHandlers();
+  server.use(http.get('/api/model-profiles', () => HttpResponse.json([
+    modelProfileFixture({ id: 'qwen', display_name: '本地 Qwen', is_default: true }),
+    modelProfileFixture({ id: 'deepseek', display_name: 'DeepSeek 远程', is_default: false }),
+  ])));
+
+  render(<App />);
+
+  const selector = await screen.findByLabelText('当前模型');
+  await waitFor(() => expect(selector).toHaveValue('qwen'));
+
+  await user.click(await screen.findByRole('button', { name: /routing-paper\.pdf/i }));
+  await screen.findByLabelText('Paper reader');
+
+  await user.selectOptions(selector, 'deepseek');
+
+  expect(selector).toHaveValue('deepseek');
+  expect(window.localStorage.getItem('paper-agent:selected-model:paper-a')).toBe('deepseek');
+});
+
+it('opens the chinese model settings dialog from the top bar and returns focus', async () => {
+  const user = userEvent.setup();
+  server.use(
+    http.get('/api/papers', () => HttpResponse.json([])),
+    http.get('/api/model-profiles', () => HttpResponse.json([
+      modelProfileFixture(),
+    ])),
+  );
+
+  render(<App />);
+
+  await user.click(screen.getByRole('button', { name: '模型设置' }));
+
+  const dialog = await screen.findByRole('dialog', { name: '模型设置' });
+  expect(dialog).toBeVisible();
+  expect(within(dialog).getByRole('listitem', { name: '本地 Qwen' })).toBeVisible();
+
+  await user.click(within(dialog).getByRole('button', { name: '关闭' }));
+
+  await waitFor(() => {
+    expect(screen.queryByRole('dialog', { name: '模型设置' })).not.toBeInTheDocument();
+  });
+  expect(screen.getByRole('button', { name: '模型设置' })).toHaveFocus();
 });
