@@ -5,18 +5,22 @@ from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from paper_agent.annotation_storage import PaperAnnotationRepository
 from paper_agent.config import Settings, get_settings
 from paper_agent.model_profile_storage import ModelProfileRepository
 from paper_agent.routes import (
     agent_router,
+    annotations_router,
     graph_router,
     health_router,
     model_profiles_router,
     papers_router,
 )
+from paper_agent.routes.annotations import AnnotationHttpError
 from paper_agent.routes.model_profiles import ModelProfileHttpError
 from paper_agent.services.agent_runtime import PaperAgentRuntime
 from paper_agent.services.agent_tools import PaperToolRegistry
+from paper_agent.services.annotations import AnnotationService
 from paper_agent.services.citation_guard import CitationGuard
 from paper_agent.services.graph_construction import GraphConstructionService
 from paper_agent.services.ingestion import PaperIngestionService
@@ -57,6 +61,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     repository = PaperRepository(app.state.settings.database_url)
     app.state.paper_repository = repository
+    app.state.annotation_repository = PaperAnnotationRepository(
+        engine=repository.engine
+    )
+    app.state.annotation_service = AnnotationService(
+        app.state.annotation_repository
+    )
     app.state.paper_tool_registry = PaperToolRegistry(repository)
     app.state.citation_guard = CitationGuard()
     app.state.paper_agent_runtime = PaperAgentRuntime(
@@ -81,6 +91,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             content={"code": error.code, "detail": error.detail},
         )
 
+    @app.exception_handler(AnnotationHttpError)
+    async def annotation_http_error(
+        _request: Request, error: AnnotationHttpError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=error.status_code,
+            content={"code": error.code, "detail": error.detail},
+        )
+
     @app.exception_handler(RequestValidationError)
     async def safe_request_validation_error(
         request: Request, error: RequestValidationError
@@ -99,5 +118,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(papers_router)
     app.include_router(graph_router)
     app.include_router(agent_router)
+    app.include_router(annotations_router)
     app.include_router(model_profiles_router)
     return app

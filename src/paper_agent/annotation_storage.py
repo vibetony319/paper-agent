@@ -301,6 +301,12 @@ class PaperAnnotationRepository:
             ).scalars()
             return tuple(self._load_anchor(connection, anchor_id) for anchor_id in rows)
 
+    def paper_exists(self, paper_id: str) -> bool:
+        with self.engine.connect() as connection:
+            return connection.execute(
+                select(papers.c.id).where(papers.c.id == paper_id)
+            ).scalar_one_or_none() is not None
+
     def _insert_anchor(
         self, connection: Connection, paper_id: str, draft: TextAnchorDraft
     ) -> TextAnchor:

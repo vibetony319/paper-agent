@@ -517,12 +517,92 @@ class ElementResponse(BaseModel):
         )
 
 
+class TextAnchorRectRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    order: int = Field(ge=0)
+    x0: float = Field(ge=0, le=1)
+    y0: float = Field(ge=0, le=1)
+    x1: float = Field(ge=0, le=1)
+    y1: float = Field(ge=0, le=1)
+
+
+class TextAnchorDraftRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    quote: str = Field(min_length=1, max_length=12_000)
+    page_number: int = Field(ge=1)
+    rects: list[TextAnchorRectRequest] = Field(min_length=1, max_length=200)
+    element_id: UUID | None = None
+
+
+class HighlightCreateRequest(TextAnchorDraftRequest):
+    color: Literal["yellow"] = "yellow"
+    request_id: UUID
+
+
+class TextAnchorRectResponse(BaseModel):
+    order: int
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+
+    @classmethod
+    def from_rect(cls, rect) -> "TextAnchorRectResponse":
+        return cls(order=rect.order, x0=rect.x0, y0=rect.y0, x1=rect.x1, y1=rect.y1)
+
+
+class TextAnchorResponse(BaseModel):
+    id: str
+    quote: str
+    page_number: int
+    element_id: str | None
+    rects: list[TextAnchorRectResponse]
+
+    @classmethod
+    def from_anchor(cls, anchor) -> "TextAnchorResponse":
+        return cls(
+            id=anchor.id,
+            quote=anchor.quote,
+            page_number=anchor.page_number,
+            element_id=anchor.element_id,
+            rects=[
+                TextAnchorRectResponse.from_rect(rect) for rect in anchor.rects
+            ],
+        )
+
+
+class HighlightResponse(BaseModel):
+    id: str
+    color: Literal["yellow"]
+    anchor: TextAnchorResponse
+
+    @classmethod
+    def from_highlight(cls, highlight) -> "HighlightResponse":
+        return cls(
+            id=highlight.id,
+            color=highlight.color,
+            anchor=TextAnchorResponse.from_anchor(highlight.anchor),
+        )
+
+
+class NoteUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    body: str = Field(min_length=1)
+    expected_updated_at: datetime | None = None
+
+
 class NoteRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     body: str
     element_id: str | None = None
     page_number: int | None = None
+    anchor: TextAnchorDraftRequest | None = None
+    note_type: Literal["manual"] = "manual"
+    request_id: UUID | None = None
 
 
 class NoteResponse(BaseModel):
@@ -530,6 +610,13 @@ class NoteResponse(BaseModel):
     body: str
     element_id: str | None
     page_number: int | None
+    note_type: Literal["manual", "explanation", "translation"]
+    anchor_ids: list[str]
+    model: ModelSnapshotResponse | None
+    ai_generated: bool
+    user_edited: bool
+    created_at: datetime | None
+    updated_at: datetime | None
 
     @classmethod
     def from_note(cls, note: Note) -> "NoteResponse":
@@ -538,7 +625,23 @@ class NoteResponse(BaseModel):
             body=note.body,
             element_id=note.element_id,
             page_number=note.page_number,
+            note_type=note.note_type.value,
+            anchor_ids=list(note.anchor_ids),
+            model=(
+                None
+                if note.model_snapshot is None
+                else ModelSnapshotResponse.from_snapshot(note.model_snapshot)
+            ),
+            ai_generated=note.ai_generated,
+            user_edited=note.user_edited,
+            created_at=note.created_at,
+            updated_at=note.updated_at,
         )
+
+
+class AnnotationBundleResponse(BaseModel):
+    highlights: list[HighlightResponse]
+    notes: list[NoteResponse]
 
 
 class PaperDocumentResponse(BaseModel):

@@ -2,7 +2,6 @@ from fastapi import APIRouter, File, HTTPException, Request, Response, UploadFil
 from fastapi.responses import FileResponse
 
 from paper_agent.schemas import (
-    NoteRequest,
     NoteResponse,
     PaperDocumentResponse,
     PaperSummaryResponse,
@@ -87,24 +86,6 @@ def get_page_image(paper_id: str, page_number: str, request: Request) -> Respons
         )
     except KeyError as error:
         raise _not_found() from error
-
-
-@router.post("/{paper_id}/notes", response_model=NoteResponse, status_code=201)
-def create_note(
-    paper_id: str, payload: NoteRequest, request: Request
-) -> NoteResponse:
-    try:
-        note = _service(request).create_note(
-            paper_id,
-            body=payload.body,
-            element_id=payload.element_id,
-            page_number=payload.page_number,
-        )
-    except KeyError as error:
-        raise _not_found() from error
-    except ValueError as error:
-        raise HTTPException(status_code=422, detail="Invalid note target.") from error
-    return NoteResponse.from_note(note)
 
 
 @router.get("/{paper_id}/notes", response_model=list[NoteResponse])
