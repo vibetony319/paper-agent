@@ -1,19 +1,20 @@
 # paper-agent 开发交接
 
-更新时间：2026-08-23（Asia/Shanghai）
+更新时间：2026-08-23 23:42（Asia/Shanghai）
 
 ## 1. 当前结论
 
-项目正在按“论文阅读工作区升级”总计划推进，前两个子计划已经完成，第三个子计划进行到最后的 API 接线与验证。
+项目正在按“论文阅读工作区升级”总计划推进。Plan 1–3 已全部完成，Plan 4 前端工作区已完成两个任务。
 
 - 当前分支：`codex/reader-workspace-v2`
-- 当前 HEAD：`38b4c15 feat: recover paper deletion across process crashes`
+- 当前 HEAD：`6b5d7eb feat: configure and select multiple vllm models`
 - Plan 1“多模型档案与调用追溯”：Task 1–7 全部完成并提交。
 - Plan 2“批注、解释翻译与笔记记忆”：Task 1–7 全部完成并提交。
-- Plan 3“论文及关联数据安全删除”：Task 1–3 已提交；Task 4–5 的写路径协调、删除 API 和启动恢复已在工作区实现，尚未运行测试或提交。
-- Plan 4“中文论文阅读工作区前端”和 Plan 5“开发者文档与整体验收”尚未开始。
+- Plan 3“论文及关联数据安全删除”：Task 1–6 全部完成并提交（含文档 `docs/data-model.md`）。
+- Plan 4“中文论文阅读工作区前端”：Task 1（API 契约与 SSE）和 Task 2（模型档案、选择器与设置弹窗）完成并提交；Task 3（论文库与删除确认）尚未开始，上一次子代理执行因配额中断，未在工作区留下部分改动。
+- Plan 5“开发者文档与整体验收”尚未开始。
 
-最重要的接手规则：**不要 reset、checkout、clean 或覆盖当前工作区。** 未提交的 Plan 3 Task 4–5 改动只存在于本工作区；从 GitHub 克隆 `38b4c15` 不会得到这些改动。
+接手规则：当前所有工作均已提交，工作树干净；仍不要 reset、checkout、clean 或覆盖工作区。`AGENTS.md` 是环境文件，禁止暂存。
 
 ## 2. 事实来源
 
@@ -23,10 +24,11 @@
 2. [总实施计划](superpowers/plans/2026-08-21-reading-workspace-program.md)
 3. [模型档案计划](superpowers/plans/2026-08-21-model-profiles-provenance.md)（已全部完成）
 4. [批注与笔记记忆计划](superpowers/plans/2026-08-21-annotations-note-memory.md)（已全部完成）
-5. [论文删除计划](superpowers/plans/2026-08-21-paper-deletion.md)（当前执行中）
-6. [贡献与开发指南](../CONTRIBUTING.md)
-7. [模型服务文档](model-services.md)、[PDF 批注契约](pdf-annotations.md)、[笔记记忆](note-memory.md)
-8. 本文档
+5. [论文删除计划](superpowers/plans/2026-08-21-paper-deletion.md)（已全部完成）
+6. [前端工作区计划](superpowers/plans/2026-08-21-reader-workspace-frontend.md)（当前执行中，Task 3 起）
+7. [贡献与开发指南](../CONTRIBUTING.md)
+8. [模型服务文档](model-services.md)、[PDF 批注契约](pdf-annotations.md)、[笔记记忆](note-memory.md)、[数据模型与删除恢复](data-model.md)
+9. 本文档
 
 本地 SDD 裁决记录在 `.superpowers/sdd/`，但该目录被本地规则忽略，不应作为远程接手的唯一资料；关键裁决已在本文档重述。
 
@@ -51,29 +53,14 @@
 | Plan 3 Task 1 论文操作协调器 | `4dfd1d5` | 已提交 |
 | Plan 3 Task 2 单事务关联删除 | `e2ef36d` | 已提交 |
 | Plan 3 Task 3 删除状态机与恢复 | `38b4c15` | 已提交 |
+| Plan 3 Task 4–5 写路径协调与删除 API | `b0459aa` | 已提交 |
+| Plan 3 Task 6 数据模型与删除文档 | `d74feb9` | 已提交 |
+| Plan 4 Task 1 前端 API 契约与 SSE | `1446697` | 已提交 |
+| Plan 4 Task 2 模型档案与选择器 | `6b5d7eb` | 已提交 |
 
 ## 4. 当前未提交内容
 
-工作树包含 Plan 3 Task 4–5 的第一版实现，尚未运行测试，也未经过审查。文件如下：
-
-```text
-src/paper_agent/app.py
-src/paper_agent/routes/agent.py
-src/paper_agent/routes/annotations.py
-src/paper_agent/routes/graph.py
-src/paper_agent/routes/papers.py
-src/paper_agent/schemas.py
-src/paper_agent/services/paper_deletion.py
-tests/integration/test_paper_deletion_api.py（新增，未跟踪）
-```
-
-已实现方向：
-
-- `create_app()` 创建 `PaperOperationCoordinator` 和 `PaperDeletionService`，在注册路由前执行 `recover_pending()`。
-- Agent、图谱、高亮、笔记写路径用 `coordinator.operation(paper_id)` 包裹；选区解释/翻译 SSE 在生成器内部持有 operation。
-- 删除 API 为 `DELETE /api/papers/{paper_id}`，请求体 `{"confirmation": "<paper-id>"}`；错误码固定为 `PAPER_NOT_FOUND`、`PAPER_BUSY`、`DELETE_CONFIRMATION_MISMATCH`、`DELETE_RECOVERY_REQUIRED`。
-- `recover_pending()` 对每个 marker 单独容错，单个损坏或占用的 marker 不会阻止其他论文恢复。
-- 新增集成测试覆盖：删除全链路、确认不匹配、重复删除、活跃选区流期间 `PAPER_BUSY`、启动恢复先于路由注册。
+无。工作树干净，仅三个未跟踪文件：`AGENTS.md`（环境提供，禁止暂存）、`CONTRIBUTING.md`、`docs/README.md`（指南与导航，历史上一直未跟踪，保持原样，是否纳入版本库留待 Plan 5 决定）。
 
 ## 5. 关键裁决与偏离
 
@@ -82,41 +69,50 @@ tests/integration/test_paper_deletion_api.py（新增，未跟踪）
 - live metadata 中 `conversation_message_note_citations.note_id` 不设外键，允许笔记删除后历史消息保留悬空引用并在响应中标记 `available=false`。迁移 3 的冻结 DDL 本来就无此外键，两者现在一致。
 - 笔记检索的 `manual +1` 只在基础词项重合或与选区同页时参与排序，避免所有手写笔记永远进入上下文。
 - 部署边界仍是单用户、单服务进程；协调器、幂等锁、模型使用租约和删除恢复状态都是进程内机制。
+- Plan 3 Task 4–5 审查修复：删除 API 错误从 `HTTPException(detail={code, ...})` 改为 `PaperDeletionHttpError` + app 级处理器（`src/paper_agent/routes/papers.py`、`src/paper_agent/app.py`），错误响应体顶层恒为 `{code, detail}`，与批注、模型档案错误格式一致。
+- 前端 `Note`/`AgentMessage`/`PaperSummary` 的新字段（model、note_references、stage 模型快照等）声明为可选：既有测试 fixture 属后续 Task 范围，后端运行时始终返回这些字段，后续任务重写 fixture 时可收紧为必填。
+- `ModelSelector` 暂放在 App 顶栏；Task 7 引入固定 `ChatComposer` 时移入聊天框。
+- 前端 `ModelProfile` 补 `read_only` 字段（后端契约包含但计划样例未列）；只读档案在设置弹窗中禁用编辑/删除。
+- `clear_api_key` 是前端便捷字段，客户端翻译为 `api_key: null` 发送，请求体不出现 `clear_api_key`。
 
 ## 6. 最新验证证据
 
-验证命令沿用共享虚拟环境，并因本机 pytest 临时目录权限问题需要覆盖 basetemp：
+后端验证命令沿用共享虚拟环境，并因本机 pytest 临时目录权限问题需要覆盖 basetemp：
 
 ```powershell
 & "C:\Users\Admin\.codex\.chatgpt-projects\g-p-6a76dd5037e88191acdf69ce4d033042\.venv\Scripts\python.exe" -m pytest -q -W error -o pythonpath=src -p no:cacheprovider --basetemp "C:\Users\Admin\AppData\Local\Temp\paper-agent-pytest-515d"
 ```
 
+前端命令（node v24.18.0，满足 `^22.14.0 || >=24.0.0`）：
+
+```powershell
+cd web; npm test
+npx tsc --noEmit --project tsconfig.app.json
+```
+
 新鲜结果：
 
-- `bcbbf2c` 之后、Plan 3 开始前：完整后端 `383 passed in 82.32s`。
-- Plan 3 Task 2 聚焦回归：迁移、存储、批注存储 `67 passed`。
-- Plan 3 Task 3 删除服务：`9 passed`。
-- Plan 3 Task 4–5 尚未运行任何测试；特别是并发流测试和完整后端回归必须在提交前补齐。
+- 后端完整回归（`d74feb9` 之后）：`402 passed in 88.13s`。
+- 前端 Plan 4 Task 1 之后：`110 passed`（11 个测试文件）；lockfile 修复后 `npm ci --ignore-scripts` 全新安装 exit 0。
+- 前端 Plan 4 Task 2 之后：`138 passed`（14 个测试文件），`tsc --noEmit` 通过。
+- Plan 4 Task 3 尚未开始，无新证据。
 
 ## 7. 准确的接手步骤
 
-1. 确认位于 `codex/reader-workspace-v2`，HEAD 是 `38b4c15`，并看到第 4 节的未提交文件和未跟踪 `AGENTS.md`。
-2. 先用 `git diff --binary 38b4c15 > %TEMP%\plan3-task45.patch` 保存当前差异副本；补丁只用于本地恢复，不要提交。
-3. 审查 `git diff 38b4c15`，重点检查：写路径 operation 持有边界、SSE 生成器内的 context、删除 API 错误码、启动恢复的容错顺序。
-4. 先运行：
-
-```powershell
-python -m pytest tests/integration/test_paper_deletion_api.py tests/integration/test_papers_api.py -q -W error -o pythonpath=src -p no:cacheprovider --basetemp <task-basetemp>
-```
-
-预期发现任何失败后先修复，再运行完整后端回归。确认干净后提交，建议信息 `feat: expose recoverable permanent paper deletion`。
-5. 完成 Plan 3 Task 6：编写 `docs/data-model.md`，并在批注与笔记文档中补充删除语义链接。
-6. 按总计划顺序进入 Plan 4（读取 `$design-taste-frontend` 后执行八个前端任务）和 Plan 5。
+1. 确认位于 `codex/reader-workspace-v2`，HEAD 是 `6b5d7eb`，工作树干净（第 4 节）。
+2. 从 Plan 4 Task 3 继续：论文库主视图重构、中文顶栏和删除确认弹窗，计划文件 `docs/superpowers/plans/2026-08-21-reader-workspace-frontend.md`（Task 3，行 300-358），提交信息 `feat: focus the chinese paper library and deletion flow`。
+3. 依次执行 Task 4–8。Task 8 编辑 CSS 前重读 `$design-taste-frontend`（`C:/Users/Admin/.codex/skills/taste-skill/SKILL.md`）并按其 preflight 记录检查；设计参数固定 `DESIGN_VARIANCE=4`、`MOTION_INTENSITY=3`、`VISUAL_DENSITY=7`。
+4. 每个任务严格按计划的测试命令验证后再提交，提交信息以计划为准。
+5. Plan 4 完成后进入 Plan 5。
 
 ## 8. 下一阶段清单
 
-- Plan 3 Task 6：数据模型 Mermaid ER 图、删除顺序与 marker 状态机文档。
-- Plan 4：连续 PDF TextLayer、选区工具栏、高亮、解释/翻译浮层、中文双栏工作台、多模型切换、论文库和删除确认。
+- Plan 4 Task 3：论文库 `<section>` 主视图、`返回论文库/模型设置/论文操作` 中文顶栏、`ConfirmDeleteDialog` 永久删除确认。
+- Plan 4 Task 4：连续 PDF 页面、虚拟化、TextLayer 同 viewport 渲染。
+- Plan 4 Task 5：浏览器选区转锚点、选区工具栏、高亮持久化与覆盖层。
+- Plan 4 Task 6：解释/翻译流式浮层、自动笔记、笔记筛选与锚定。
+- Plan 4 Task 7：右侧工作台三 tab、固定聊天框统一当前模型、可调整双栏与小屏切换。
+- Plan 4 Task 8：视觉系统、中文化、可访问性预检、完整前端验证与生产构建。
 - Plan 5：中文 README、架构/ADR、Playwright 桌面与移动端、最终发布证据。
 
 ## 9. 不可破坏的约束
