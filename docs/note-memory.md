@@ -41,4 +41,4 @@
 
 ## 与论文引用的区别
 
-`citation_element_ids` 只表示经过 Citation Guard 校验的论文原文元素；`note_references` 只表示本次请求实际注入的本地笔记。删除笔记后历史仍显示引用标识，`available` 为假，二者不会互相替代。
+`citation_element_ids` 只表示经过 Citation Guard 校验的论文原文元素；`note_references` 只表示本次请求实际注入的本地笔记。删除笔记后历史仍显示引用标识，`available` 为假，二者不会互相替代。表级引用关系和论文删除语义见[数据模型与删除恢复](data-model.md)。
