@@ -420,6 +420,15 @@ class PaperRepository:
             raise KeyError(paper_id)
         return paper
 
+    def force_stored_filename(self, paper_id: str, stored_filename: str) -> None:
+        """Overwrite a paper's source basename for deletion-path tests."""
+        with self.engine.begin() as connection:
+            connection.execute(
+                update(papers)
+                .where(papers.c.id == paper_id)
+                .values(stored_filename=stored_filename)
+            )
+
     def get_processing_error(self, paper_id: str) -> str | None:
         with self.engine.connect() as connection:
             return connection.execute(

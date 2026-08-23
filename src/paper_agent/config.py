@@ -11,11 +11,16 @@ class Settings:
     data_dir: Path
     database_url: str
     reasoning_model: VllmModelConfig | None = None
+    papers_dir: Path = field(init=False)
+    trash_dir: Path = field(init=False)
     model_secrets_path: Path = field(init=False)
 
     def __post_init__(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)
-        (self.data_dir / "papers").mkdir(exist_ok=True)
+        object.__setattr__(self, "papers_dir", self.data_dir / "papers")
+        object.__setattr__(self, "trash_dir", self.data_dir / ".trash")
+        self.papers_dir.mkdir(exist_ok=True)
+        self.trash_dir.mkdir(exist_ok=True)
         object.__setattr__(
             self,
             "model_secrets_path",
