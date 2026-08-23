@@ -446,7 +446,7 @@ def test_openapi_response_and_application_wiring_are_secret_safe(
     assert state.model_profile_service is not None
     assert state.reasoning_client_provider is not None
     assert not hasattr(state.paper_agent_runtime, "client")
-    assert state.graph_construction_service.client is None
+    assert not hasattr(state.graph_construction_service, "client")
 
     openapi = client.get("/openapi.json").json()
     response_schema = openapi["components"]["schemas"]["ModelProfileResponse"]
@@ -466,6 +466,7 @@ def test_environment_fallback_supplies_compatibility_clients_through_provider(
             ENVIRONMENT_FALLBACK_PROFILE_ID
         )
         assert not hasattr(client.app.state.paper_agent_runtime, "client")
-        assert client.app.state.graph_construction_service.client is resolved.structured
+        assert not hasattr(client.app.state.graph_construction_service, "client")
+        assert resolved.structured is not None
     finally:
         client.close()

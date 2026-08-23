@@ -19,6 +19,7 @@ from paper_agent.domain import (
     Section,
 )
 from paper_agent.models.vllm import VllmResponseError, VllmStructuredClient
+from paper_agent.model_profiles import ModelSnapshot
 from paper_agent.services.graph_extraction import (
     EdgeCandidate,
     GraphExtractionError,
@@ -38,6 +39,10 @@ class GraphBuildUnavailableError(RuntimeError):
 
 class GraphBuildPrerequisiteError(RuntimeError):
     """Raised when the paper has not completed a required earlier stage."""
+
+
+class GraphBuildConflictError(RuntimeError):
+    """Raised when a durable request is already running under the same key."""
 
 
 _NODE_SYSTEM_PROMPT = (
@@ -61,35 +66,94 @@ class _SourceScope:
 
 
 class GraphConstructionService:
-    def __init__(
-        self, *, repository: PaperRepository, client: VllmStructuredClient | None
-    ) -> None:
+    def __init__(self, *, repository: PaperRepository) -> None:
         self.repository = repository
-        self.client = client
 
-    def build_core(self, paper_id: str) -> PaperGraph:
-        return self._build(paper_id, GraphStage.core)
+    def build_core(
+        self,
+        paper_id: str,
+        *,
+        client: VllmStructuredClient | None,
+        model_snapshot: ModelSnapshot,
+        request_id: str,
+    ) -> PaperGraph:
+        return self._build(
+            paper_id,
+            GraphStage.core,
+            client=client,
+            model_snapshot=model_snapshot,
+            request_id=request_id,
+        )
 
-    def build_deep(self, paper_id: str) -> PaperGraph:
-        return self._build(paper_id, GraphStage.deep)
+    def build_deep(
+        self,
+        paper_id: str,
+        *,
+        client: VllmStructuredClient | None,
+        model_snapshot: ModelSnapshot,
+        request_id: str,
+    ) -> PaperGraph:
+        return self._build(
+            paper_id,
+            GraphStage.deep,
+            client=client,
+            model_snapshot=model_snapshot,
+            request_id=request_id,
+        )
 
-    def _build(self, paper_id: str, stage: GraphStage) -> PaperGraph:
+    def require_prerequisites(self, paper_id: str, stage: GraphStage) -> None:
         self._require_prerequisites(paper_id, stage)
-        if self.client is None:
+
+    def _build(
+        self,
+        paper_id: str,
+        stage: GraphStage,
+        *,
+        client: VllmStructuredClient | None,
+        model_snapshot: ModelSnapshot,
+        request_id: str,
+    ) -> PaperGraph:
+        self._require_prerequisites(paper_id, stage)
+        if client is None:
             raise GraphBuildUnavailableError("Reasoning model configuration is unavailable.")
         stage_name = stage.value
+        durable_status = self.repository.get_graph_build_status(
+            paper_id, stage_name, request_id
+        )
+        if durable_status is ProcessingStatus.completed:
+            return self.repository.get_graph(paper_id)
+        if durable_status is ProcessingStatus.running:
+            raise GraphBuildConflictError(
+                "Graph build is already running for this request."
+            )
         try:
             self.repository.record_processing_status(
-                paper_id, ProcessingStatus.queued, stage=stage_name
+                paper_id,
+                ProcessingStatus.queued,
+                stage=stage_name,
+                model_profile_id=model_snapshot.profile_id,
+                model_snapshot=model_snapshot,
+                request_id=request_id,
             )
             self.repository.record_processing_status(
-                paper_id, ProcessingStatus.running, stage=stage_name
+                paper_id,
+                ProcessingStatus.running,
+                stage=stage_name,
+                model_profile_id=model_snapshot.profile_id,
+                model_snapshot=model_snapshot,
+                request_id=request_id,
             )
             scopes = self._source_scopes(paper_id)
-            nodes = self._extract_nodes(stage, scopes)
-            edges = self._extract_edges(stage, scopes, nodes)
+            nodes = self._extract_nodes(stage, scopes, client)
+            edges = self._extract_edges(stage, scopes, nodes, client)
             graph = self.repository.replace_graph_stage_and_complete(
-                paper_id, stage, nodes, edges
+                paper_id,
+                stage,
+                nodes,
+                edges,
+                model_profile_id=model_snapshot.profile_id,
+                model_snapshot=model_snapshot,
+                request_id=request_id,
             )
             return graph
         except (
@@ -98,10 +162,22 @@ class GraphConstructionService:
             GraphReferenceError,
             SQLAlchemyError,
         ):
-            self._record_failure(paper_id, stage)
+            self._record_failure(
+                paper_id,
+                stage,
+                model_profile_id=model_snapshot.profile_id,
+                model_snapshot=model_snapshot,
+                request_id=request_id,
+            )
             raise
         except Exception:
-            self._record_failure(paper_id, stage)
+            self._record_failure(
+                paper_id,
+                stage,
+                model_profile_id=model_snapshot.profile_id,
+                model_snapshot=model_snapshot,
+                request_id=request_id,
+            )
             raise
 
     def _require_prerequisites(self, paper_id: str, stage: GraphStage) -> None:
@@ -173,12 +249,15 @@ class GraphConstructionService:
         return ()
 
     def _extract_nodes(
-        self, stage: GraphStage, scopes: tuple[_SourceScope, ...]
+        self,
+        stage: GraphStage,
+        scopes: tuple[_SourceScope, ...],
+        client: VllmStructuredClient,
     ) -> tuple[GraphNode, ...]:
         candidates: list[NodeCandidate] = []
         for scope in scopes:
             evidence_ids = frozenset(element.id for element in scope.elements)
-            payload = self.client.generate_json(
+            payload = client.generate_json(
                 system_prompt=_stage_system_prompt(_NODE_SYSTEM_PROMPT, stage),
                 user_prompt=_node_prompt(scope),
                 schema_name="paper_graph_nodes",
@@ -196,6 +275,7 @@ class GraphConstructionService:
         stage: GraphStage,
         scopes: tuple[_SourceScope, ...],
         nodes: tuple[GraphNode, ...],
+        client: VllmStructuredClient,
     ) -> tuple[GraphEdge, ...]:
         candidates: list[EdgeCandidate] = []
         for scope in scopes:
@@ -205,7 +285,7 @@ class GraphConstructionService:
                 for node in nodes
                 if set(node.evidence_element_ids).intersection(evidence_ids)
             )
-            payload = self.client.generate_json(
+            payload = client.generate_json(
                 system_prompt=_stage_system_prompt(_EDGE_SYSTEM_PROMPT, stage),
                 user_prompt=_edge_prompt(scope, scope_nodes),
                 schema_name="paper_graph_edges",
@@ -235,7 +315,7 @@ class GraphConstructionService:
             for evidence_id in cross_evidence_ids
             if evidence_id in evidence_by_id
         )
-        cross_payload = self.client.generate_json(
+        cross_payload = client.generate_json(
             system_prompt=_stage_system_prompt(_EDGE_SYSTEM_PROMPT, stage),
             user_prompt=_cross_section_edge_prompt(nodes, cross_elements),
             schema_name="paper_graph_cross_section_edges",
@@ -251,10 +331,23 @@ class GraphConstructionService:
         )
         return _deduplicate_edges(tuple(candidates), stage)
 
-    def _record_failure(self, paper_id: str, stage: GraphStage) -> None:
+    def _record_failure(
+        self,
+        paper_id: str,
+        stage: GraphStage,
+        *,
+        model_profile_id: str,
+        model_snapshot: ModelSnapshot,
+        request_id: str,
+    ) -> None:
         try:
             self.repository.record_graph_stage_failure(
-                paper_id, stage=stage.value, error_summary=_FAILURE_SUMMARIES[stage]
+                paper_id,
+                stage=stage.value,
+                error_summary=_FAILURE_SUMMARIES[stage],
+                model_profile_id=model_profile_id,
+                model_snapshot=model_snapshot,
+                request_id=request_id,
             )
         except Exception:
             # A failed best-effort status write must not replace the original error.

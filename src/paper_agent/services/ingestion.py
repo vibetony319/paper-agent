@@ -181,6 +181,10 @@ class PaperIngestionService:
             paper,
             stage0_status=self.repository.get_latest_stage_status(paper_id, "stage0"),
             stage1_status=self.repository.get_latest_stage_status(paper_id, "stage1"),
+            stage2_status=self.repository.get_latest_stage_status(paper_id, "stage2"),
+            stage3_status=self.repository.get_latest_stage_status(paper_id, "stage3"),
+            stage2_model=self.repository.get_latest_graph_model(paper_id, "stage2"),
+            stage3_model=self.repository.get_latest_graph_model(paper_id, "stage3"),
             error=self._public_error_summary(error_summary),
         )
 

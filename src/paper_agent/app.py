@@ -7,7 +7,6 @@ from fastapi.responses import JSONResponse
 
 from paper_agent.config import Settings, get_settings
 from paper_agent.model_profile_storage import ModelProfileRepository
-from paper_agent.models.vllm import VllmStructuredClient
 from paper_agent.routes import (
     agent_router,
     graph_router,
@@ -23,10 +22,7 @@ from paper_agent.services.graph_construction import GraphConstructionService
 from paper_agent.services.ingestion import PaperIngestionService
 from paper_agent.services.model_profiles import ModelProfileService
 from paper_agent.services.model_secrets import ModelSecretStore
-from paper_agent.services.reasoning_clients import (
-    ReasoningClientProvider,
-    ReasoningClientResolutionError,
-)
+from paper_agent.services.reasoning_clients import ReasoningClientProvider
 from paper_agent.storage import PaperRepository
 
 
@@ -59,13 +55,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.reasoning_client_provider,
         app.state.model_secret_store,
     )
-    try:
-        compatibility_clients = (
-            app.state.model_profile_service.resolve_default_clients()
-        )
-    except ReasoningClientResolutionError:
-        compatibility_clients = None
-
     repository = PaperRepository(app.state.settings.database_url)
     app.state.paper_repository = repository
     app.state.paper_tool_registry = PaperToolRegistry(repository)
@@ -80,10 +69,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         repository=repository,
     )
     app.state.graph_construction_service = GraphConstructionService(
-        repository=repository,
-        client=(
-            None if compatibility_clients is None else compatibility_clients.structured
-        ),
+        repository=repository
     )
 
     @app.exception_handler(ModelProfileHttpError)

@@ -304,6 +304,9 @@ class PaperRepository:
         *,
         stage: str | None = None,
         error_summary: str | None = None,
+        model_profile_id: str | None = None,
+        model_snapshot: ModelSnapshot | None = None,
+        request_id: str | None = None,
     ) -> None:
         with self.engine.begin() as connection:
             self._record_processing_status(
@@ -312,6 +315,9 @@ class PaperRepository:
                 status,
                 stage=stage,
                 error_summary=error_summary,
+                model_profile_id=model_profile_id,
+                model_snapshot=model_snapshot,
+                request_id=request_id,
             )
 
     def get_processing_statuses(self, paper_id: str) -> tuple[ProcessingStatus, ...]:
@@ -334,6 +340,42 @@ class PaperRepository:
                 .limit(1)
             ).scalar_one_or_none()
         return None if status is None else ProcessingStatus(status)
+
+    def get_graph_build_status(
+        self, paper_id: str, stage: str, request_id: str
+    ) -> ProcessingStatus | None:
+        with self.engine.connect() as connection:
+            status = connection.execute(
+                select(processing_runs.c.status)
+                .where(processing_runs.c.paper_id == paper_id)
+                .where(processing_runs.c.stage == stage)
+                .where(processing_runs.c.request_id == request_id)
+                .order_by(processing_runs.c.sequence.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+        return None if status is None else ProcessingStatus(status)
+
+    def get_latest_graph_model(
+        self, paper_id: str, stage: str
+    ) -> ModelSnapshot | None:
+        with self.engine.connect() as connection:
+            row = connection.execute(
+                select(
+                    processing_runs.c.model_profile_id,
+                    processing_runs.c.model_snapshot_json,
+                )
+                .where(processing_runs.c.paper_id == paper_id)
+                .where(processing_runs.c.stage == stage)
+                .where(processing_runs.c.model_snapshot_json.is_not(None))
+                .order_by(processing_runs.c.sequence.desc())
+                .limit(1)
+            ).mappings().one_or_none()
+        if row is None:
+            return None
+        snapshot = _parse_model_snapshot(row["model_snapshot_json"])
+        if snapshot is not None and snapshot.profile_id != row["model_profile_id"]:
+            return None
+        return snapshot
 
     def mark_source_published(self, paper_id: str) -> Paper:
         with self.engine.begin() as connection:
@@ -799,7 +841,14 @@ class PaperRepository:
             return tuple(self._element_from_row(row) for row in rows)
 
     def record_graph_stage_failure(
-        self, paper_id: str, *, stage: str, error_summary: str
+        self,
+        paper_id: str,
+        *,
+        stage: str,
+        error_summary: str,
+        model_profile_id: str | None = None,
+        model_snapshot: ModelSnapshot | None = None,
+        request_id: str | None = None,
     ) -> None:
         """Durably finish a failed graph build without exposing its internal error."""
         with self.engine.begin() as connection:
@@ -809,6 +858,9 @@ class PaperRepository:
                 ProcessingStatus.failed,
                 stage=stage,
                 error_summary=error_summary,
+                model_profile_id=model_profile_id,
+                model_snapshot=model_snapshot,
+                request_id=request_id,
             )
             connection.execute(
                 update(papers)
@@ -840,6 +892,10 @@ class PaperRepository:
         stage: GraphStage,
         nodes: tuple[GraphNode, ...],
         edges: tuple[GraphEdge, ...],
+        *,
+        model_profile_id: str | None = None,
+        model_snapshot: ModelSnapshot | None = None,
+        request_id: str | None = None,
     ) -> PaperGraph:
         """Atomically replace a graph stage and durably publish its success."""
         self._require_graph_stage_replacement(stage, nodes, edges)
@@ -853,7 +909,13 @@ class PaperRepository:
             )
             graph = self._replace_graph_stage(connection, paper_id, stage, nodes, edges)
             self._record_processing_status(
-                connection, paper_id, ProcessingStatus.completed, stage=stage.value
+                connection,
+                paper_id,
+                ProcessingStatus.completed,
+                stage=stage.value,
+                model_profile_id=model_profile_id,
+                model_snapshot=model_snapshot,
+                request_id=request_id,
             )
             if invalidates_deep_stage:
                 self._record_processing_status(
@@ -1107,6 +1169,9 @@ class PaperRepository:
         *,
         stage: str | None = None,
         error_summary: str | None = None,
+        model_profile_id: str | None = None,
+        model_snapshot: ModelSnapshot | None = None,
+        request_id: str | None = None,
     ) -> None:
         current = connection.execute(
             select(func.max(processing_runs.c.sequence)).where(
@@ -1122,6 +1187,9 @@ class PaperRepository:
                 stage=stage,
                 status=status.value,
                 error_summary=error_summary,
+                model_profile_id=model_profile_id,
+                model_snapshot_json=_serialize_model_snapshot(model_snapshot),
+                request_id=request_id,
             )
         )
 

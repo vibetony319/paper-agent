@@ -29,9 +29,10 @@ from paper_agent.domain import (
     ProcessingStatus,
     Section,
 )
+from paper_agent.model_profiles import ModelSnapshot
 
 if TYPE_CHECKING:
-    from paper_agent.model_profiles import ModelCapabilities, ModelSnapshot
+    from paper_agent.model_profiles import ModelCapabilities
     from paper_agent.services.model_profiles import ModelProfileView
 
 
@@ -40,6 +41,24 @@ class UploadPayload:
     filename: str
     content: bytes
     media_type: str | None
+
+
+class ModelSnapshotResponse(BaseModel):
+    profile_id: UUID
+    display_name: str
+    base_url: str
+    model_name: str
+    revision: int
+
+    @classmethod
+    def from_snapshot(cls, snapshot: ModelSnapshot) -> "ModelSnapshotResponse":
+        return cls(
+            profile_id=UUID(snapshot.profile_id),
+            display_name=snapshot.display_name,
+            base_url=snapshot.base_url,
+            model_name=snapshot.model_name,
+            revision=snapshot.revision,
+        )
 
 
 @dataclass(frozen=True)
@@ -51,6 +70,8 @@ class PaperSummary:
     stage1_status: ProcessingStatus
     stage2_status: ProcessingStatus | None = None
     stage3_status: ProcessingStatus | None = None
+    stage2_model: ModelSnapshot | None = None
+    stage3_model: ModelSnapshot | None = None
     error: str | None = None
 
     @classmethod
@@ -62,6 +83,8 @@ class PaperSummary:
         stage1_status: ProcessingStatus | None = None,
         stage2_status: ProcessingStatus | None = None,
         stage3_status: ProcessingStatus | None = None,
+        stage2_model: ModelSnapshot | None = None,
+        stage3_model: ModelSnapshot | None = None,
         error: str | None = None,
     ) -> "PaperSummary":
         stage_statuses = {
@@ -83,6 +106,8 @@ class PaperSummary:
             stage1_status=fallback_stage1_status if stage1_status is None else stage1_status,
             stage2_status=stage2_status,
             stage3_status=stage3_status,
+            stage2_model=stage2_model,
+            stage3_model=stage3_model,
             error=error,
         )
 
@@ -95,6 +120,8 @@ class PaperSummaryResponse(BaseModel):
     stage1_status: ProcessingStatus
     stage2_status: ProcessingStatus | None = None
     stage3_status: ProcessingStatus | None = None
+    stage2_model: ModelSnapshotResponse | None = None
+    stage3_model: ModelSnapshotResponse | None = None
     error: str | None = None
 
     @classmethod
@@ -107,6 +134,16 @@ class PaperSummaryResponse(BaseModel):
             stage1_status=summary.stage1_status,
             stage2_status=summary.stage2_status,
             stage3_status=summary.stage3_status,
+            stage2_model=(
+                None
+                if summary.stage2_model is None
+                else ModelSnapshotResponse.from_snapshot(summary.stage2_model)
+            ),
+            stage3_model=(
+                None
+                if summary.stage3_model is None
+                else ModelSnapshotResponse.from_snapshot(summary.stage3_model)
+            ),
             error=summary.error,
         )
 
@@ -192,6 +229,13 @@ class BoundingBoxResponse(BaseModel):
     y1: float
 
 
+class GraphBuildRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    model_profile_id: UUID
+    request_id: UUID
+
+
 class AgentMessageRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -246,24 +290,6 @@ class CitationResponse(BaseModel):
                 x1=snapshot.bbox.x1,
                 y1=snapshot.bbox.y1,
             ),
-        )
-
-
-class ModelSnapshotResponse(BaseModel):
-    profile_id: UUID
-    display_name: str
-    base_url: str
-    model_name: str
-    revision: int
-
-    @classmethod
-    def from_snapshot(cls, snapshot: "ModelSnapshot") -> "ModelSnapshotResponse":
-        return cls(
-            profile_id=UUID(snapshot.profile_id),
-            display_name=snapshot.display_name,
-            base_url=snapshot.base_url,
-            model_name=snapshot.model_name,
-            revision=snapshot.revision,
         )
 
 

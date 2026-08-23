@@ -136,6 +136,8 @@ def test_unexpected_stage1_error_is_a_safe_500_with_durable_partial_state(
         "stage1_status": "failed",
         "stage2_status": None,
         "stage3_status": None,
+        "stage2_model": None,
+        "stage3_model": None,
         "error": "The PDF could not be converted.",
     }
 
@@ -267,6 +269,8 @@ def test_public_summary_uses_latest_durable_status_for_each_stage(client: TestCl
         "stage1_status": "running",
         "stage2_status": None,
         "stage3_status": None,
+        "stage2_model": None,
+        "stage3_model": None,
         "error": None,
     }
 

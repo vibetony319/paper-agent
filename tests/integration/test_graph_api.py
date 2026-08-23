@@ -1,12 +1,15 @@
+import json
 from pathlib import Path
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
-import paper_agent.app as app_module
+import paper_agent.services.reasoning_clients as reasoning_clients
 from paper_agent.app import create_app
 from paper_agent.config import Settings
 from paper_agent.domain import GraphEdge, GraphNode, GraphStage, ProcessingStatus
 from paper_agent.models.vllm import VllmModelConfig
+from paper_agent.services.reasoning_clients import ENVIRONMENT_FALLBACK_PROFILE_ID
 
 
 def _upload_paper(client: TestClient, sample_pdf: Path) -> dict:
@@ -78,12 +81,48 @@ def _configured_client(tmp_path: Path, monkeypatch) -> TestClient:
             base_url="http://127.0.0.1:9/v1", model="test-reasoning-model"
         ),
     )
-    class LocalClient:
-        def generate_json(self, **_kwargs) -> dict:
-            raise AssertionError("graph construction should not call the local test client")
-
-    monkeypatch.setattr(app_module, "VllmStructuredClient", lambda _config: LocalClient())
+    monkeypatch.setattr(
+        reasoning_clients,
+        "VllmStructuredClient",
+        lambda _config, client=None: _CannedStructuredClient(),
+    )
     return TestClient(create_app(settings), raise_server_exceptions=False)
+
+
+def _graph_request(
+    profile_id: str = ENVIRONMENT_FALLBACK_PROFILE_ID,
+    request_id: str | None = None,
+) -> dict:
+    return {
+        "model_profile_id": profile_id,
+        "request_id": request_id or str(uuid4()),
+    }
+
+
+class _CannedStructuredClient:
+    def __init__(self, failing: list[bool] | None = None) -> None:
+        self.failing = failing
+        self.calls: list[dict] = []
+
+    def generate_json(self, **request) -> dict:
+        self.calls.append(request)
+        if self.failing and self.failing[0]:
+            raise RuntimeError("raw reply with api_key=top-secret")
+        payload = json.loads(request["user_prompt"])
+        if request["schema_name"] == "paper_graph_nodes":
+            evidence_id = payload["source_elements"][0]["id"]
+            return {
+                "nodes": [
+                    {
+                        "local_id": "n1",
+                        "node_type": "method",
+                        "name": "Router",
+                        "summary": "Routes tokens to specialists.",
+                        "evidence_element_ids": [evidence_id],
+                    }
+                ]
+            }
+        return {"edges": []}
 
 
 def test_graph_queries_return_same_paper_evidence_and_traversal_results(
@@ -146,7 +185,9 @@ def test_core_graph_build_without_vllm_configuration_is_safe_503(
     """Breaks if an optional reasoning service becomes a configuration leak."""
     paper_id = _upload_paper(client, sample_pdf)["id"]
 
-    response = client.post(f"/api/papers/{paper_id}/graph/core")
+    response = client.post(
+        f"/api/papers/{paper_id}/graph/core", json=_graph_request()
+    )
 
     assert response.status_code == 503
     assert response.json() == {"detail": "Reasoning model is not configured."}
@@ -170,8 +211,12 @@ def test_incomplete_graph_build_without_vllm_is_409_without_processing_rows(
     )
     stage2_incomplete = _upload_paper(client, sample_pdf)
 
-    core_response = client.post(f"/api/papers/{stage1_incomplete.id}/graph/core")
-    deep_response = client.post(f"/api/papers/{stage2_incomplete['id']}/graph/deep")
+    core_response = client.post(
+        f"/api/papers/{stage1_incomplete.id}/graph/core", json=_graph_request()
+    )
+    deep_response = client.post(
+        f"/api/papers/{stage2_incomplete['id']}/graph/deep", json=_graph_request()
+    )
 
     assert core_response.status_code == 409
     assert deep_response.status_code == 409
@@ -195,9 +240,24 @@ def test_graph_routes_map_unknown_resources_invalid_parameters_and_prerequisites
         )
 
         assert client.get("/api/papers/missing/graph").status_code == 404
-        assert client.post("/api/papers/missing/graph/core").status_code == 404
-        assert client.post(f"/api/papers/{incomplete.id}/graph/core").status_code == 409
-        assert client.post(f"/api/papers/{paper_id}/graph/deep").status_code == 409
+        assert (
+            client.post(
+                "/api/papers/missing/graph/core", json=_graph_request()
+            ).status_code
+            == 404
+        )
+        assert (
+            client.post(
+                f"/api/papers/{incomplete.id}/graph/core", json=_graph_request()
+            ).status_code
+            == 409
+        )
+        assert (
+            client.post(
+                f"/api/papers/{paper_id}/graph/deep", json=_graph_request()
+            ).status_code
+            == 409
+        )
         assert client.get(f"/api/papers/{paper_id}/graph/nodes/missing").status_code == 404
         assert (
             client.get(f"/api/papers/{paper_id}/graph/nodes/missing/neighbors").status_code
@@ -246,13 +306,15 @@ def test_graph_build_failure_is_persisted_and_returns_nonleaking_500(
     client = _configured_client(tmp_path, monkeypatch)
     try:
         paper_id = _upload_paper(client, sample_pdf)["id"]
-
-        class FailingClient:
-            def generate_json(self, **_kwargs) -> dict:
-                raise RuntimeError("raw reply at C:\\secret\\model-output with api_key=top-secret")
-
-        client.app.state.graph_construction_service.client = FailingClient()
-        response = client.post(f"/api/papers/{paper_id}/graph/core")
+        failing = [True]
+        monkeypatch.setattr(
+            reasoning_clients,
+            "VllmStructuredClient",
+            lambda _config, client=None: _CannedStructuredClient(failing=failing),
+        )
+        response = client.post(
+            f"/api/papers/{paper_id}/graph/core", json=_graph_request()
+        )
 
         assert response.status_code == 500
         assert response.json() == {"detail": "The graph could not be constructed."}
@@ -261,5 +323,144 @@ def test_graph_build_failure_is_persisted_and_returns_nonleaking_500(
         summary = client.get(f"/api/papers/{paper_id}")
         assert summary.json()["stage2_status"] == "failed"
         assert summary.json()["stage3_status"] is None
+        assert summary.json()["stage2_model"]["profile_id"] == ENVIRONMENT_FALLBACK_PROFILE_ID
+    finally:
+        client.close()
+
+
+def test_graph_build_uses_requested_profile_and_records_stage_model(
+    tmp_path: Path, sample_pdf: Path, monkeypatch
+) -> None:
+    """Breaks if graph provenance is missing from the durable paper summary."""
+    client = _configured_client(tmp_path, monkeypatch)
+    try:
+        paper_id = _upload_paper(client, sample_pdf)["id"]
+        request_id = str(uuid4())
+
+        response = client.post(
+            f"/api/papers/{paper_id}/graph/core",
+            json=_graph_request(request_id=request_id),
+        )
+
+        assert response.status_code == 200
+        summary = client.get(f"/api/papers/{paper_id}").json()
+        assert summary["stage2_model"]["profile_id"] == ENVIRONMENT_FALLBACK_PROFILE_ID
+        assert summary["stage2_model"]["model_name"] == "test-reasoning-model"
+        assert summary["stage3_model"] is None
+    finally:
+        client.close()
+
+
+def test_completed_graph_request_replays_without_resolving_the_model(
+    tmp_path: Path, sample_pdf: Path, monkeypatch
+) -> None:
+    """Breaks if a repeated graph request runs another extraction call."""
+    client = _configured_client(tmp_path, monkeypatch)
+    try:
+        paper_id = _upload_paper(client, sample_pdf)["id"]
+        payload = _graph_request()
+        first = client.post(f"/api/papers/{paper_id}/graph/core", json=payload)
+        assert first.status_code == 200
+        before = len(
+            client.app.state.reasoning_client_provider
+            .resolve(ENVIRONMENT_FALLBACK_PROFILE_ID)
+            .structured.calls
+        )
+
+        replay = client.post(f"/api/papers/{paper_id}/graph/core", json=payload)
+
+        assert replay.status_code == 200
+        assert replay.json() == first.json()
+        after = len(
+            client.app.state.reasoning_client_provider
+            .resolve(ENVIRONMENT_FALLBACK_PROFILE_ID)
+            .structured.calls
+        )
+        assert after == before
+    finally:
+        client.close()
+
+
+def test_running_graph_request_conflicts_without_processing_rows(
+    tmp_path: Path, sample_pdf: Path, monkeypatch
+) -> None:
+    """Breaks if a running graph request can be started twice."""
+    client = _configured_client(tmp_path, monkeypatch)
+    try:
+        paper_id = _upload_paper(client, sample_pdf)["id"]
+        request_id = str(uuid4())
+        repository = client.app.state.paper_repository
+        repository.record_processing_status(
+            paper_id,
+            ProcessingStatus.running,
+            stage="stage2",
+            request_id=request_id,
+        )
+
+        response = client.post(
+            f"/api/papers/{paper_id}/graph/core",
+            json=_graph_request(request_id=request_id),
+        )
+
+        assert response.status_code == 409
+        assert len(repository.get_stage_statuses(paper_id, "stage2")) == 1
+    finally:
+        client.close()
+
+
+def test_failed_graph_request_retries_under_the_same_id(
+    tmp_path: Path, sample_pdf: Path, monkeypatch
+) -> None:
+    """Breaks if a failed graph request cannot recover with the same request ID."""
+    client = _configured_client(tmp_path, monkeypatch)
+    try:
+        paper_id = _upload_paper(client, sample_pdf)["id"]
+        failing = [True]
+        monkeypatch.setattr(
+            reasoning_clients,
+            "VllmStructuredClient",
+            lambda _config, client=None: _CannedStructuredClient(failing=failing),
+        )
+        payload = _graph_request()
+        failed = client.post(f"/api/papers/{paper_id}/graph/core", json=payload)
+        assert failed.status_code == 500
+
+        failing[0] = False
+        retried = client.post(f"/api/papers/{paper_id}/graph/core", json=payload)
+
+        assert retried.status_code == 200
+        summary = client.get(f"/api/papers/{paper_id}").json()
+        assert summary["stage2_status"] == "completed"
+        assert summary["stage2_model"]["profile_id"] == ENVIRONMENT_FALLBACK_PROFILE_ID
+    finally:
+        client.close()
+
+
+def test_graph_rejects_insufficient_structured_capability_before_queued_row(
+    tmp_path: Path, sample_pdf: Path, monkeypatch
+) -> None:
+    """Breaks if graph starts before the selected model can emit structured JSON."""
+    client = _configured_client(tmp_path, monkeypatch)
+    try:
+        paper_id = _upload_paper(client, sample_pdf)["id"]
+        profile = client.post(
+            "/api/model-profiles",
+            json={
+                "display_name": "Chat only",
+                "base_url": "http://127.0.0.1:8002/v1",
+                "model_name": "chat-model",
+                "api_key": "profile-secret",
+            },
+        ).json()
+
+        response = client.post(
+            f"/api/papers/{paper_id}/graph/core",
+            json=_graph_request(profile_id=profile["id"]),
+        )
+
+        assert response.status_code == 409
+        assert "profile-secret" not in response.text
+        repository = client.app.state.paper_repository
+        assert repository.get_stage_statuses(paper_id, "stage2") == ()
     finally:
         client.close()
