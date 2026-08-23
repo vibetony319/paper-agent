@@ -25,6 +25,7 @@ from paper_agent.database import (
     notes,
     pages,
     papers,
+    selection_assist_requests,
     text_anchor_rects,
     text_anchors,
 )
@@ -306,6 +307,72 @@ class PaperAnnotationRepository:
             return connection.execute(
                 select(papers.c.id).where(papers.c.id == paper_id)
             ).scalar_one_or_none() is not None
+
+    def get_selection_assist(self, paper_id: str, request_id: str):
+        with self.engine.connect() as connection:
+            return connection.execute(
+                select(selection_assist_requests)
+                .where(selection_assist_requests.c.paper_id == paper_id)
+                .where(selection_assist_requests.c.request_id == request_id)
+            ).mappings().one_or_none()
+
+    def create_selection_assist_running(
+        self,
+        paper_id: str,
+        *,
+        request_id: str,
+        action: str,
+        model_profile_id: str,
+        model_snapshot: ModelSnapshot,
+    ) -> None:
+        now = _serialize_time(datetime.now(UTC))
+        with self.engine.begin() as connection:
+            connection.execute(
+                insert(selection_assist_requests).values(
+                    id=str(uuid4()),
+                    paper_id=paper_id,
+                    request_id=request_id,
+                    action=action,
+                    status="running",
+                    model_profile_id=model_profile_id,
+                    model_snapshot_json=_serialize_model_snapshot(model_snapshot),
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+
+    def complete_selection_assist(
+        self,
+        paper_id: str,
+        request_id: str,
+        *,
+        anchor_id: str,
+        note_id: str,
+    ) -> None:
+        with self.engine.begin() as connection:
+            connection.execute(
+                update(selection_assist_requests)
+                .where(selection_assist_requests.c.paper_id == paper_id)
+                .where(selection_assist_requests.c.request_id == request_id)
+                .values(
+                    status="completed",
+                    anchor_id=anchor_id,
+                    note_id=note_id,
+                    updated_at=_serialize_time(datetime.now(UTC)),
+                )
+            )
+
+    def fail_selection_assist(self, paper_id: str, request_id: str) -> None:
+        with self.engine.begin() as connection:
+            connection.execute(
+                update(selection_assist_requests)
+                .where(selection_assist_requests.c.paper_id == paper_id)
+                .where(selection_assist_requests.c.request_id == request_id)
+                .values(
+                    status="failed",
+                    updated_at=_serialize_time(datetime.now(UTC)),
+                )
+            )
 
     def _insert_anchor(
         self, connection: Connection, paper_id: str, draft: TextAnchorDraft

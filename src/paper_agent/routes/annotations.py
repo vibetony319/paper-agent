@@ -4,6 +4,8 @@ from typing import Callable, TypeVar
 from uuid import UUID
 
 from fastapi import APIRouter, Request, Response
+from fastapi.responses import StreamingResponse
+from fastapi import HTTPException
 
 from paper_agent.annotation_storage import (
     AnnotationInputError,
@@ -17,6 +19,18 @@ from paper_agent.schemas import (
     NoteRequest,
     NoteResponse,
     NoteUpdateRequest,
+    SelectionAssistRequest,
+)
+from paper_agent.services.model_profiles import ModelProfileNotFoundError
+from paper_agent.services.reasoning_clients import (
+    ReasoningClientProvider,
+    ResolvedReasoningClients,
+)
+from paper_agent.services.selection_assists import (
+    SelectionAssistAction,
+    SelectionAssistEvent,
+    SelectionAssistService,
+    encode_sse,
 )
 from paper_agent.services.annotations import AnnotationService, draft_from_request
 
@@ -34,6 +48,38 @@ class AnnotationHttpError(Exception):
 
 def _service(request: Request) -> AnnotationService:
     return request.app.state.annotation_service
+
+
+def _selection_assist_service(request: Request) -> SelectionAssistService:
+    return request.app.state.selection_assist_service
+
+
+def _provider(request: Request) -> ReasoningClientProvider:
+    return request.app.state.reasoning_client_provider
+
+
+def _model_profile_service(request: Request):
+    return request.app.state.model_profile_service
+
+
+def _resolve_chat_model(
+    provider: ReasoningClientProvider, profile_id: str
+) -> ResolvedReasoningClients:
+    try:
+        resolved = provider.resolve(profile_id)
+    except Exception:
+        raise HTTPException(
+            status_code=503, detail="Reasoning model is not configured."
+        ) from None
+    capabilities = resolved.profile.capabilities
+    if not provider.is_read_only_profile(resolved.profile.id) and (
+        not capabilities.basic_chat
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Selected model does not support text generation.",
+        )
+    return resolved
 
 
 def _safe_errors(action: Callable[[], _Result]) -> _Result:
@@ -161,3 +207,59 @@ def delete_note(paper_id: str, note_id: UUID, request: Request) -> Response:
 
     _safe_errors(remove)
     return Response(status_code=204)
+
+
+@router.post("/{paper_id}/selection-assists")
+def create_selection_assist(
+    paper_id: str, payload: SelectionAssistRequest, request: Request
+) -> StreamingResponse:
+    annotation_service = _service(request)
+    annotation_service.require_paper(paper_id)
+    try:
+        draft = draft_from_request(payload)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail="批注请求无效。") from error
+
+    request_id = str(payload.request_id)
+    profile_id = str(payload.model_profile_id)
+    assist_service = _selection_assist_service(request)
+    existing = assist_service.repository.get_selection_assist(paper_id, request_id)
+    headers = {
+        "Cache-Control": "no-store",
+        "X-Accel-Buffering": "no",
+    }
+    if existing is not None and existing["status"] == "completed":
+        return StreamingResponse(
+            (encode_sse(event) for event in assist_service.replay(paper_id, request_id)),
+            media_type="text/event-stream",
+            headers=headers,
+        )
+
+    resolved = _resolve_chat_model(_provider(request), profile_id)
+    action = SelectionAssistAction(payload.action)
+
+    def event_stream():
+        try:
+            with _model_profile_service(request).usage_lease(profile_id):
+                for event in assist_service.stream(
+                    paper_id=paper_id,
+                    draft=draft,
+                    action=action,
+                    client=resolved.chat,
+                    model_snapshot=resolved.snapshot,
+                    request_id=request_id,
+                ):
+                    yield encode_sse(event)
+        except ModelProfileNotFoundError:
+            yield encode_sse(
+                SelectionAssistEvent(
+                    "error",
+                    {"code": "assist_failed", "detail": "模型档案不可用。"},
+                )
+            )
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers=headers,
+    )

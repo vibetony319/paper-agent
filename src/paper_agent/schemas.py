@@ -541,6 +541,12 @@ class HighlightCreateRequest(TextAnchorDraftRequest):
     request_id: UUID
 
 
+class SelectionAssistRequest(TextAnchorDraftRequest):
+    action: Literal["explain", "translate"]
+    model_profile_id: UUID
+    request_id: UUID
+
+
 class TextAnchorRectResponse(BaseModel):
     order: int
     x0: float

@@ -27,6 +27,7 @@ from paper_agent.services.ingestion import PaperIngestionService
 from paper_agent.services.model_profiles import ModelProfileService
 from paper_agent.services.model_secrets import ModelSecretStore
 from paper_agent.services.reasoning_clients import ReasoningClientProvider
+from paper_agent.services.selection_assists import SelectionAssistService
 from paper_agent.storage import PaperRepository
 
 
@@ -65,6 +66,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         engine=repository.engine
     )
     app.state.annotation_service = AnnotationService(
+        app.state.annotation_repository
+    )
+    app.state.selection_assist_service = SelectionAssistService(
         app.state.annotation_repository
     )
     app.state.paper_tool_registry = PaperToolRegistry(repository)
