@@ -19,13 +19,17 @@ from paper_agent.database import (
     graph_edges,
     graph_node_evidence,
     graph_nodes,
+    highlights,
     initialize_database,
     note_anchors,
     notes,
     pages,
     papers,
     processing_runs,
+    selection_assist_requests,
     sections,
+    text_anchor_rects,
+    text_anchors,
 )
 from paper_agent.domain import (
     AgentMessageRole,
@@ -55,6 +59,28 @@ _MODEL_SNAPSHOT_KEYS = frozenset(
 )
 _CITATION_SNAPSHOT_KEYS = frozenset({"id", "kind", "page_number", "bbox"})
 _CITATION_BBOX_KEYS = frozenset({"x0", "y0", "x1", "y1"})
+
+PAPER_DELETE_ORDER = (
+    conversation_message_note_citations,
+    conversation_message_anchors,
+    conversation_message_citations,
+    conversation_messages,
+    conversations,
+    selection_assist_requests,
+    note_anchors,
+    notes,
+    highlights,
+    text_anchor_rects,
+    text_anchors,
+    graph_edge_evidence,
+    graph_node_evidence,
+    graph_edges,
+    graph_nodes,
+    document_elements,
+    sections,
+    pages,
+    processing_runs,
+)
 
 
 def _snapshot_values(snapshot: ModelSnapshot) -> dict[str, object]:
@@ -726,6 +752,22 @@ class PaperRepository:
                 message_id: tuple(anchor_ids_by_message.get(message_id, ()))
                 for message_id in message_ids
             }
+
+    def delete_paper_data(self, paper_id: str) -> bool:
+        with self.engine.begin() as connection:
+            exists = connection.execute(
+                select(papers.c.id).where(papers.c.id == paper_id)
+            ).scalar_one_or_none()
+            if exists is None:
+                return False
+            for table in PAPER_DELETE_ORDER:
+                self._delete_rows(connection, table, paper_id)
+            connection.execute(delete(papers).where(papers.c.id == paper_id))
+        return True
+
+    @staticmethod
+    def _delete_rows(connection, table, paper_id: str) -> None:
+        connection.execute(delete(table).where(table.c.paper_id == paper_id))
 
     def save_page(self, paper_id: str, page: Page) -> Page:
         with self.engine.begin() as connection:

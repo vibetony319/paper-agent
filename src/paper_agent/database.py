@@ -217,6 +217,7 @@ text_anchor_rects = Table(
     metadata,
     Column("anchor_id", String(36), primary_key=True),
     Column("order_index", Integer, primary_key=True),
+    Column("paper_id", String(36), nullable=False),
     Column("x0", Float, nullable=False),
     Column("y0", Float, nullable=False),
     Column("x1", Float, nullable=False),
@@ -224,6 +225,10 @@ text_anchor_rects = Table(
     ForeignKeyConstraint(
         ["anchor_id"],
         ["text_anchors.id"],
+    ),
+    ForeignKeyConstraint(
+        ["paper_id"],
+        ["papers.id"],
     ),
     CheckConstraint(
         "0 <= x0 AND x0 <= x1 AND x1 <= 1 AND 0 <= y0 AND y0 <= y1 AND y1 <= 1",

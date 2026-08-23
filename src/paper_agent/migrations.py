@@ -252,6 +252,20 @@ def _apply_annotation_request_ids(connection: Connection) -> None:
         )
 
 
+def _apply_text_anchor_rect_paper_id(connection: Connection) -> None:
+    """Frozen migration 5 schema for paper-scoped deletion of anchor rects."""
+    columns = {
+        row[1]
+        for row in connection.exec_driver_sql(
+            "PRAGMA table_info(text_anchor_rects)"
+        )
+    }
+    if columns and "paper_id" not in columns:
+        connection.exec_driver_sql(
+            "ALTER TABLE text_anchor_rects ADD COLUMN paper_id VARCHAR(36)"
+        )
+
+
 MIGRATIONS = (
     Migration(
         version=1,
@@ -272,5 +286,10 @@ MIGRATIONS = (
         version=4,
         name="add_annotation_request_ids",
         apply=_apply_annotation_request_ids,
+    ),
+    Migration(
+        version=5,
+        name="add_text_anchor_rect_paper_id",
+        apply=_apply_text_anchor_rect_paper_id,
     ),
 )

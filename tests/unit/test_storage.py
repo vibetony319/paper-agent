@@ -7,12 +7,25 @@ from sqlalchemy import event, insert, select
 from sqlalchemy.exc import IntegrityError
 
 from paper_agent.database import (
+    conversation_message_anchors,
     conversation_message_citations,
+    conversation_message_note_citations,
     conversation_messages,
+    conversations,
     document_elements,
+    graph_edge_evidence,
     graph_nodes,
+    highlights,
+    model_profiles,
+    note_anchors,
     notes,
+    pages,
+    papers,
+    processing_runs,
+    selection_assist_requests,
     sections,
+    text_anchor_rects,
+    text_anchors,
 )
 from paper_agent.domain import (
     AgentMessageRole,
@@ -26,6 +39,7 @@ from paper_agent.domain import (
     GraphStage,
     Note,
     Page,
+    Paper,
     PaperGraph,
     ProcessingStatus,
     Section,
@@ -1512,3 +1526,223 @@ def test_repository_reads_graph_nodes_neighbors_subgraphs_and_directed_paths(rep
         ("node-a", "node-b", "node-c"),
     )
     assert repository.find_graph_paths(paper.id, "node-c", "node-a", max_depth=2) == ()
+
+
+PAPER_OWNED_TABLES = (
+    "conversation_message_note_citations",
+    "conversation_message_anchors",
+    "conversation_message_citations",
+    "conversation_messages",
+    "conversations",
+    "selection_assist_requests",
+    "note_anchors",
+    "notes",
+    "highlights",
+    "text_anchor_rects",
+    "text_anchors",
+    "graph_edge_evidence",
+    "graph_node_evidence",
+    "graph_edges",
+    "graph_nodes",
+    "document_elements",
+    "sections",
+    "pages",
+    "processing_runs",
+)
+
+
+def _fully_populated_paper(repository: PaperRepository) -> Paper:
+    paper = repository.create_paper(
+        original_filename="full.pdf", stored_filename="full.pdf"
+    )
+    repository.save_page(paper.id, Page(number=1, width=200, height=300))
+    section = repository.save_section(
+        paper.id, Section(title="Method", order=0, page_number=1)
+    )
+    element = repository.save_element(
+        paper.id,
+        DocumentElement.paragraph(
+            "router text",
+            page_number=1,
+            bbox=BoundingBox(0, 0, 1, 0.1),
+            section_id=section.id,
+        ),
+    )
+    note = repository.create_note(paper.id, Note(body="note body", page_number=1))
+    conversation = repository.create_conversation(
+        Conversation(paper_id=paper.id, mode=AgentMode.paper_only)
+    )
+    user = repository.append_conversation_message(
+        ConversationMessage(
+            conversation_id=conversation.id,
+            paper_id=paper.id,
+            role=AgentMessageRole.user,
+            content="question",
+            request_id="delete-request",
+        )
+    )
+    assistant = repository.append_conversation_message(
+        ConversationMessage(
+            conversation_id=conversation.id,
+            paper_id=paper.id,
+            role=AgentMessageRole.assistant,
+            content="answer",
+            citation_element_ids=(element.id,),
+            request_id="delete-request",
+        )
+    )
+    repository.replace_graph_stage(
+        paper.id,
+        GraphStage.core,
+        (
+            GraphNode(
+                id="node-1",
+                node_type="method",
+                name="Router",
+                summary="Routes tokens.",
+                stage=GraphStage.core,
+                evidence_element_ids=(element.id,),
+            ),
+        ),
+        (),
+    )
+    repository.record_processing_status(
+        paper.id, ProcessingStatus.completed, stage="stage1"
+    )
+    with repository.engine.begin() as connection:
+        connection.execute(
+            insert(model_profiles).values(
+                [
+                    {
+                        "id": "profile-a",
+                        "display_name": "First",
+                        "base_url": "http://localhost:8000/v1",
+                        "model_name": "first",
+                        "enabled": True,
+                        "is_default": True,
+                        "revision": 1,
+                        "created_at": "2026-08-23T00:00:00+00:00",
+                        "updated_at": "2026-08-23T00:00:00+00:00",
+                    },
+                    {
+                        "id": "profile-b",
+                        "display_name": "Second",
+                        "base_url": "http://localhost:8000/v1",
+                        "model_name": "second",
+                        "enabled": True,
+                        "is_default": False,
+                        "revision": 1,
+                        "created_at": "2026-08-23T00:00:00+00:00",
+                        "updated_at": "2026-08-23T00:00:00+00:00",
+                    },
+                ]
+            )
+        )
+        connection.execute(
+            insert(text_anchors).values(
+                id="anchor-1",
+                paper_id=paper.id,
+                quote="router text",
+                quote_hash="hash-1",
+                element_id=element.id,
+                page_number=1,
+                created_at="2026-08-23T00:00:00+00:00",
+            )
+        )
+        connection.execute(
+            insert(text_anchor_rects).values(
+                anchor_id="anchor-1",
+                order_index=0,
+                paper_id=paper.id,
+                x0=0,
+                y0=0,
+                x1=1,
+                y1=0.1,
+            )
+        )
+        connection.execute(
+            insert(highlights).values(
+                id="highlight-1",
+                paper_id=paper.id,
+                anchor_id="anchor-1",
+                color="yellow",
+                created_at="2026-08-23T00:00:00+00:00",
+            )
+        )
+        connection.execute(
+            insert(note_anchors).values(
+                note_id=note.id,
+                paper_id=paper.id,
+                anchor_id="anchor-1",
+            )
+        )
+        connection.execute(
+            insert(selection_assist_requests).values(
+                id="assist-1",
+                paper_id=paper.id,
+                request_id="assist-request",
+                action="explain",
+                status="running",
+                created_at="2026-08-23T00:00:00+00:00",
+            )
+        )
+        connection.execute(
+            insert(conversation_message_anchors).values(
+                paper_id=paper.id, message_id=user.id, anchor_id="anchor-1"
+            )
+        )
+        connection.execute(
+            insert(conversation_message_note_citations).values(
+                paper_id=paper.id,
+                message_id=assistant.id,
+                note_id=note.id,
+                ordinal=0,
+            )
+        )
+    return paper
+
+
+def test_delete_paper_data_removes_every_paper_owned_row(repository):
+    """Breaks if paper deletion leaves any owned row or touches model profiles."""
+    paper = _fully_populated_paper(repository)
+
+    deleted = repository.delete_paper_data(paper.id)
+
+    assert deleted is True
+    with repository.engine.connect() as connection:
+        for table_name in PAPER_OWNED_TABLES:
+            count = connection.exec_driver_sql(
+                f"SELECT COUNT(*) FROM {table_name} WHERE paper_id = ?",
+                (paper.id,),
+            ).scalar_one()
+            assert count == 0, table_name
+        assert connection.exec_driver_sql(
+            "SELECT COUNT(*) FROM model_profiles"
+        ).scalar_one() == 2
+
+
+def test_delete_rolls_back_all_rows_when_a_middle_delete_fails(
+    repository, monkeypatch
+):
+    """Breaks if a failed delete commits partial row removal."""
+    paper = _fully_populated_paper(repository)
+    original = repository._delete_rows
+    calls = 0
+
+    def fail_in_middle(connection, table, paper_id):
+        nonlocal calls
+        calls += 1
+        if calls == 5:
+            raise RuntimeError("synthetic delete failure")
+        return original(connection, table, paper_id)
+
+    monkeypatch.setattr(repository, "_delete_rows", fail_in_middle)
+
+    with pytest.raises(RuntimeError, match="synthetic delete failure"):
+        repository.delete_paper_data(paper.id)
+
+    assert repository.get_paper(paper.id) is not None
+    with repository.engine.connect() as connection:
+        assert connection.exec_driver_sql(
+            "SELECT COUNT(*) FROM notes WHERE paper_id = ?", (paper.id,)
+        ).scalar_one() == 1

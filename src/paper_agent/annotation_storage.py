@@ -412,6 +412,7 @@ class PaperAnnotationRepository:
                 {
                     "anchor_id": anchor_id,
                     "order_index": rect.order,
+                    "paper_id": paper_id,
                     "x0": rect.x0,
                     "y0": rect.y0,
                     "x1": rect.x1,
