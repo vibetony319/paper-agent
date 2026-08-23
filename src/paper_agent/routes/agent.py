@@ -29,6 +29,7 @@ from paper_agent.services.model_profiles import (
     ModelProfileNotFoundError,
     ModelProfileService,
 )
+from paper_agent.services.paper_operations import PaperDeletingError
 from paper_agent.services.annotations import draft_from_request
 from paper_agent.services.reasoning_clients import (
     ReasoningClientProvider,
@@ -188,6 +189,34 @@ def ask_paper_agent(
         )
     except ValueError as error:
         raise HTTPException(status_code=422, detail="Selected text is invalid.") from error
+    try:
+        with request.app.state.paper_operation_coordinator.operation(
+            paper_id_text
+        ):
+            return _run_agent_request(
+                repository,
+                runtime,
+                request,
+                paper_id_text,
+                payload,
+                selection,
+                request_id,
+            )
+    except PaperDeletingError:
+        raise HTTPException(
+            status_code=409, detail="Paper deletion is active."
+        ) from None
+
+
+def _run_agent_request(
+    repository: PaperRepository,
+    runtime: PaperAgentRuntime,
+    request: Request,
+    paper_id_text: str,
+    payload: AgentMessageRequest,
+    selection,
+    request_id: str,
+) -> AgentMessageResponse:
     existing = repository.get_agent_turn_by_request(paper_id_text, request_id)
     if existing is not None:
         return _agent_message_response(

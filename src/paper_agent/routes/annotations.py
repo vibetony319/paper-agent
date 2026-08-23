@@ -22,6 +22,7 @@ from paper_agent.schemas import (
     SelectionAssistRequest,
 )
 from paper_agent.services.model_profiles import ModelProfileNotFoundError
+from paper_agent.services.paper_operations import PaperDeletingError
 from paper_agent.services.reasoning_clients import (
     ReasoningClientProvider,
     ResolvedReasoningClients,
@@ -95,6 +96,10 @@ def _safe_errors(action: Callable[[], _Result]) -> _Result:
         )
     except (AnnotationInputError, ValueError):
         raise AnnotationHttpError(422, "validation_error", "批注请求无效。")
+    except PaperDeletingError:
+        raise AnnotationHttpError(
+            409, "paper_busy", "论文正在删除，请稍后重试。"
+        )
     except Exception:
         raise AnnotationHttpError(500, "annotation_error", "批注操作失败。")
 
@@ -128,12 +133,13 @@ def create_highlight(
     paper_id: str, payload: HighlightCreateRequest, request: Request
 ) -> HighlightResponse:
     def create() -> HighlightResponse:
-        highlight = _service(request).create_highlight(
-            paper_id,
-            draft_from_request(payload),
-            color=payload.color,
-            request_id=str(payload.request_id),
-        )
+        with request.app.state.paper_operation_coordinator.operation(paper_id):
+            highlight = _service(request).create_highlight(
+                paper_id,
+                draft_from_request(payload),
+                color=payload.color,
+                request_id=str(payload.request_id),
+            )
         return HighlightResponse.from_highlight(highlight)
 
     return _safe_errors(create)
@@ -147,9 +153,10 @@ def delete_highlight(
     paper_id: str, highlight_id: str, request: Request
 ) -> Response:
     def remove() -> None:
-        deleted = _service(request).delete_highlight(paper_id, highlight_id)
-        if not deleted:
-            raise AnnotationNotFoundError("highlight was not found")
+        with request.app.state.paper_operation_coordinator.operation(paper_id):
+            deleted = _service(request).delete_highlight(paper_id, highlight_id)
+            if not deleted:
+                raise AnnotationNotFoundError("highlight was not found")
 
     _safe_errors(remove)
     return Response(status_code=204)
@@ -162,18 +169,19 @@ def create_note(
     paper_id: str, payload: NoteRequest, request: Request
 ) -> NoteResponse:
     def create() -> NoteResponse:
-        note = _service(request).create_note(
-            paper_id,
-            body=payload.body,
-            element_id=payload.element_id,
-            page_number=payload.page_number,
-            anchor_draft=(
-                None if payload.anchor is None else draft_from_request(payload.anchor)
-            ),
-            request_id=(
-                None if payload.request_id is None else str(payload.request_id)
-            ),
-        )
+        with request.app.state.paper_operation_coordinator.operation(paper_id):
+            note = _service(request).create_note(
+                paper_id,
+                body=payload.body,
+                element_id=payload.element_id,
+                page_number=payload.page_number,
+                anchor_draft=(
+                    None if payload.anchor is None else draft_from_request(payload.anchor)
+                ),
+                request_id=(
+                    None if payload.request_id is None else str(payload.request_id)
+                ),
+            )
         return NoteResponse.from_note(note)
 
     return _safe_errors(create)
@@ -187,12 +195,13 @@ def update_note(
     request: Request,
 ) -> NoteResponse:
     def update() -> NoteResponse:
-        note = _service(request).update_note(
-            paper_id,
-            str(note_id),
-            body=payload.body,
-            expected_updated_at=payload.expected_updated_at,
-        )
+        with request.app.state.paper_operation_coordinator.operation(paper_id):
+            note = _service(request).update_note(
+                paper_id,
+                str(note_id),
+                body=payload.body,
+                expected_updated_at=payload.expected_updated_at,
+            )
         return NoteResponse.from_note(note)
 
     return _safe_errors(update)
@@ -201,9 +210,10 @@ def update_note(
 @router.delete("/{paper_id}/notes/{note_id}", status_code=204)
 def delete_note(paper_id: str, note_id: UUID, request: Request) -> Response:
     def remove() -> None:
-        deleted = _service(request).delete_note(paper_id, str(note_id))
-        if not deleted:
-            raise AnnotationNotFoundError("note was not found")
+        with request.app.state.paper_operation_coordinator.operation(paper_id):
+            deleted = _service(request).delete_note(paper_id, str(note_id))
+            if not deleted:
+                raise AnnotationNotFoundError("note was not found")
 
     _safe_errors(remove)
     return Response(status_code=204)
@@ -240,16 +250,24 @@ def create_selection_assist(
 
     def event_stream():
         try:
-            with _model_profile_service(request).usage_lease(profile_id):
-                for event in assist_service.stream(
-                    paper_id=paper_id,
-                    draft=draft,
-                    action=action,
-                    client=resolved.chat,
-                    model_snapshot=resolved.snapshot,
-                    request_id=request_id,
-                ):
-                    yield encode_sse(event)
+            with request.app.state.paper_operation_coordinator.operation(paper_id):
+                with _model_profile_service(request).usage_lease(profile_id):
+                    for event in assist_service.stream(
+                        paper_id=paper_id,
+                        draft=draft,
+                        action=action,
+                        client=resolved.chat,
+                        model_snapshot=resolved.snapshot,
+                        request_id=request_id,
+                    ):
+                        yield encode_sse(event)
+        except PaperDeletingError:
+            yield encode_sse(
+                SelectionAssistEvent(
+                    "error",
+                    {"code": "paper_busy", "detail": "论文正在删除。"},
+                )
+            )
         except ModelProfileNotFoundError:
             yield encode_sse(
                 SelectionAssistEvent(

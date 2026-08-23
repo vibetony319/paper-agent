@@ -18,6 +18,7 @@ from paper_agent.routes import (
 )
 from paper_agent.routes.annotations import AnnotationHttpError
 from paper_agent.routes.model_profiles import ModelProfileHttpError
+from paper_agent.routes.papers import PaperDeletionHttpError
 from paper_agent.services.agent_runtime import PaperAgentRuntime
 from paper_agent.services.agent_tools import PaperToolRegistry
 from paper_agent.services.annotations import AnnotationService
@@ -27,6 +28,8 @@ from paper_agent.services.ingestion import PaperIngestionService
 from paper_agent.services.model_profiles import ModelProfileService
 from paper_agent.services.model_secrets import ModelSecretStore
 from paper_agent.services.note_memory import NoteMemoryService
+from paper_agent.services.paper_deletion import PaperDeletionService
+from paper_agent.services.paper_operations import PaperOperationCoordinator
 from paper_agent.services.reasoning_clients import ReasoningClientProvider
 from paper_agent.services.selection_assists import SelectionAssistService
 from paper_agent.storage import PaperRepository
@@ -65,6 +68,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.paper_repository = repository
     app.state.annotation_repository = PaperAnnotationRepository(
         engine=repository.engine
+    )
+    app.state.paper_operation_coordinator = PaperOperationCoordinator()
+    app.state.paper_deletion_service = PaperDeletionService(
+        repository,
+        papers_dir=app.state.settings.papers_dir,
+        trash_dir=app.state.settings.trash_dir,
     )
     app.state.annotation_service = AnnotationService(
         app.state.annotation_repository
@@ -107,6 +116,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             content={"code": error.code, "detail": error.detail},
         )
 
+    @app.exception_handler(PaperDeletionHttpError)
+    async def paper_deletion_http_error(
+        _request: Request, error: PaperDeletionHttpError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=error.status_code,
+            content={"code": error.code, "detail": error.detail},
+        )
+
     @app.exception_handler(RequestValidationError)
     async def safe_request_validation_error(
         request: Request, error: RequestValidationError
@@ -120,6 +138,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 },
             )
         return await request_validation_exception_handler(request, error)
+
+    app.state.paper_deletion_service.recover_pending()
 
     app.include_router(health_router)
     app.include_router(papers_router)

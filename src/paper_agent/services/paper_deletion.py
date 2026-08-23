@@ -122,25 +122,28 @@ class PaperDeletionService:
         cleaned: list[str] = []
         damaged: list[str] = []
         for marker_path in sorted(self.trash_dir.glob(f"*{_MARKER_SUFFIX}")):
-            journal = self._read_marker(marker_path)
-            if journal is None:
+            try:
+                journal = self._read_marker(marker_path)
+                if journal is None:
+                    damaged.append(marker_path.name)
+                    continue
+                if not self._journal_names_are_safe(journal):
+                    damaged.append(marker_path.name)
+                    continue
+                paper_exists = self.repository.get_paper(journal.paper_id) is not None
+                trash_path = self.trash_dir / journal.trash_name
+                source_path = self.papers_dir / journal.original_name
+                if paper_exists:
+                    if trash_path.exists():
+                        self._replace_with_retries(trash_path, source_path)
+                    marker_path.unlink(missing_ok=True)
+                    restored.append(journal.paper_id)
+                else:
+                    trash_path.unlink(missing_ok=True)
+                    marker_path.unlink(missing_ok=True)
+                    cleaned.append(journal.paper_id)
+            except Exception:
                 damaged.append(marker_path.name)
-                continue
-            if not self._journal_names_are_safe(journal):
-                damaged.append(marker_path.name)
-                continue
-            paper_exists = self.repository.get_paper(journal.paper_id) is not None
-            trash_path = self.trash_dir / journal.trash_name
-            source_path = self.papers_dir / journal.original_name
-            if paper_exists:
-                if trash_path.exists():
-                    self._replace_with_retries(trash_path, source_path)
-                marker_path.unlink(missing_ok=True)
-                restored.append(journal.paper_id)
-            else:
-                trash_path.unlink(missing_ok=True)
-                marker_path.unlink(missing_ok=True)
-                cleaned.append(journal.paper_id)
         return DeletionRecoveryReport(
             restored=tuple(restored),
             cleaned=tuple(cleaned),

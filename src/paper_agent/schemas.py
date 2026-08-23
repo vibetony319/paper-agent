@@ -148,6 +148,12 @@ class PaperSummaryResponse(BaseModel):
         )
 
 
+class PaperDeleteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirmation: UUID
+
+
 class GraphNodeResponse(BaseModel):
     id: str
     node_type: str

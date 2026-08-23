@@ -14,6 +14,7 @@ from paper_agent.services.graph_construction import (
     GraphConstructionService,
 )
 from paper_agent.services.model_profiles import ModelProfileNotFoundError
+from paper_agent.services.paper_operations import PaperDeletingError
 from paper_agent.services.reasoning_clients import (
     ReasoningClientProvider,
     ResolvedReasoningClients,
@@ -80,6 +81,24 @@ def _build_graph(
     paper_id: str, request: Request, stage: GraphStage, payload: GraphBuildRequest
 ) -> PaperGraphResponse:
     repository = _require_paper(request, paper_id)
+    try:
+        with request.app.state.paper_operation_coordinator.operation(paper_id):
+            return _run_graph_build(
+                paper_id, request, stage, payload, repository
+            )
+    except PaperDeletingError:
+        raise HTTPException(
+            status_code=409, detail="Paper deletion is active."
+        ) from None
+
+
+def _run_graph_build(
+    paper_id: str,
+    request: Request,
+    stage: GraphStage,
+    payload: GraphBuildRequest,
+    repository: PaperRepository,
+) -> PaperGraphResponse:
     service = _construction_service(request)
     request_id = str(payload.request_id)
     profile_id = str(payload.model_profile_id)
