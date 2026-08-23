@@ -1,5 +1,7 @@
 # paper-agent
 
+> 中文开发入口：[文档导航](docs/README.md) · [当前开发交接](docs/developer-handoff.md) · [贡献与开发指南](CONTRIBUTING.md)
+
 A local-first workspace for reading AI/ML papers. A local FastAPI service can
 accept a PDF, parse and persist its document data, serve the original source
 PDF and page images, store paper-scoped notes, and build an evidence-backed

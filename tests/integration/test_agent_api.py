@@ -1,22 +1,34 @@
 from copy import deepcopy
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+import json
 from pathlib import Path
+from threading import Event
 from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import event, func, select
+from sqlalchemy import delete, event, func, select
 
-from paper_agent.database import conversation_messages, conversations
+from paper_agent.database import (
+    conversation_message_citations,
+    conversation_messages,
+    conversations,
+    document_elements,
+    model_profiles as model_profile_rows,
+)
 from paper_agent.domain import (
     AgentMessageRole,
     AgentMode,
+    BoundingBox,
     Conversation,
     ConversationMessage,
+    DocumentElement,
 )
 from paper_agent.models import VllmToolCall, VllmToolCallingError, VllmToolTurn
-from paper_agent.model_profiles import ModelCapabilities, ModelProfile
+from paper_agent.model_profiles import ModelCapabilities, ModelProfile, ModelProfileChanges
 from paper_agent.services.agent_runtime import PaperAgentRuntime
+from paper_agent.services.model_profiles import ModelProfileService
 from paper_agent.services.reasoning_clients import ReasoningClientResolutionError
 
 
@@ -122,6 +134,53 @@ class FakeDefaultModelService:
 
     def resolve_default_clients(self) -> FakeResolvedClients | None:
         return self.resolved
+
+    def usage_lease(self, _profile_id: str):
+        from contextlib import nullcontext
+
+        return nullcontext()
+
+
+class BlockingReasoningProvider(FakeReasoningProvider):
+    def __init__(self, resolved: dict[str, FakeResolvedClients]) -> None:
+        super().__init__(resolved)
+        self.resolve_entered = Event()
+        self.release_resolve = Event()
+
+    def resolve(self, profile_id: str) -> FakeResolvedClients:
+        self.resolve_calls.append(profile_id)
+        resolved = self.resolved[profile_id]
+        self.resolve_entered.set()
+        if not self.release_resolve.wait(timeout=5):
+            raise RuntimeError("test resolve timeout")
+        return resolved
+
+
+class RepositoryAwareReasoningProvider:
+    def __init__(self, repository, clients: dict[str, FakeAgentClient]) -> None:
+        self.repository = repository
+        self.clients = clients
+        self.resolve_calls: list[str] = []
+
+    def resolve(self, profile_id: str) -> FakeResolvedClients:
+        self.resolve_calls.append(profile_id)
+        profile = self.repository.get(profile_id)
+        if (
+            profile is None
+            or profile.deleted_at is not None
+            or not profile.enabled
+            or profile_id not in self.clients
+        ):
+            raise ReasoningClientResolutionError("unavailable test profile")
+        return FakeResolvedClients(
+            profile=profile,
+            snapshot=profile.snapshot(),
+            tools=self.clients[profile_id],
+        )
+
+    @staticmethod
+    def is_read_only_profile(_profile_id: str) -> bool:
+        return False
 
 
 def _agent_payload(
@@ -306,9 +365,7 @@ def test_agent_returns_locatable_same_paper_citations_without_paths(
         and "document_elements.location_status" in statement
         and "document_elements.id IN" in statement
     ]
-    assert len(citation_element_reads) == 1
-    _, parameters = citation_element_reads[0]
-    assert parameters.count(uploaded_paper.element_id) == 1
+    assert citation_element_reads == []
 
     history = client.get(
         f"/api/papers/{uploaded_paper.id}/agent/conversations/{body['conversation_id']}"
@@ -400,6 +457,211 @@ def test_complete_request_duplicate_replays_stored_citations_before_provider_res
     assert fake.final_requests == 1
 
 
+def test_complete_duplicate_replays_background_citation_order_and_original_geometry(
+    client: TestClient, uploaded_paper: UploadedPaper
+) -> None:
+    """Breaks if a complete replay reconstructs any response field from mutable rows."""
+    repository = client.app.state.paper_repository
+    second = repository.save_element(
+        uploaded_paper.id,
+        DocumentElement.paragraph(
+            "Second exact replay source",
+            page_number=1,
+            bbox=BoundingBox(0.11, 0.22, 0.77, 0.33),
+        ),
+    )
+    fake = FakeAgentClient(
+        turns=(
+            VllmToolTurn(
+                content=None,
+                tool_calls=(
+                    VllmToolCall(
+                        id="call-first",
+                        name="read_element",
+                        arguments={"element_id": uploaded_paper.element_id},
+                    ),
+                ),
+            ),
+            VllmToolTurn(
+                content=None,
+                tool_calls=(
+                    VllmToolCall(
+                        id="call-second",
+                        name="read_element",
+                        arguments={"element_id": second.id},
+                    ),
+                ),
+            ),
+            VllmToolTurn(content=None, tool_calls=()),
+        ),
+        final_payload={
+            "status": "grounded",
+            "paper_answer": "Ordered answer.",
+            "citation_element_ids": [second.id, uploaded_paper.element_id],
+            "background_explanation": "Stable external background.",
+        },
+    )
+    provider = _configure_fake_agent_runtime(client.app, fake)
+    request_id = "20000000-0000-0000-0000-000000000030"
+    payload = _agent_payload(
+        "Explain with context.",
+        mode="external_knowledge",
+        request_id=request_id,
+    )
+
+    first = client.post(
+        f"/api/papers/{uploaded_paper.id}/agent/messages", json=payload
+    )
+    assert first.status_code == 200
+    with repository.engine.begin() as connection:
+        connection.execute(
+            document_elements.update()
+            .where(document_elements.c.id == second.id)
+            .values(kind="changed", bbox_x0=0.0, bbox_y0=0.0, bbox_x1=0.1, bbox_y1=0.1)
+        )
+    provider.resolved.clear()
+
+    replay = client.post(
+        f"/api/papers/{uploaded_paper.id}/agent/messages",
+        json={**payload, "content": "Conflicting duplicate"},
+    )
+
+    assert replay.status_code == 200
+    assert replay.json() == first.json()
+    assert first.json()["background_explanation"] == "Stable external background."
+    assert [citation["id"] for citation in first.json()["citations"]] == [
+        second.id,
+        uploaded_paper.element_id,
+    ]
+    assert first.json()["citations"][0]["kind"] == second.kind
+    assert first.json()["citations"][0]["bbox"] == {
+        "x0": 0.11,
+        "y0": 0.22,
+        "x1": 0.77,
+        "y1": 0.33,
+    }
+    assert provider.resolve_calls == [DEFAULT_PROFILE_ID]
+    assert fake.final_requests == 1
+
+
+def test_complete_replay_falls_back_safely_for_legacy_or_corrupt_citation_snapshot(
+    client: TestClient, uploaded_paper: UploadedPaper
+) -> None:
+    """Breaks if nullable legacy data fails or corrupt snapshot JSON reaches the response."""
+    fake = _grounded_tool_flow(uploaded_paper)
+    provider = _configure_fake_agent_runtime(client.app, fake)
+    request_id = "20000000-0000-0000-0000-000000000032"
+    payload = _agent_payload("Legacy replay", request_id=request_id)
+    first = client.post(
+        f"/api/papers/{uploaded_paper.id}/agent/messages", json=payload
+    )
+    assert first.status_code == 200
+    provider.resolved.clear()
+    repository = client.app.state.paper_repository
+    with repository.engine.begin() as connection:
+        connection.execute(
+            conversation_message_citations.update()
+            .where(
+                conversation_message_citations.c.message_id
+                == first.json()["message_id"]
+            )
+            .values(ordinal=None, citation_snapshot_json=None)
+        )
+
+    legacy = client.post(
+        f"/api/papers/{uploaded_paper.id}/agent/messages", json=payload
+    )
+    assert legacy.status_code == 200
+    assert legacy.json() == first.json()
+
+    corrupt_payload = json.dumps(
+        {
+            "id": uploaded_paper.element_id,
+            "kind": first.json()["citations"][0]["kind"],
+            "page_number": first.json()["citations"][0]["page_number"],
+            "bbox": first.json()["citations"][0]["bbox"],
+            "api_key": "must-not-escape",
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    with repository.engine.begin() as connection:
+        connection.execute(
+            conversation_message_citations.update()
+            .where(
+                conversation_message_citations.c.message_id
+                == first.json()["message_id"]
+            )
+            .values(citation_snapshot_json=corrupt_payload)
+        )
+
+    corrupt = client.post(
+        f"/api/papers/{uploaded_paper.id}/agent/messages", json=payload
+    )
+    assert corrupt.status_code == 200
+    assert corrupt.json() == first.json()
+    assert "must-not-escape" not in corrupt.text
+    assert provider.resolve_calls == [DEFAULT_PROFILE_ID]
+
+
+def test_complete_replay_and_history_hide_valid_but_mismatched_pair_provenance(
+    client: TestClient, uploaded_paper: UploadedPaper
+) -> None:
+    """Breaks if a valid foreign snapshot creates false provenance on a stored pair."""
+    provider = _configure_fake_agent_runtime(client.app, FakeAgentClient())
+    request_id = "20000000-0000-0000-0000-000000000031"
+    first = client.post(
+        f"/api/papers/{uploaded_paper.id}/agent/messages",
+        json=_agent_payload("Question", request_id=request_id),
+    )
+    assert first.status_code == 200
+    conversation_id = first.json()["conversation_id"]
+    other_profile = _model_profile(
+        SECOND_PROFILE_ID,
+        display_name="Other",
+        model_name="other-model",
+    )
+    other_snapshot_json = json.dumps(
+        {
+            "profile_id": other_profile.id,
+            "display_name": other_profile.display_name,
+            "base_url": other_profile.base_url,
+            "model_name": other_profile.model_name,
+            "revision": other_profile.revision,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    with client.app.state.paper_repository.engine.begin() as connection:
+        connection.execute(
+            conversation_messages.update()
+            .where(conversation_messages.c.request_id == request_id)
+            .where(conversation_messages.c.role == AgentMessageRole.assistant.value)
+            .values(
+                model_profile_id=SECOND_PROFILE_ID,
+                model_snapshot_json=other_snapshot_json,
+            )
+        )
+    provider.resolved.clear()
+
+    replay = client.post(
+        f"/api/papers/{uploaded_paper.id}/agent/messages",
+        json=_agent_payload("Duplicate", request_id=request_id),
+    )
+    history = client.get(
+        f"/api/papers/{uploaded_paper.id}/agent/conversations/{conversation_id}"
+    )
+
+    assert replay.status_code == 200
+    assert replay.json()["model"] is None
+    assert history.status_code == 200
+    assert [message["model"] for message in history.json()["messages"]] == [
+        None,
+        None,
+    ]
+    assert provider.resolve_calls == [DEFAULT_PROFILE_ID]
+
+
 def test_agent_rejects_insufficient_capabilities_before_chat_write(
     client: TestClient, uploaded_paper: UploadedPaper
 ) -> None:
@@ -422,6 +684,63 @@ def test_agent_rejects_insufficient_capabilities_before_chat_write(
     assert _chat_row_counts(client.app.state.paper_repository) == before
     assert fake.tool_requests == 0
     assert fake.final_requests == 0
+
+
+def test_agent_profile_lease_blocks_delete_while_allowing_edit_after_snapshot(
+    client: TestClient, uploaded_paper: UploadedPaper
+) -> None:
+    """Breaks if request start can race deletion or monopolizes profile edits."""
+    profile = client.app.state.model_profile_repository.create(
+        _model_profile(DEFAULT_PROFILE_ID)
+    )
+    fake = FakeAgentClient()
+    resolved = FakeResolvedClients(
+        profile=profile,
+        snapshot=profile.snapshot(),
+        tools=fake,
+    )
+    provider = BlockingReasoningProvider({profile.id: resolved})
+    client.app.state.reasoning_client_provider = provider
+    client.app.state.model_profile_service = ModelProfileService(
+        client.app.state.model_profile_repository,
+        provider,
+        client.app.state.model_secret_store,
+    )
+    client.app.state.paper_agent_runtime = PaperAgentRuntime(
+        repository=client.app.state.paper_repository,
+        tools=client.app.state.paper_tool_registry,
+        guard=client.app.state.citation_guard,
+    )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        pending = executor.submit(
+            client.post,
+            f"/api/papers/{uploaded_paper.id}/agent/messages",
+            json=_agent_payload("Frozen request"),
+        )
+        assert provider.resolve_entered.wait(timeout=5)
+        blocked_delete = client.delete(
+            f"/api/model-profiles/{profile.id}",
+            headers={"If-Match": str(profile.revision)},
+        )
+        edited = client.patch(
+            f"/api/model-profiles/{profile.id}",
+            headers={"If-Match": str(profile.revision)},
+            json={"display_name": "Edited after snapshot"},
+        )
+        provider.release_resolve.set()
+        response = pending.result(timeout=5)
+
+    assert blocked_delete.status_code == 409
+    assert blocked_delete.json()["code"] == "profile_in_use"
+    assert edited.status_code == 200
+    assert response.status_code == 200
+    assert response.json()["model"]["display_name"] == profile.display_name
+    assert response.json()["model"]["revision"] == profile.revision
+    assert client.delete(
+        f"/api/model-profiles/{profile.id}",
+        headers={"If-Match": str(edited.json()["revision"])},
+    ).status_code == 204
 
 
 def test_agent_rejects_missing_disabled_and_deleted_profiles_before_chat_write(
@@ -511,6 +830,83 @@ def test_partial_retry_requires_the_original_unchanged_model_snapshot(
         uploaded_paper.id, request_id
     )
     assert user is not None
+
+
+@pytest.mark.parametrize(
+    "profile_state",
+    ("missing", "deleted", "disabled", "unresolvable"),
+)
+def test_partial_retry_maps_unusable_original_profile_to_stable_conflict(
+    client: TestClient,
+    uploaded_paper: UploadedPaper,
+    profile_state: str,
+) -> None:
+    """Breaks if durable partial recovery becomes a generic model 503 or adds a user."""
+    profile_repository = client.app.state.model_profile_repository
+    profile = profile_repository.create(_model_profile(DEFAULT_PROFILE_ID))
+    failing = FakeAgentClient(
+        turns=(VllmToolCallingError("first attempt failed"),)
+    )
+    provider = RepositoryAwareReasoningProvider(
+        profile_repository,
+        {profile.id: failing},
+    )
+    service = ModelProfileService(
+        profile_repository,
+        provider,
+        client.app.state.model_secret_store,
+    )
+    client.app.state.reasoning_client_provider = provider
+    client.app.state.model_profile_service = service
+    client.app.state.paper_agent_runtime = PaperAgentRuntime(
+        repository=client.app.state.paper_repository,
+        tools=client.app.state.paper_tool_registry,
+        guard=client.app.state.citation_guard,
+    )
+    request_id = str(uuid4())
+    payload = _agent_payload("Retry durable partial", request_id=request_id)
+    failed = client.post(
+        f"/api/papers/{uploaded_paper.id}/agent/messages", json=payload
+    )
+    assert failed.status_code == 502
+    original_user = client.app.state.paper_repository.get_agent_user_message_by_request(
+        uploaded_paper.id, request_id
+    )
+    assert original_user is not None
+
+    retry_client = FakeAgentClient()
+    provider.clients[profile.id] = retry_client
+    if profile_state == "missing":
+        with profile_repository.engine.begin() as connection:
+            connection.execute(
+                delete(model_profile_rows).where(model_profile_rows.c.id == profile.id)
+            )
+    elif profile_state == "deleted":
+        service.delete_profile(profile.id, expected_revision=profile.revision)
+    elif profile_state == "disabled":
+        service.update_profile(
+            profile.id,
+            expected_revision=profile.revision,
+            changes=ModelProfileChanges(enabled=False),
+        )
+    else:
+        provider.clients.clear()
+
+    retry = client.post(
+        f"/api/papers/{uploaded_paper.id}/agent/messages", json=payload
+    )
+
+    assert retry.status_code == 409
+    assert retry.json() == {
+        "detail": "Request state conflicts with its stored retry. Use a new request_id."
+    }
+    assert retry_client.tool_requests == 0
+    assert retry_client.final_requests == 0
+    stored_user = client.app.state.paper_repository.get_agent_user_message_by_request(
+        uploaded_paper.id, request_id
+    )
+    assert stored_user == original_user
+    assert _chat_row_counts(client.app.state.paper_repository)[1] == 1
 
 
 @pytest.mark.parametrize(
@@ -647,6 +1043,13 @@ def test_conversation_get_batches_unique_cited_elements_once(
     )
     for message in messages:
         repository.append_conversation_message(message)
+    with repository.engine.begin() as connection:
+        connection.execute(
+            conversation_message_citations.update().values(
+                ordinal=None,
+                citation_snapshot_json=None,
+            )
+        )
 
     statements: list[tuple[str, tuple[object, ...]]] = []
 

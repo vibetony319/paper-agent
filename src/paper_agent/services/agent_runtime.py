@@ -1,6 +1,8 @@
 """Bounded, citation-gated orchestration for durable paper conversations."""
 
-from dataclasses import dataclass
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 import json
 from threading import Lock
 
@@ -64,6 +66,12 @@ class AgentTurn:
     answer: CitationValidatedAnswer
 
 
+@dataclass
+class _RequestLockEntry:
+    lock: Lock = field(default_factory=Lock)
+    references: int = 0
+
+
 class PaperAgentRuntime:
     def __init__(
         self,
@@ -75,7 +83,7 @@ class PaperAgentRuntime:
         self.repository = repository
         self.tools = tools
         self.guard = guard
-        self._request_locks: dict[tuple[str, str], Lock] = {}
+        self._request_locks: dict[tuple[str, str], _RequestLockEntry] = {}
         self._request_locks_guard = Lock()
 
     def ask(
@@ -202,6 +210,7 @@ class PaperAgentRuntime:
                     model_profile_id=model_snapshot.profile_id,
                     model_snapshot=model_snapshot,
                     request_id=request_id,
+                    background_explanation=answer.background_explanation,
                 )
             )
             return AgentTurn(
@@ -228,7 +237,7 @@ class PaperAgentRuntime:
             status="grounded" if citations else "insufficient_evidence",
             paper_answer=assistant_message.content,
             citation_element_ids=citations,
-            background_explanation=None,
+            background_explanation=assistant_message.background_explanation,
         )
         return AgentTurn(
             conversation=conversation,
@@ -271,10 +280,23 @@ class PaperAgentRuntime:
                 raise AgentRuntimePrerequisiteError(_PREREQUISITE_ERROR)
         return conversation
 
-    def _request_lock(self, paper_id: str, request_id: str) -> Lock:
+    @contextmanager
+    def _request_lock(self, paper_id: str, request_id: str) -> Iterator[None]:
         key = (paper_id, request_id)
         with self._request_locks_guard:
-            return self._request_locks.setdefault(key, Lock())
+            entry = self._request_locks.setdefault(key, _RequestLockEntry())
+            entry.references += 1
+        try:
+            with entry.lock:
+                yield
+        finally:
+            with self._request_locks_guard:
+                entry.references -= 1
+                if (
+                    entry.references == 0
+                    and self._request_locks.get(key) is entry
+                ):
+                    del self._request_locks[key]
 
     @staticmethod
     def _require_matching_partial_retry(

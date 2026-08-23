@@ -531,6 +531,29 @@ def test_runtime_serializes_concurrent_same_request_before_any_model_call(reposi
     assert len(client.tool_requests) == 1
     assert len(client.final_requests) == 1
     assert repository.get_agent_turn_by_request(paper.id, request_id) is not None
+    assert runtime._request_locks == {}
+
+
+def test_runtime_releases_request_lock_entries_after_many_unique_failures(repository):
+    """Breaks if arbitrary client request IDs permanently grow the process lock registry."""
+    paper = _paper_with_stage1_document(repository)
+    runtime = _runtime_core(repository)
+
+    for index in range(40):
+        with pytest.raises(AgentRuntimeResponseError):
+            runtime.ask(
+                paper_id=paper.id,
+                question=AgentQuestion(
+                    content=f"Failure {index}", mode=AgentMode.paper_only
+                ),
+                client=FakeAgentClient(
+                    turns=(VllmToolCallingError("expected failure"),)
+                ),
+                model_snapshot=_model_snapshot(),
+                request_id=str(uuid4()),
+            )
+
+    assert runtime._request_locks == {}
 
 
 def test_runtime_retries_after_unexpected_guard_failure_without_leaking_or_duplication(
@@ -777,9 +800,10 @@ def test_external_mode_prompt_and_result_keep_background_separate(repository):
     assert "separate" in system_prompt
     assert turn.answer.background_explanation == "General routing background."
     assert turn.assistant_message.content == "The paper uses a router."
-    assert "General routing background" not in repr(
-        repository.get_conversation_messages(paper.id, turn.conversation.id)
-    )
+    durable = repository.get_conversation_messages(paper.id, turn.conversation.id)
+    assert durable[-1].content == "The paper uses a router."
+    assert durable[-1].background_explanation == "General routing background."
+    assert "General routing background" not in durable[-1].content
 
 
 def test_runtime_does_not_authorize_citations_from_earlier_conversation_turns(repository):

@@ -3,6 +3,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Request
 
 from paper_agent.domain import AgentMessageRole, ConversationMessage, DocumentElement
+from paper_agent.model_profiles import ModelSnapshot
 from paper_agent.schemas import (
     AgentHealthResponse,
     AgentMessageRequest,
@@ -21,7 +22,10 @@ from paper_agent.services.agent_runtime import (
     AgentTurn,
     PaperAgentRuntime,
 )
-from paper_agent.services.model_profiles import ModelProfileService
+from paper_agent.services.model_profiles import (
+    ModelProfileNotFoundError,
+    ModelProfileService,
+)
 from paper_agent.services.reasoning_clients import (
     ReasoningClientProvider,
     ResolvedReasoningClients,
@@ -74,15 +78,22 @@ def _request_conflict() -> HTTPException:
 
 
 def _resolve_agent_model(
-    provider: ReasoningClientProvider, profile_id: str
+    provider: ReasoningClientProvider,
+    profile_id: str,
+    *,
+    expected_snapshot: ModelSnapshot | None = None,
 ) -> ResolvedReasoningClients:
     try:
         resolved = provider.resolve(profile_id)
     except Exception:
+        if expected_snapshot is not None:
+            raise _request_conflict() from None
         raise HTTPException(
             status_code=503,
             detail="Reasoning model is not configured.",
         ) from None
+    if expected_snapshot is not None and resolved.snapshot != expected_snapshot:
+        raise _request_conflict()
     capabilities = resolved.profile.capabilities
     if not provider.is_read_only_profile(resolved.profile.id) and not (
         capabilities.structured_output and capabilities.tool_calling
@@ -95,13 +106,22 @@ def _resolve_agent_model(
 
 
 def _citations(
-    elements: dict[str, DocumentElement], citation_element_ids: tuple[str, ...]
+    elements: dict[str, DocumentElement], message: ConversationMessage
 ) -> list[CitationResponse]:
     try:
-        return [
-            CitationResponse.from_element(elements[element_id])
-            for element_id in citation_element_ids
-        ]
+        citations: list[CitationResponse] = []
+        for ordinal, element_id in enumerate(message.citation_element_ids):
+            snapshot = (
+                message.citation_snapshots[ordinal]
+                if ordinal < len(message.citation_snapshots)
+                else None
+            )
+            citations.append(
+                CitationResponse.from_snapshot(snapshot)
+                if snapshot is not None
+                else CitationResponse.from_element(elements[element_id])
+            )
+        return citations
     except (KeyError, ValueError) as error:
         raise HTTPException(
             status_code=502,
@@ -119,7 +139,9 @@ def _citation_elements(
             element_id
             for message in messages
             if message.role is AgentMessageRole.assistant
-            for element_id in message.citation_element_ids
+            for ordinal, element_id in enumerate(message.citation_element_ids)
+            if ordinal >= len(message.citation_snapshots)
+            or message.citation_snapshots[ordinal] is None
         )
     )
     if not citation_element_ids:
@@ -186,25 +208,37 @@ def ask_paper_agent(
             raise _request_conflict()
         profile_id = partial_user.model_profile_id
 
-    resolved = _resolve_agent_model(_provider(request), profile_id)
-    if partial_user is not None and partial_user.model_snapshot != resolved.snapshot:
-        raise _request_conflict()
     try:
-        turn = runtime.ask(
-            paper_id=paper_id_text,
-            question=AgentQuestion(
-                content=payload.content,
-                mode=payload.mode,
-                conversation_id=(
-                    None
-                    if payload.conversation_id is None
-                    else str(payload.conversation_id)
+        with _model_profile_service(request).usage_lease(profile_id):
+            resolved = _resolve_agent_model(
+                _provider(request),
+                profile_id,
+                expected_snapshot=(
+                    None if partial_user is None else partial_user.model_snapshot
                 ),
-            ),
-            client=resolved.tools,
-            model_snapshot=resolved.snapshot,
-            request_id=request_id,
-        )
+            )
+            turn = runtime.ask(
+                paper_id=paper_id_text,
+                question=AgentQuestion(
+                    content=payload.content,
+                    mode=payload.mode,
+                    conversation_id=(
+                        None
+                        if payload.conversation_id is None
+                        else str(payload.conversation_id)
+                    ),
+                ),
+                client=resolved.tools,
+                model_snapshot=resolved.snapshot,
+                request_id=request_id,
+            )
+    except ModelProfileNotFoundError:
+        if partial_user is not None:
+            raise _request_conflict() from None
+        raise HTTPException(
+            status_code=503,
+            detail="Reasoning model is not configured.",
+        ) from None
     except AgentRuntimePrerequisiteError:
         raise HTTPException(
             status_code=409, detail="Paper agent prerequisites are not complete."
@@ -239,7 +273,7 @@ def _agent_message_response(
         background_explanation=turn.answer.background_explanation,
         citations=_citations(
             citation_elements,
-            turn.assistant_message.citation_element_ids,
+            turn.assistant_message,
         ),
         model=(
             None
@@ -273,7 +307,7 @@ def get_conversation(
                 message,
                 []
                 if message.role is AgentMessageRole.user
-                else _citations(citation_elements, message.citation_element_ids),
+                else _citations(citation_elements, message),
             )
             for message in messages
         ],

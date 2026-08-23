@@ -155,6 +155,14 @@ class BoundingBox:
         )
 
 
+@dataclass(frozen=True)
+class CitationSnapshot:
+    id: str
+    kind: str
+    page_number: int
+    bbox: BoundingBox
+
+
 LocationStatus = Literal["located", "unlocated"]
 
 
@@ -181,9 +189,11 @@ class ConversationMessage:
     role: AgentMessageRole
     content: str
     citation_element_ids: tuple[str, ...] = ()
+    citation_snapshots: tuple[CitationSnapshot | None, ...] = ()
     model_profile_id: str | None = None
     model_snapshot: ModelSnapshot | None = None
     request_id: str | None = None
+    background_explanation: str | None = None
     sequence: int | None = None
     id: str = field(default_factory=lambda: str(uuid4()))
 

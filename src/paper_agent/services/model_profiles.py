@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from threading import RLock
@@ -45,6 +47,10 @@ class ModelProfileInputError(ValueError):
     pass
 
 
+class ModelProfileInUseError(RuntimeError):
+    pass
+
+
 @dataclass(frozen=True)
 class ModelProfileView:
     profile: ModelProfile
@@ -64,6 +70,27 @@ class ModelProfileService:
         self.provider = provider
         self.secrets = secrets
         self._mutation_lock = RLock()
+        self._in_use: dict[str, int] = {}
+
+    @contextmanager
+    def usage_lease(self, profile_id: str) -> Iterator[None]:
+        if self.provider.is_read_only_profile(profile_id):
+            yield
+            return
+        with self._mutation_lock:
+            profile = self.repository.get(profile_id)
+            if profile is None or profile.deleted_at is not None:
+                raise ModelProfileNotFoundError()
+            self._in_use[profile_id] = self._in_use.get(profile_id, 0) + 1
+        try:
+            yield
+        finally:
+            with self._mutation_lock:
+                remaining = self._in_use[profile_id] - 1
+                if remaining:
+                    self._in_use[profile_id] = remaining
+                else:
+                    del self._in_use[profile_id]
 
     def list_profiles(self) -> tuple[ModelProfileView, ...]:
         profiles = self.repository.list_active()
@@ -165,6 +192,7 @@ class ModelProfileService:
                     profile_id,
                     expected_revision=expected_revision,
                     changes=effective_changes,
+                    secret_state_changed=secret_changed,
                 )
             except Exception:
                 if secret_changed:
@@ -175,6 +203,8 @@ class ModelProfileService:
     def delete_profile(self, profile_id: str, *, expected_revision: int) -> None:
         self._require_mutable(profile_id)
         with self._mutation_lock:
+            if self._in_use.get(profile_id, 0):
+                raise ModelProfileInUseError()
             current = self._require_current(profile_id, expected_revision)
             replacement_profile_id = None
             if current.is_default:

@@ -98,10 +98,32 @@ def _add_nullable_columns(
             )
 
 
+def _apply_agent_response_snapshots(connection: Connection) -> None:
+    """Frozen migration 2 schema for exact durable Agent response replay."""
+    _add_nullable_columns(
+        connection,
+        "conversation_messages",
+        {"background_explanation": "VARCHAR"},
+    )
+    _add_nullable_columns(
+        connection,
+        "conversation_message_citations",
+        {
+            "ordinal": "INTEGER",
+            "citation_snapshot_json": "VARCHAR",
+        },
+    )
+
+
 MIGRATIONS = (
     Migration(
         version=1,
         name="add_model_profiles_and_provenance_columns",
         apply=_apply_model_profiles_and_provenance_columns,
+    ),
+    Migration(
+        version=2,
+        name="add_agent_response_snapshots",
+        apply=_apply_agent_response_snapshots,
     ),
 )

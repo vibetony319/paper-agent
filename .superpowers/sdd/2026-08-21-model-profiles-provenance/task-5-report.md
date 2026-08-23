@@ -2,7 +2,7 @@
 
 ## Status
 
-Implemented and verified. Agent requests now require a model profile and request ID, resolve a request-scoped vLLM tools client, persist a secret-free immutable model snapshot on both durable messages, and replay complete duplicate requests without provider/model invocation.
+The initial implementation was committed at `c109425`. Its independent review found five Important issues, and fix round 1 closed all five. The fix round received a fresh independent re-review on 2026-08-23 and was committed as `fix: harden agent model provenance replay`. Task 5 is complete.
 
 ## Implementation
 
@@ -61,6 +61,31 @@ Implemented and verified. Agent requests now require a model profile and request
 - Health/startup compatibility: no fixed Agent client; provider-resolved default/fallback health remains functional; Graph startup client behavior is unchanged.
 - Tests complete without warnings under `-W error`.
 
+## Fix round 1 resolution — 2026-08-23
+
+Review findings being addressed:
+
+1. Exact replay must include background explanation, citation order and original geometry.
+2. Material model-profile edits must invalidate capability checks, and request start must be protected from concurrent deletion.
+3. An unusable original profile during partial retry must produce the stable 409/new-request-ID conflict before model execution or another write.
+4. The process-local request-lock registry must release idle keys without breaking same-key waiters.
+5. Row/snapshot and user/assistant provenance mismatches must expose `model=null`.
+
+Working-tree implementation adds frozen migration 2 response snapshot columns, strict citation snapshot parsing, provenance parity checks, material-edit capability reset, a process-local model-profile usage lease, stable partial-retry conflict mapping, and reference-counted request-lock cleanup.
+
+Fresh verification on the uncommitted working tree:
+
+- Focused migrations/storage/runtime/profile/API suites: `164 passed in 31.72s` with `-W error -o pythonpath=src`.
+- Full backend: `329 passed in 51.15s` with `-W error -o pythonpath=src`.
+
+Independent re-review outcome (2026-08-23): clean, no new findings. The five review points resolve as follows:
+
+1. Frozen migration 2 adds nullable `background_explanation` plus citation `ordinal` and allow-listed `citation_snapshot_json`; migration 1 is unchanged. Replay rebuilds the stored response before provider resolution, so original explanation, order, and geometry are returned unchanged.
+2. Material profile edits reset capabilities in the same revision; `usage_lease()` registers request use under the mutation lock before a request resolves its model, and deletes conflict while edits are allowed to finish existing frozen requests.
+3. Partial retries resolve the original profile inside the lease. Missing, deleted, disabled, unresolvable, or changed-snapshot profiles map to the stable 409/new-request-ID conflict before any model call or write.
+4. Request locks use waiter-safe reference counting and remove their key only after owner and waiters leave, so the registry cannot grow without bound.
+5. Both read paths sanitize mismatched or incomplete user/assistant provenance pairs to `model: null`; corrupt citation snapshots fall back to immutable element data.
+
 ## Concerns
 
-No open implementation concerns. Per the approved deployment constraint, idempotency is guaranteed only inside this single service process; no database uniqueness migration was added.
+- Per the approved deployment constraint, idempotency, secret locking and profile usage leases are guaranteed only inside a single service process; no database uniqueness migration or cross-process lock was added.

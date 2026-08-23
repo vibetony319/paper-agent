@@ -7,6 +7,7 @@ from sqlalchemy import event, insert, select
 from sqlalchemy.exc import IntegrityError
 
 from paper_agent.database import (
+    conversation_message_citations,
     conversation_messages,
     document_elements,
     graph_nodes,
@@ -688,6 +689,7 @@ def _assistant_message(
     *,
     model_snapshot: ModelSnapshot | None = None,
     request_id: str | None = None,
+    background_explanation: str | None = None,
 ):
     return ConversationMessage(
         conversation_id=conversation.id,
@@ -698,6 +700,7 @@ def _assistant_message(
         model_profile_id=None if model_snapshot is None else model_snapshot.profile_id,
         model_snapshot=model_snapshot,
         request_id=request_id,
+        background_explanation=background_explanation,
     )
 
 
@@ -763,6 +766,182 @@ def test_repository_round_trips_agent_model_audit_metadata_without_secrets(repos
     ]
     assert "secret" not in "".join(payloads).casefold()
     assert "api_key" not in "".join(payloads).casefold()
+
+
+def test_repository_persists_exact_assistant_background_and_ordered_citation_snapshots(
+    repository,
+):
+    """Breaks if replay depends on mutable element geometry or citation ID sorting."""
+    paper, first, conversation = _conversation_for_paper(repository)
+    second = repository.save_element(
+        paper.id,
+        DocumentElement.paragraph(
+            "second evidence",
+            page_number=1,
+            bbox=BoundingBox(0.2, 0.3, 0.8, 0.4),
+        ),
+    )
+    assistant = repository.append_conversation_message(
+        _assistant_message(
+            conversation,
+            "Grounded answer",
+            (second.id, first.id),
+            model_snapshot=_model_snapshot(),
+            request_id="20000000-0000-0000-0000-000000000020",
+            background_explanation="Stable external background.",
+        )
+    )
+
+    with repository.engine.begin() as connection:
+        connection.execute(
+            document_elements.update()
+            .where(document_elements.c.id == second.id)
+            .values(kind="changed", page_number=1, bbox_x0=0.0, bbox_y0=0.0,
+                    bbox_x1=0.1, bbox_y1=0.1)
+        )
+
+    reloaded = repository.get_conversation_messages(paper.id, conversation.id)[0]
+
+    assert reloaded.background_explanation == "Stable external background."
+    assert reloaded.citation_element_ids == (second.id, first.id)
+    assert [snapshot.id for snapshot in reloaded.citation_snapshots] == [
+        second.id,
+        first.id,
+    ]
+    assert reloaded.citation_snapshots[0].kind == second.kind
+    assert reloaded.citation_snapshots[0].bbox == second.bbox
+    with repository.engine.connect() as connection:
+        citation_rows = connection.execute(
+            select(
+                conversation_message_citations.c.ordinal,
+                conversation_message_citations.c.citation_snapshot_json,
+            ).where(conversation_message_citations.c.message_id == assistant.id)
+        ).all()
+    assert sorted(row.ordinal for row in citation_rows) == [0, 1]
+    payloads = [row.citation_snapshot_json for row in citation_rows]
+    assert all(set(json.loads(payload)) == {"id", "kind", "page_number", "bbox"} for payload in payloads)
+    assert "secret" not in "".join(payloads).casefold()
+    assert "api_key" not in "".join(payloads).casefold()
+
+
+def test_repository_ignores_corrupt_or_non_allowlisted_citation_snapshots(repository):
+    """Breaks if citation snapshot corruption or hidden fields reach replay callers."""
+    paper, element, conversation = _conversation_for_paper(repository)
+    assistant = repository.append_conversation_message(
+        _assistant_message(conversation, "Answer", (element.id,))
+    )
+    with repository.engine.begin() as connection:
+        connection.execute(
+            conversation_message_citations.update()
+            .where(conversation_message_citations.c.message_id == assistant.id)
+            .values(
+                citation_snapshot_json=(
+                    '{"id":"' + element.id + '","kind":"paragraph",'
+                    '"page_number":1,"bbox":{"x0":0,"y0":0,"x1":1,"y1":0.1},'
+                    '"api_key":"must-not-escape"}'
+                )
+            )
+        )
+
+    reloaded = repository.get_conversation_messages(paper.id, conversation.id)[0]
+
+    assert reloaded.citation_element_ids == (element.id,)
+    assert reloaded.citation_snapshots == (None,)
+    assert "must-not-escape" not in repr(reloaded)
+
+
+def test_repository_sanitizes_valid_but_mismatched_model_provenance_pairs(repository):
+    """Breaks if syntactically valid false provenance is exposed for either turn row."""
+    paper, _, conversation = _conversation_for_paper(repository)
+    request_id = "20000000-0000-0000-0000-000000000021"
+    snapshot = _model_snapshot()
+    user = repository.append_conversation_message(
+        _user_message(
+            conversation,
+            "Question",
+            model_snapshot=snapshot,
+            request_id=request_id,
+        )
+    )
+    assistant = repository.append_conversation_message(
+        _assistant_message(
+            conversation,
+            "Answer",
+            model_snapshot=snapshot,
+            request_id=request_id,
+        )
+    )
+    other_profile_id = "10000000-0000-0000-0000-000000000002"
+    with repository.engine.begin() as connection:
+        connection.execute(
+            conversation_messages.update()
+            .where(conversation_messages.c.id == assistant.id)
+            .values(
+                model_profile_id=other_profile_id,
+                model_snapshot_json=(
+                    '{"base_url":"http://127.0.0.1:8000/v1",'
+                    '"display_name":"Other","model_name":"other",'
+                    f'"profile_id":"{other_profile_id}","revision":1}}'
+                ),
+            )
+        )
+
+    complete = repository.get_agent_turn_by_request(paper.id, request_id)
+    history = repository.get_conversation_messages(paper.id, conversation.id)
+
+    assert complete is not None
+    assert all(message.model_profile_id is None for message in complete)
+    assert all(message.model_snapshot is None for message in complete)
+    assert all(message.model_profile_id is None for message in history)
+    assert all(message.model_snapshot is None for message in history)
+
+    with repository.engine.begin() as connection:
+        connection.execute(
+            conversation_messages.update()
+            .where(conversation_messages.c.id == user.id)
+            .values(model_snapshot_json=connection.execute(
+                select(conversation_messages.c.model_snapshot_json).where(
+                    conversation_messages.c.id == assistant.id
+                )
+            ).scalar_one())
+        )
+    row_mismatch = repository.get_conversation_messages(paper.id, conversation.id)
+    assert row_mismatch[0].model_snapshot is None
+
+
+def test_repository_rejects_valid_snapshot_whose_profile_does_not_match_its_row(
+    repository,
+):
+    """Breaks if a single partial row can bind a valid snapshot from another profile."""
+    paper, _, conversation = _conversation_for_paper(repository)
+    request_id = "20000000-0000-0000-0000-000000000022"
+    user = repository.append_conversation_message(
+        _user_message(
+            conversation,
+            "Partial question",
+            model_snapshot=_model_snapshot(),
+            request_id=request_id,
+        )
+    )
+    other_profile_id = "10000000-0000-0000-0000-000000000002"
+    with repository.engine.begin() as connection:
+        connection.execute(
+            conversation_messages.update()
+            .where(conversation_messages.c.id == user.id)
+            .values(
+                model_snapshot_json=(
+                    '{"base_url":"http://127.0.0.1:8000/v1",'
+                    '"display_name":"Other","model_name":"other",'
+                    f'"profile_id":"{other_profile_id}","revision":1}}'
+                )
+            )
+        )
+
+    partial = repository.get_agent_user_message_by_request(paper.id, request_id)
+
+    assert partial is not None
+    assert partial.model_profile_id == _model_snapshot().profile_id
+    assert partial.model_snapshot is None
 
 
 def test_repository_returns_only_a_complete_agent_pair_for_a_request(repository):
@@ -977,9 +1156,9 @@ def test_repository_batches_citations_for_the_returned_message_set(repository):
     assert len(citation_reads) == 1
     assert [message.citation_element_ids for message in messages] == [
         (),
-        ("citation-a", "citation-z"),
-        ("citation-a", "citation-z"),
-        ("citation-a", "citation-z"),
+        ("citation-z", "citation-a"),
+        ("citation-z", "citation-a"),
+        ("citation-z", "citation-a"),
     ]
 
 

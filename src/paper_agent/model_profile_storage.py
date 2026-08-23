@@ -57,30 +57,45 @@ class ModelProfileRepository:
         *,
         expected_revision: int,
         changes: ModelProfileChanges,
+        secret_state_changed: bool = False,
     ) -> ModelProfile:
         with self.engine.begin() as connection:
             current = self._get(connection, profile_id)
             if current is None or current.deleted_at is not None:
                 raise ModelProfileRevisionError()
             updated = _apply_changes(current, changes)
+            material_config_changed = (
+                updated.base_url != current.base_url
+                or updated.model_name != current.model_name
+                or updated.secret_ref != current.secret_ref
+                or secret_state_changed
+            )
             now = datetime.now(UTC)
             if updated.is_default and not current.is_default:
                 self._clear_other_defaults(connection, profile_id, now)
+            values: dict[str, object] = {
+                "display_name": updated.display_name,
+                "base_url": updated.base_url,
+                "model_name": updated.model_name,
+                "secret_ref": updated.secret_ref,
+                "enabled": updated.enabled,
+                "is_default": updated.is_default,
+                "revision": expected_revision + 1,
+                "updated_at": _serialize_datetime(now),
+            }
+            if material_config_changed:
+                values.update(
+                    basic_chat=False,
+                    structured_output=False,
+                    tool_calling=False,
+                    capabilities_checked_at=None,
+                )
             result = connection.execute(
                 update(model_profiles)
                 .where(model_profiles.c.id == profile_id)
                 .where(model_profiles.c.revision == expected_revision)
                 .where(model_profiles.c.deleted_at.is_(None))
-                .values(
-                    display_name=updated.display_name,
-                    base_url=updated.base_url,
-                    model_name=updated.model_name,
-                    secret_ref=updated.secret_ref,
-                    enabled=updated.enabled,
-                    is_default=updated.is_default,
-                    revision=expected_revision + 1,
-                    updated_at=_serialize_datetime(now),
-                )
+                .values(**values)
             )
             self._require_one_row(result.rowcount)
             return self._require_profile(connection, profile_id)

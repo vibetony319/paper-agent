@@ -7,6 +7,7 @@ import pytest
 from paper_agent.app import create_app
 from paper_agent.config import Settings
 from paper_agent.models.vllm import VllmModelConfig
+from paper_agent.model_profiles import ModelCapabilities
 from paper_agent.routes.model_profiles import ModelProfileHttpError, _safe_errors
 from paper_agent.services.reasoning_clients import ENVIRONMENT_FALLBACK_PROFILE_ID
 
@@ -128,6 +129,53 @@ def test_patch_distinguishes_omitted_key_from_explicit_clear(client: TestClient)
     assert client.app.state.model_secret_store.get(
         f"model-profile:{created['id']}"
     ) == ""
+
+
+def test_patch_resets_capabilities_only_for_material_configuration_changes(
+    client: TestClient,
+) -> None:
+    """Breaks if API edits retain stale probes or harmless names erase valid probes."""
+    created = _create_profile(client, api_key="first-secret")
+    repository = client.app.state.model_profile_repository
+    tested = repository.update_capabilities(
+        created["id"],
+        expected_revision=created["revision"],
+        capabilities=ModelCapabilities(
+            basic_chat=True,
+            structured_output=True,
+            tool_calling=True,
+        ),
+    )
+    secret_ref = tested.secret_ref
+
+    renamed = client.patch(
+        f"/api/model-profiles/{created['id']}",
+        headers={"If-Match": str(tested.revision)},
+        json={"display_name": "Renamed only"},
+    )
+    replaced = client.patch(
+        f"/api/model-profiles/{created['id']}",
+        headers={"If-Match": str(renamed.json()["revision"])},
+        json={"api_key": "replacement-secret"},
+    )
+
+    assert renamed.status_code == 200
+    assert renamed.json()["capabilities"] == {
+        "basic_chat": True,
+        "structured_output": True,
+        "tool_calling": True,
+        "checked_at": None,
+    }
+    assert replaced.status_code == 200
+    assert replaced.json()["capabilities"] == {
+        "basic_chat": False,
+        "structured_output": False,
+        "tool_calling": False,
+        "checked_at": None,
+    }
+    current = repository.get(created["id"])
+    assert current.secret_ref == secret_ref
+    assert client.app.state.model_secret_store.get(secret_ref) == "replacement-secret"
 
 
 def test_validation_errors_are_stable_and_never_echo_sensitive_input(

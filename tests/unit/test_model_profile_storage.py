@@ -217,6 +217,58 @@ def test_update_capabilities_uses_the_same_revision_guard(repository):
         )
 
 
+def test_material_profile_updates_reset_capabilities_in_the_same_revision(repository):
+    """Breaks if capability evidence survives a material model configuration change."""
+    checked = ModelCapabilities(
+        basic_chat=True,
+        structured_output=True,
+        tool_calling=True,
+        checked_at=datetime(2026, 8, 22, tzinfo=UTC),
+    )
+    profile = repository.create(_profile(capabilities=checked))
+
+    endpoint_changed = repository.update(
+        profile.id,
+        expected_revision=profile.revision,
+        changes=ModelProfileChanges(base_url="http://127.0.0.1:9000/v1"),
+    )
+
+    assert endpoint_changed.revision == 2
+    assert endpoint_changed.capabilities == ModelCapabilities()
+
+
+def test_display_only_update_retains_capabilities_but_secret_replacement_resets_them(
+    repository,
+):
+    """Breaks if harmless edits erase probes or same-ref key replacement keeps them."""
+    capabilities = ModelCapabilities(
+        basic_chat=True,
+        structured_output=True,
+        tool_calling=True,
+        checked_at=datetime(2026, 8, 22, tzinfo=UTC),
+    )
+    secret_ref = "model-profile:00000000-0000-4000-8000-000000000001"
+    profile = repository.create(
+        _profile(secret_ref=secret_ref, capabilities=capabilities)
+    )
+    renamed = repository.update(
+        profile.id,
+        expected_revision=profile.revision,
+        changes=ModelProfileChanges(display_name="Renamed"),
+    )
+
+    replaced = repository.update(
+        profile.id,
+        expected_revision=renamed.revision,
+        changes=ModelProfileChanges(secret_ref=secret_ref),
+        secret_state_changed=True,
+    )
+
+    assert renamed.capabilities == capabilities
+    assert replaced.secret_ref == secret_ref
+    assert replaced.capabilities == ModelCapabilities()
+
+
 def test_set_default_clears_previous_default_and_revises_both_profiles(repository):
     """Breaks if switching defaults leaves the former default selected or unversioned."""
     first = repository.create(_profile(display_name="First", is_default=True))

@@ -208,6 +208,7 @@ conversation_messages = Table(
     Column("model_profile_id", String(36)),
     Column("model_snapshot_json", String),
     Column("request_id", String(36)),
+    Column("background_explanation", String),
     ForeignKeyConstraint(
         ["paper_id", "conversation_id"],
         ["conversations.paper_id", "conversations.id"],
@@ -249,6 +250,8 @@ conversation_message_citations = Table(
     Column("paper_id", String(36), primary_key=True),
     Column("message_id", String(36), primary_key=True),
     Column("element_id", String(36), primary_key=True),
+    Column("ordinal", Integer),
+    Column("citation_snapshot_json", String),
     ForeignKeyConstraint(
         ["paper_id", "message_id"],
         ["conversation_messages.paper_id", "conversation_messages.id"],

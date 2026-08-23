@@ -12,6 +12,7 @@ from paper_agent.schemas import (
     ModelProfileResponse,
 )
 from paper_agent.services.model_profiles import (
+    ModelProfileInUseError,
     ModelProfileInputError,
     ModelProfileNotFoundError,
     ModelProfileReadOnlyError,
@@ -89,6 +90,12 @@ def _safe_http_error(error: Exception) -> ModelProfileHttpError:
             409,
             "profile_read_only",
             "环境变量模型档案为只读，不能修改。",
+        )
+    if isinstance(error, ModelProfileInUseError):
+        return ModelProfileHttpError(
+            409,
+            "profile_in_use",
+            "模型档案正在被请求使用，请稍后重试。",
         )
     if isinstance(error, ModelProfileRevisionError):
         return ModelProfileHttpError(

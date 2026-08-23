@@ -3,6 +3,8 @@ from pathlib import Path
 
 import pytest
 
+import paper_agent.services.model_profiles as model_profile_services
+
 from paper_agent.model_profile_storage import ModelProfileRepository, ModelProfileRevisionError
 from paper_agent.model_profiles import ModelCapabilities, ModelProfile, ModelProfileChanges
 from paper_agent.services.model_profiles import ModelProfileService
@@ -274,6 +276,57 @@ def test_failed_update_restores_secret_state(
 
     assert store.get(secret_ref) == "current-secret"
     assert repository.get(profile.id) == profile
+
+
+def test_api_key_replacement_resets_capabilities_when_secret_ref_is_unchanged(
+    repository, tmp_path
+):
+    """Breaks if replacing a key retains probes because its durable reference is stable."""
+    store = ModelSecretStore(tmp_path / "secrets.json")
+    capabilities = ModelCapabilities(
+        basic_chat=True,
+        structured_output=True,
+        tool_calling=True,
+        checked_at=datetime(2026, 8, 22, tzinfo=UTC),
+    )
+    profile = _profile(capabilities=capabilities)
+    secret_ref = store.set(profile.id, "old-secret")
+    profile = repository.create(
+        _profile(id=profile.id, secret_ref=secret_ref, capabilities=capabilities)
+    )
+    service = ModelProfileService(repository, StaticProvider(None), store)
+
+    updated = service.update_profile(
+        profile.id,
+        expected_revision=profile.revision,
+        changes=ModelProfileChanges(),
+        api_key="replacement-secret",
+    )
+
+    assert updated.profile.secret_ref == secret_ref
+    assert updated.profile.capabilities == ModelCapabilities()
+    assert store.get(secret_ref) == "replacement-secret"
+
+
+def test_usage_lease_blocks_delete_but_allows_edits_and_releases_cleanly(
+    repository, tmp_path
+):
+    """Breaks if request use holds the service mutex or permits profile deletion."""
+    store = ModelSecretStore(tmp_path / "secrets.json")
+    profile = repository.create(_profile())
+    service = ModelProfileService(repository, StaticProvider(None), store)
+
+    with service.usage_lease(profile.id):
+        edited = service.update_profile(
+            profile.id,
+            expected_revision=profile.revision,
+            changes=ModelProfileChanges(display_name="Edited during request"),
+        ).profile
+        with pytest.raises(model_profile_services.ModelProfileInUseError):
+            service.delete_profile(profile.id, expected_revision=profile.revision)
+
+    service.delete_profile(profile.id, expected_revision=edited.revision)
+    assert repository.get(profile.id).deleted_at is not None
 
 
 def test_failed_delete_restores_secret_and_successful_delete_removes_it(

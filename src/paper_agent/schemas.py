@@ -16,6 +16,7 @@ from paper_agent.domain import (
     AgentMessageRole,
     AgentMode,
     Conversation,
+    CitationSnapshot,
     ConversationMessage,
     DocumentElement,
     GraphEdge,
@@ -230,6 +231,20 @@ class CitationResponse(BaseModel):
                 y0=element.bbox.y0,
                 x1=element.bbox.x1,
                 y1=element.bbox.y1,
+            ),
+        )
+
+    @classmethod
+    def from_snapshot(cls, snapshot: CitationSnapshot) -> "CitationResponse":
+        return cls(
+            id=snapshot.id,
+            kind=snapshot.kind,
+            page_number=snapshot.page_number,
+            bbox=BoundingBoxResponse(
+                x0=snapshot.bbox.x0,
+                y0=snapshot.bbox.y0,
+                x1=snapshot.bbox.x1,
+                y1=snapshot.bbox.y1,
             ),
         )
 

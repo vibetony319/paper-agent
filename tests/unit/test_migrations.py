@@ -5,6 +5,8 @@ from sqlalchemy.exc import IntegrityError
 from paper_agent import migrations
 from paper_agent.migrations import run_schema_migrations
 from paper_agent.database import (
+    conversation_message_citations,
+    conversation_messages,
     create_database_engine,
     database_url_for,
     initialize_database,
@@ -75,7 +77,7 @@ def test_model_profile_migration_upgrades_an_existing_database(tmp_path):
 
     assert {"model_profile_id", "model_snapshot_json", "request_id"} <= message_columns
     assert {"model_profile_id", "model_snapshot_json", "request_id"} <= run_columns
-    assert versions == [1]
+    assert versions == [1, 2]
 
 
 def test_model_profile_migration_records_each_version_once_when_rerun(tmp_path):
@@ -90,7 +92,7 @@ def test_model_profile_migration_records_each_version_once_when_rerun(tmp_path):
             "SELECT version FROM schema_migrations ORDER BY version"
         ).scalars().all()
 
-    assert versions == [1]
+    assert versions == [1, 2]
 
 
 def test_model_profile_migration_uses_frozen_schema_not_live_metadata(
@@ -131,6 +133,12 @@ def test_initialize_database_creates_model_profiles_and_all_provenance_columns(t
                 "PRAGMA table_info(conversation_messages)"
             )
         }
+        citation_columns = {
+            column[1]
+            for column in connection.exec_driver_sql(
+                "PRAGMA table_info(conversation_message_citations)"
+            )
+        }
         run_columns = {
             column[1]
             for column in connection.exec_driver_sql("PRAGMA table_info(processing_runs)")
@@ -142,8 +150,101 @@ def test_initialize_database_creates_model_profiles_and_all_provenance_columns(t
 
     assert "model_profiles" in tables
     assert profile_columns == MODEL_PROFILE_COLUMNS
-    assert {"model_profile_id", "model_snapshot_json", "request_id"} <= message_columns
+    assert {
+        "model_profile_id",
+        "model_snapshot_json",
+        "request_id",
+        "background_explanation",
+    } <= message_columns
+    assert {"ordinal", "citation_snapshot_json"} <= citation_columns
     assert {"model_profile_id", "model_snapshot_json", "request_id"} <= run_columns
+
+
+def test_agent_response_snapshot_migration_upgrades_legacy_conversation_tables(
+    tmp_path,
+):
+    """Breaks if frozen migration 2 cannot preserve exact Agent response fields."""
+    engine = create_database_engine(database_url_for(tmp_path))
+    legacy = MetaData()
+    Table(
+        "conversation_messages",
+        legacy,
+        Column("id", String(36), primary_key=True),
+        Column("conversation_id", String(36), nullable=False),
+        Column("paper_id", String(36), nullable=False),
+        Column("role", String(16), nullable=False),
+        Column("content", String, nullable=False),
+        Column("sequence", Integer, nullable=False),
+    )
+    Table(
+        "conversation_message_citations",
+        legacy,
+        Column("paper_id", String(36), primary_key=True),
+        Column("message_id", String(36), primary_key=True),
+        Column("element_id", String(36), primary_key=True),
+    )
+    legacy.create_all(engine)
+
+    run_schema_migrations(engine)
+
+    with engine.connect() as connection:
+        message_columns = {
+            column[1]
+            for column in connection.exec_driver_sql(
+                "PRAGMA table_info(conversation_messages)"
+            )
+        }
+        citation_columns = {
+            column[1]
+            for column in connection.exec_driver_sql(
+                "PRAGMA table_info(conversation_message_citations)"
+            )
+        }
+        versions = connection.exec_driver_sql(
+            "SELECT version FROM schema_migrations ORDER BY version"
+        ).scalars().all()
+
+    assert "background_explanation" in message_columns
+    assert {"ordinal", "citation_snapshot_json"} <= citation_columns
+    assert versions == [1, 2]
+
+
+def test_agent_response_snapshot_migration_uses_frozen_schema_not_live_metadata(
+    tmp_path, monkeypatch
+):
+    """Breaks if migration 2 starts adopting later live-table columns."""
+    future_metadata = MetaData()
+    future_messages = conversation_messages.to_metadata(future_metadata)
+    future_messages.append_column(Column("future_response_column", String))
+    future_citations = conversation_message_citations.to_metadata(future_metadata)
+    future_citations.append_column(Column("future_citation_column", String))
+    monkeypatch.setattr(migrations, "conversation_messages", future_messages, raising=False)
+    monkeypatch.setattr(
+        migrations,
+        "conversation_message_citations",
+        future_citations,
+        raising=False,
+    )
+    engine = create_database_engine(database_url_for(tmp_path))
+
+    run_schema_migrations(engine)
+
+    with engine.connect() as connection:
+        message_columns = {
+            column[1]
+            for column in connection.exec_driver_sql(
+                "PRAGMA table_info(conversation_messages)"
+            )
+        }
+        citation_columns = {
+            column[1]
+            for column in connection.exec_driver_sql(
+                "PRAGMA table_info(conversation_message_citations)"
+            )
+        }
+
+    assert "future_response_column" not in message_columns
+    assert "future_citation_column" not in citation_columns
 
 
 def test_model_profiles_allows_only_one_active_default(tmp_path):

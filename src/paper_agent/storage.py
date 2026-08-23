@@ -26,6 +26,7 @@ from paper_agent.domain import (
     AgentMessageRole,
     AgentMode,
     BoundingBox,
+    CitationSnapshot,
     Conversation,
     ConversationMessage,
     DocumentElement,
@@ -47,6 +48,8 @@ from paper_agent.model_profiles import ModelSnapshot, validate_model_profile_id
 _MODEL_SNAPSHOT_KEYS = frozenset(
     {"profile_id", "display_name", "base_url", "model_name", "revision"}
 )
+_CITATION_SNAPSHOT_KEYS = frozenset({"id", "kind", "page_number", "bbox"})
+_CITATION_BBOX_KEYS = frozenset({"x0", "y0", "x1", "y1"})
 
 
 def _snapshot_values(snapshot: ModelSnapshot) -> dict[str, object]:
@@ -114,6 +117,132 @@ def _parse_model_snapshot(payload: str | None) -> ModelSnapshot | None:
         return snapshot
     except (TypeError, ValueError, json.JSONDecodeError):
         return None
+
+
+def _citation_snapshot_values(snapshot: CitationSnapshot) -> dict[str, object]:
+    coordinates = (
+        snapshot.bbox.x0,
+        snapshot.bbox.y0,
+        snapshot.bbox.x1,
+        snapshot.bbox.y1,
+    ) if isinstance(snapshot.bbox, BoundingBox) else ()
+    if (
+        not isinstance(snapshot.id, str)
+        or not snapshot.id
+        or snapshot.id != snapshot.id.strip()
+        or not isinstance(snapshot.kind, str)
+        or not snapshot.kind
+        or snapshot.kind != snapshot.kind.strip()
+        or not isinstance(snapshot.page_number, int)
+        or isinstance(snapshot.page_number, bool)
+        or snapshot.page_number < 1
+        or not isinstance(snapshot.bbox, BoundingBox)
+        or any(
+            not isinstance(coordinate, (int, float))
+            or isinstance(coordinate, bool)
+            for coordinate in coordinates
+        )
+    ):
+        raise ValueError("citation snapshot is invalid")
+    return {
+        "id": snapshot.id,
+        "kind": snapshot.kind,
+        "page_number": snapshot.page_number,
+        "bbox": {
+            "x0": snapshot.bbox.x0,
+            "y0": snapshot.bbox.y0,
+            "x1": snapshot.bbox.x1,
+            "y1": snapshot.bbox.y1,
+        },
+    }
+
+
+def _serialize_citation_snapshot(snapshot: CitationSnapshot) -> str:
+    return json.dumps(
+        _citation_snapshot_values(snapshot),
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def _parse_citation_snapshot(
+    payload: str | None, *, expected_element_id: str
+) -> CitationSnapshot | None:
+    if payload is None:
+        return None
+    try:
+        values = json.loads(payload)
+        if not isinstance(values, dict) or set(values) != _CITATION_SNAPSHOT_KEYS:
+            return None
+        bbox_values = values["bbox"]
+        if (
+            not isinstance(bbox_values, dict)
+            or set(bbox_values) != _CITATION_BBOX_KEYS
+        ):
+            return None
+        snapshot = CitationSnapshot(
+            id=values["id"],
+            kind=values["kind"],
+            page_number=values["page_number"],
+            bbox=BoundingBox(**bbox_values),
+        )
+        _citation_snapshot_values(snapshot)
+        if snapshot.id != expected_element_id:
+            return None
+        return snapshot
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def _ordered_citation_rows(citation_rows: tuple[object, ...]) -> tuple[object, ...]:
+    ordinals = [row["ordinal"] for row in citation_rows]
+    if (
+        all(
+            isinstance(ordinal, int)
+            and not isinstance(ordinal, bool)
+            and ordinal >= 0
+            for ordinal in ordinals
+        )
+        and len(set(ordinals)) == len(ordinals)
+    ):
+        return tuple(sorted(citation_rows, key=lambda row: row["ordinal"]))
+    return tuple(sorted(citation_rows, key=lambda row: row["element_id"]))
+
+
+def _sanitize_model_provenance_pairs(
+    messages: tuple[ConversationMessage, ...],
+) -> tuple[ConversationMessage, ...]:
+    positions_by_request: dict[str, list[int]] = {}
+    for position, message in enumerate(messages):
+        if message.request_id is not None:
+            positions_by_request.setdefault(message.request_id, []).append(position)
+
+    sanitized = list(messages)
+    for positions in positions_by_request.values():
+        grouped = [messages[position] for position in positions]
+        roles = {message.role for message in grouped}
+        if not {
+            AgentMessageRole.user,
+            AgentMessageRole.assistant,
+        } <= roles:
+            continue
+        provenance = {
+            (message.model_profile_id, message.model_snapshot) for message in grouped
+        }
+        incomplete = any(
+            (message.model_profile_id is None) != (message.model_snapshot is None)
+            for message in grouped
+        )
+        if len(provenance) == 1 and not incomplete:
+            continue
+        for position in positions:
+            sanitized[position] = replace(
+                messages[position],
+                model_profile_id=None,
+                model_snapshot=None,
+            )
+    return tuple(sanitized)
 
 
 class PageReferenceError(ValueError):
@@ -265,6 +394,13 @@ class PaperRepository:
             raise ConversationReferenceError("user messages cannot cite source elements")
         if len(set(message.citation_element_ids)) != len(message.citation_element_ids):
             raise ConversationReferenceError("assistant citations must not contain duplicates")
+        if message.citation_snapshots:
+            raise ConversationReferenceError("citation snapshots are repository managed")
+        if (
+            message.role is AgentMessageRole.user
+            and message.background_explanation is not None
+        ):
+            raise ConversationReferenceError("user messages cannot have background")
         if message.model_snapshot is not None and (
             message.model_profile_id != message.model_snapshot.profile_id
         ):
@@ -274,8 +410,12 @@ class PaperRepository:
             self._require_owned_conversation(
                 connection, message.paper_id, message.conversation_id
             )
-            self._require_located_conversation_citations(
+            citation_snapshots_by_id = self._require_located_conversation_citations(
                 connection, message.paper_id, message.citation_element_ids
+            )
+            citation_snapshots = tuple(
+                citation_snapshots_by_id[element_id]
+                for element_id in message.citation_element_ids
             )
             sequence = self._next_conversation_sequence(connection, message.conversation_id)
             connection.execute(
@@ -289,6 +429,7 @@ class PaperRepository:
                     model_profile_id=message.model_profile_id,
                     model_snapshot_json=model_snapshot_json,
                     request_id=message.request_id,
+                    background_explanation=message.background_explanation,
                 )
             )
             if message.citation_element_ids:
@@ -299,11 +440,21 @@ class PaperRepository:
                             "paper_id": message.paper_id,
                             "message_id": message.id,
                             "element_id": element_id,
+                            "ordinal": ordinal,
+                            "citation_snapshot_json": _serialize_citation_snapshot(
+                                citation_snapshots[ordinal]
+                            ),
                         }
-                        for element_id in message.citation_element_ids
+                        for ordinal, element_id in enumerate(
+                            message.citation_element_ids
+                        )
                     ],
                 )
-        return replace(message, sequence=sequence)
+        return replace(
+            message,
+            sequence=sequence,
+            citation_snapshots=citation_snapshots,
+        )
 
     def get_conversation_messages(
         self,
@@ -339,6 +490,8 @@ class PaperRepository:
                 select(
                     conversation_message_citations.c.message_id,
                     conversation_message_citations.c.element_id,
+                    conversation_message_citations.c.ordinal,
+                    conversation_message_citations.c.citation_snapshot_json,
                 )
                 .select_from(
                     conversation_message_citations.join(
@@ -355,21 +508,23 @@ class PaperRepository:
                 )
                 .order_by(
                     conversation_message_citations.c.message_id,
+                    conversation_message_citations.c.ordinal,
                     conversation_message_citations.c.element_id,
                 )
             ).mappings()
-            citations_by_message: dict[str, list[str]] = {}
+            citations_by_message: dict[str, list[object]] = {}
             for citation_row in citation_rows:
                 citations_by_message.setdefault(
                     citation_row["message_id"], []
-                ).append(citation_row["element_id"])
+                ).append(citation_row)
 
-            return tuple(
+            messages = tuple(
                 self._conversation_message_from_row(
                     row, tuple(citations_by_message.get(row["id"], ()))
                 )
                 for row in rows
             )
+            return _sanitize_model_provenance_pairs(messages)
 
     def get_agent_turn_by_request(
         self, paper_id: str, request_id: str
@@ -411,25 +566,29 @@ class PaperRepository:
                 select(
                     conversation_message_citations.c.message_id,
                     conversation_message_citations.c.element_id,
+                    conversation_message_citations.c.ordinal,
+                    conversation_message_citations.c.citation_snapshot_json,
                 )
                 .where(conversation_message_citations.c.paper_id == paper_id)
                 .where(conversation_message_citations.c.message_id.in_(message_ids))
                 .order_by(
                     conversation_message_citations.c.message_id,
+                    conversation_message_citations.c.ordinal,
                     conversation_message_citations.c.element_id,
                 )
             ).mappings()
-            citations_by_message: dict[str, list[str]] = {}
+            citations_by_message: dict[str, list[object]] = {}
             for citation_row in citation_rows:
                 citations_by_message.setdefault(citation_row["message_id"], []).append(
-                    citation_row["element_id"]
+                    citation_row
                 )
-        return tuple(
+        messages = tuple(
             self._conversation_message_from_row(
                 row, tuple(citations_by_message.get(row["id"], ()))
             )
             for row in rows
         )
+        return _sanitize_model_provenance_pairs(messages)
 
     def save_page(self, paper_id: str, page: Page) -> Page:
         with self.engine.begin() as connection:
@@ -856,22 +1015,49 @@ class PaperRepository:
     @staticmethod
     def _require_located_conversation_citations(
         connection, paper_id: str, element_ids: tuple[str, ...]
-    ) -> None:
+    ) -> dict[str, CitationSnapshot]:
         expected = set(element_ids)
         if not expected:
-            return
-        found = set(
+            return {}
+        rows = tuple(
             connection.execute(
-                select(document_elements.c.id)
+                select(
+                    document_elements.c.id,
+                    document_elements.c.kind,
+                    document_elements.c.page_number,
+                    document_elements.c.bbox_x0,
+                    document_elements.c.bbox_y0,
+                    document_elements.c.bbox_x1,
+                    document_elements.c.bbox_y1,
+                )
                 .where(document_elements.c.paper_id == paper_id)
                 .where(document_elements.c.location_status == "located")
                 .where(document_elements.c.id.in_(expected))
-            ).scalars()
+            ).mappings()
         )
-        if found != expected:
+        if {row["id"] for row in rows} != expected:
             raise ConversationReferenceError(
                 "citation must be a located element owned by paper"
             )
+        try:
+            return {
+                row["id"]: CitationSnapshot(
+                    id=row["id"],
+                    kind=row["kind"],
+                    page_number=row["page_number"],
+                    bbox=BoundingBox(
+                        x0=row["bbox_x0"],
+                        y0=row["bbox_y0"],
+                        x1=row["bbox_x1"],
+                        y1=row["bbox_y1"],
+                    ),
+                )
+                for row in rows
+            }
+        except (TypeError, ValueError):
+            raise ConversationReferenceError(
+                "citation must be a located element owned by paper"
+            ) from None
 
     @staticmethod
     def _next_conversation_sequence(connection, conversation_id: str) -> int:
@@ -1199,8 +1385,19 @@ class PaperRepository:
 
     @staticmethod
     def _conversation_message_from_row(
-        row, citation_element_ids: tuple[str, ...]
+        row, citation_rows: tuple[object, ...]
     ) -> ConversationMessage:
+        ordered_citation_rows = _ordered_citation_rows(citation_rows)
+        citation_element_ids = tuple(
+            citation_row["element_id"] for citation_row in ordered_citation_rows
+        )
+        model_profile_id = row["model_profile_id"]
+        model_snapshot = _parse_model_snapshot(row["model_snapshot_json"])
+        if (
+            model_snapshot is not None
+            and model_snapshot.profile_id != model_profile_id
+        ):
+            model_snapshot = None
         return ConversationMessage(
             id=row["id"],
             conversation_id=row["conversation_id"],
@@ -1208,9 +1405,17 @@ class PaperRepository:
             role=AgentMessageRole(row["role"]),
             content=row["content"],
             citation_element_ids=citation_element_ids,
-            model_profile_id=row["model_profile_id"],
-            model_snapshot=_parse_model_snapshot(row["model_snapshot_json"]),
+            citation_snapshots=tuple(
+                _parse_citation_snapshot(
+                    citation_row["citation_snapshot_json"],
+                    expected_element_id=citation_row["element_id"],
+                )
+                for citation_row in ordered_citation_rows
+            ),
+            model_profile_id=model_profile_id,
+            model_snapshot=model_snapshot,
             request_id=row["request_id"],
+            background_explanation=row["background_explanation"],
             sequence=row["sequence"],
         )
 
