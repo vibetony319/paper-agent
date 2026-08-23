@@ -26,6 +26,7 @@ from paper_agent.services.graph_construction import GraphConstructionService
 from paper_agent.services.ingestion import PaperIngestionService
 from paper_agent.services.model_profiles import ModelProfileService
 from paper_agent.services.model_secrets import ModelSecretStore
+from paper_agent.services.note_memory import NoteMemoryService
 from paper_agent.services.reasoning_clients import ReasoningClientProvider
 from paper_agent.services.selection_assists import SelectionAssistService
 from paper_agent.storage import PaperRepository
@@ -77,6 +78,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         repository=repository,
         tools=app.state.paper_tool_registry,
         guard=app.state.citation_guard,
+        annotation_repository=app.state.annotation_repository,
+        note_memory=NoteMemoryService(app.state.annotation_repository),
     )
     app.state.paper_ingestion_service = _GraphAwarePaperIngestionService(
         settings=app.state.settings,

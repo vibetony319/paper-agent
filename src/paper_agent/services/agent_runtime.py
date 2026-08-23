@@ -13,6 +13,8 @@ from paper_agent.domain import (
     ConversationMessage,
     ProcessingStatus,
 )
+from paper_agent.annotation_storage import PaperAnnotationRepository
+from paper_agent.annotations import NoteType, TextAnchorDraft
 from paper_agent.models import VllmToolCall, VllmToolCallingClient, VllmToolTurn
 from paper_agent.model_profiles import ModelSnapshot
 from paper_agent.services.agent_tools import PaperToolRegistry, ToolExecution
@@ -33,6 +35,11 @@ _RESPONSE_ERROR = "Reasoning model could not complete the request."
 _REQUEST_CONFLICT_ERROR = (
     "Request state conflicts with its stored retry. Use a new request_id."
 )
+from paper_agent.services.note_memory import (
+    NoteMemoryContext,
+    NoteMemoryReference,
+    NoteMemoryService,
+)
 
 
 class AgentRuntimeUnavailableError(RuntimeError):
@@ -51,6 +58,10 @@ class AgentRuntimeConflictError(RuntimeError):
     """Raised when a user-only retry conflicts with its immutable request state."""
 
 
+class AgentRuntimeInvalidSelectionError(RuntimeError):
+    """Raised when a supplied text selection cannot belong to the paper."""
+
+
 @dataclass(frozen=True)
 class AgentQuestion:
     content: str
@@ -64,6 +75,7 @@ class AgentTurn:
     user_message: ConversationMessage
     assistant_message: ConversationMessage
     answer: CitationValidatedAnswer
+    note_references: tuple[NoteMemoryReference, ...] = ()
 
 
 @dataclass
@@ -79,10 +91,14 @@ class PaperAgentRuntime:
         repository: PaperRepository,
         tools: PaperToolRegistry,
         guard: CitationGuard,
+        annotation_repository: PaperAnnotationRepository | None = None,
+        note_memory: NoteMemoryService | None = None,
     ) -> None:
         self.repository = repository
         self.tools = tools
         self.guard = guard
+        self.annotation_repository = annotation_repository
+        self.note_memory = note_memory
         self._request_locks: dict[tuple[str, str], _RequestLockEntry] = {}
         self._request_locks_guard = Lock()
 
@@ -94,13 +110,20 @@ class PaperAgentRuntime:
         client: VllmToolCallingClient,
         model_snapshot: ModelSnapshot,
         request_id: str,
+        selection: TextAnchorDraft | None = None,
     ) -> AgentTurn:
         with self._request_lock(paper_id, request_id):
             existing = self.repository.get_agent_turn_by_request(
                 paper_id, request_id
             )
             if existing is not None:
-                return self.turn_from_messages(paper_id=paper_id, messages=existing)
+                return self.turn_from_messages(
+                    paper_id=paper_id,
+                    messages=existing,
+                    note_references=self._note_references_for_message(
+                        paper_id, existing[1]
+                    ),
+                )
 
             partial_user = self.repository.get_agent_user_message_by_request(
                 paper_id, request_id
@@ -114,6 +137,24 @@ class PaperAgentRuntime:
                 conversation_id = partial_user.conversation_id
             else:
                 conversation_id = question.conversation_id
+
+            note_context = (
+                self.note_memory.retrieve(
+                    paper_id, question.content, selection
+                )
+                if self.note_memory is not None
+                else NoteMemoryContext("", ())
+            )
+            selection_anchor = None
+            if selection is not None and self.annotation_repository is not None:
+                try:
+                    selection_anchor = self.annotation_repository.create_anchor(
+                        paper_id, selection
+                    )
+                except Exception as error:
+                    raise AgentRuntimeInvalidSelectionError(
+                        "Selected text is invalid."
+                    ) from error
 
             conversation = self._preflight(
                 paper_id=paper_id,
@@ -142,9 +183,17 @@ class PaperAgentRuntime:
             else:
                 user_message = partial_user
 
+            if selection_anchor is not None:
+                self.repository.link_message_anchor(
+                    paper_id, user_message.id, selection_anchor.id
+                )
+
             messages = self._model_history(
                 paper_id=paper_id,
                 conversation=conversation,
+                current_user_message_id=user_message.id,
+                selection=selection,
+                note_context=note_context,
             )
             allowed_evidence_ids: set[str] = set()
             try:
@@ -213,11 +262,20 @@ class PaperAgentRuntime:
                     background_explanation=answer.background_explanation,
                 )
             )
+            self.repository.link_message_notes(
+                paper_id,
+                assistant_message.id,
+                tuple(
+                    reference.note_id
+                    for reference in note_context.references
+                ),
+            )
             return AgentTurn(
                 conversation=conversation,
                 user_message=user_message,
                 assistant_message=assistant_message,
                 answer=answer,
+                note_references=note_context.references,
             )
 
     def turn_from_messages(
@@ -225,6 +283,7 @@ class PaperAgentRuntime:
         *,
         paper_id: str,
         messages: tuple[ConversationMessage, ConversationMessage],
+        note_references: tuple[NoteMemoryReference, ...] = (),
     ) -> AgentTurn:
         user_message, assistant_message = messages
         conversation = self.repository.get_conversation(
@@ -244,6 +303,7 @@ class PaperAgentRuntime:
             user_message=user_message,
             assistant_message=assistant_message,
             answer=answer,
+            note_references=note_references,
         )
 
     def validate_tool_calling(
@@ -317,23 +377,70 @@ class PaperAgentRuntime:
             raise AgentRuntimeConflictError(_REQUEST_CONFLICT_ERROR)
 
     def _model_history(
-        self, *, paper_id: str, conversation: Conversation
+        self,
+        *,
+        paper_id: str,
+        conversation: Conversation,
+        current_user_message_id: str,
+        selection: TextAnchorDraft | None = None,
+        note_context: NoteMemoryContext | None = None,
     ) -> list[dict[str, object]]:
         durable_messages = self.repository.get_conversation_messages(
             paper_id,
             conversation.id,
             limit=HISTORY_MESSAGE_LIMIT,
         )
-        return [
+        messages: list[dict[str, object]] = [
             {"role": "system", "content": _system_prompt(conversation.mode)},
-            *(
-                {
-                    "role": message.role.value,
-                    "content": message.content,
-                }
-                for message in durable_messages
-            ),
         ]
+        if note_context is not None and note_context.prompt_block:
+            messages.append(
+                {"role": "system", "content": note_context.prompt_block}
+            )
+        for message in durable_messages:
+            content = message.content
+            if message.id == current_user_message_id and selection is not None:
+                content = (
+                    f'<selected_text page="{selection.page_number}">'
+                    f"{selection.quote}</selected_text>\n{message.content}"
+                )
+            messages.append({"role": message.role.value, "content": content})
+        return messages
+
+    def _note_references_for_message(
+        self, paper_id: str, message: ConversationMessage
+    ) -> tuple[NoteMemoryReference, ...]:
+        note_ids = self.repository.get_message_note_ids(
+            paper_id, (message.id,)
+        ).get(message.id, ())
+        if self.annotation_repository is None:
+            return tuple(
+                NoteMemoryReference(note_id, NoteType.manual, None, False)
+                for note_id in note_ids
+            )
+        anchors = {
+            anchor.id: anchor
+            for anchor in self.annotation_repository.list_anchors(paper_id)
+        }
+        references: list[NoteMemoryReference] = []
+        for note_id in note_ids:
+            try:
+                note = self.annotation_repository.get_note(paper_id, note_id)
+                page_number = note.page_number
+                if page_number is None and note.anchor_ids:
+                    anchor = anchors.get(note.anchor_ids[0])
+                    if anchor is not None:
+                        page_number = anchor.page_number
+                references.append(
+                    NoteMemoryReference(
+                        note.id, note.note_type, page_number, True
+                    )
+                )
+            except Exception:
+                references.append(
+                    NoteMemoryReference(note_id, NoteType.manual, None, False)
+                )
+        return tuple(references)
 
 
 def _system_prompt(mode: AgentMode) -> str:

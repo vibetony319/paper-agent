@@ -10,6 +10,8 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import event, func, select
 
+from paper_agent.annotation_storage import PaperAnnotationRepository
+from paper_agent.annotations import TextAnchorDraft, TextAnchorRect
 from paper_agent.database import conversation_messages, conversations, processing_runs
 from paper_agent.domain import (
     AgentMessageRole,
@@ -22,6 +24,7 @@ from paper_agent.domain import (
     GraphStage,
     Page,
     ProcessingStatus,
+    Note,
     Section,
 )
 from paper_agent.models import (
@@ -40,6 +43,7 @@ from paper_agent.services.agent_runtime import (
 )
 from paper_agent.services.agent_tools import PaperToolRegistry
 from paper_agent.services.citation_guard import CitationGuard
+from paper_agent.services.note_memory import NoteMemoryService
 from paper_agent.storage import PaperRepository
 
 
@@ -614,6 +618,122 @@ def test_runtime_sends_openai_tool_result_messages_with_returned_evidence_ids(re
     result_payload = json.loads(tool_result["content"])
     assert result_payload["evidence_element_ids"] == [paper.element_id]
     assert result_payload["content"]["elements"][0]["id"] == paper.element_id
+
+
+def test_agent_injects_relevant_notes_and_returns_note_references(repository):
+    """Breaks if note memory never reaches model context or response references."""
+    paper = _paper_with_stage1_document(repository)
+    annotation_repository = PaperAnnotationRepository(engine=repository.engine)
+    note = annotation_repository.create_note(
+        paper.id, Note(body="路由负载均衡损失"), request_id="note-a"
+    )
+    client = FakeAgentClient(
+        turns=(
+            _tool_turn("search_paper", {"query": "router", "limit": 5}),
+            VllmToolTurn(content=None, tool_calls=()),
+        ),
+        final_payload=_grounded_payload(citations=[paper.element_id]),
+    )
+    runtime = PaperAgentRuntime(
+        repository=repository,
+        tools=PaperToolRegistry(repository),
+        guard=CitationGuard(),
+        annotation_repository=annotation_repository,
+        note_memory=NoteMemoryService(annotation_repository),
+    )
+
+    turn = runtime.ask(
+        paper_id=paper.id,
+        question=AgentQuestion(content="负载如何均衡？", mode=AgentMode.paper_only),
+        client=client,
+        model_snapshot=_model_snapshot(),
+        request_id="agent-a",
+    )
+
+    system_messages = [
+        message["content"]
+        for message in client.tool_requests[0]["messages"]
+        if message["role"] == "system"
+    ]
+    assert any(f"note:{note.id}" in content for content in system_messages)
+    assert turn.note_references[0].note_id == note.id
+    assert turn.assistant_message.citation_element_ids
+    assert repository.get_message_note_ids(
+        paper.id, (turn.assistant_message.id,)
+    )[turn.assistant_message.id] == (note.id,)
+
+
+def test_selection_is_wrapped_in_input_and_persisted_as_message_anchor(repository):
+    """Breaks if selection context mutates durable content or loses its anchor."""
+    paper = _paper_with_stage1_document(repository)
+    annotation_repository = PaperAnnotationRepository(engine=repository.engine)
+    client = FakeAgentClient(
+        turns=(
+            _tool_turn("search_paper", {"query": "router", "limit": 5}),
+            VllmToolTurn(content=None, tool_calls=()),
+        ),
+        final_payload=_grounded_payload(citations=[paper.element_id]),
+    )
+    runtime = PaperAgentRuntime(
+        repository=repository,
+        tools=PaperToolRegistry(repository),
+        guard=CitationGuard(),
+        annotation_repository=annotation_repository,
+    )
+    selection = TextAnchorDraft(
+        quote="router sends",
+        page_number=1,
+        rects=(TextAnchorRect(0, 0.1, 0.2, 0.8, 0.3),),
+    )
+
+    turn = runtime.ask(
+        paper_id=paper.id,
+        question=AgentQuestion(content="Explain it.", mode=AgentMode.paper_only),
+        client=client,
+        model_snapshot=_model_snapshot(),
+        request_id="agent-selection",
+        selection=selection,
+    )
+
+    final_messages = client.final_requests[0]["messages"]
+    assert any(
+        '<selected_text page="1">router sends</selected_text>' in message["content"]
+        for message in final_messages
+        if message["role"] == "user"
+    )
+    assert turn.user_message.content == "Explain it."
+    anchor_ids = repository.get_message_anchor_ids(
+        paper.id, (turn.user_message.id,)
+    )[turn.user_message.id]
+    assert anchor_ids
+
+
+def test_notes_do_not_bypass_citation_guard_without_paper_evidence(repository):
+    """Breaks if injected notes become valid paper citations by themselves."""
+    paper = _paper_with_stage1_document(repository)
+    annotation_repository = PaperAnnotationRepository(engine=repository.engine)
+    annotation_repository.create_note(
+        paper.id, Note(body="路由负载均衡损失"), request_id="note-guard"
+    )
+    runtime = PaperAgentRuntime(
+        repository=repository,
+        tools=PaperToolRegistry(repository),
+        guard=CitationGuard(),
+        annotation_repository=annotation_repository,
+        note_memory=NoteMemoryService(annotation_repository),
+    )
+    client = FakeAgentClient()
+
+    turn = runtime.ask(
+        paper_id=paper.id,
+        question=AgentQuestion(content="负载如何均衡？", mode=AgentMode.paper_only),
+        client=client,
+        model_snapshot=_model_snapshot(),
+        request_id="agent-note-guard",
+    )
+
+    assert turn.answer.status == "insufficient_evidence"
+    assert turn.note_references
 
 
 def test_runtime_checks_paper_before_client_without_creating_chat_or_processing_rows(

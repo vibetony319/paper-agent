@@ -136,6 +136,23 @@ class PaperAnnotationRepository:
             )
             return Highlight(anchor=anchor, color=color, id=highlight_id)
 
+    def create_anchor(self, paper_id: str, draft: TextAnchorDraft) -> TextAnchor:
+        with self.engine.begin() as connection:
+            self._require_paper(connection, paper_id)
+            self._require_draft_targets(connection, paper_id, draft)
+            anchor = self._find_anchor_by_hash(connection, paper_id, draft)
+            if anchor is not None:
+                if (
+                    anchor.quote != draft.quote
+                    or anchor.page_number != draft.page_number
+                    or anchor.rects != draft.rects
+                ):
+                    raise IdempotencyConflictError(
+                        "anchor selection conflicts with an existing anchor"
+                    )
+                return anchor
+            return self._insert_anchor(connection, paper_id, draft)
+
     def list_highlights(self, paper_id: str) -> tuple[Highlight, ...]:
         with self.engine.connect() as connection:
             rows = connection.execute(

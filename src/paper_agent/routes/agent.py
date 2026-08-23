@@ -2,6 +2,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request
 
+from paper_agent.annotation_storage import PaperAnnotationRepository
 from paper_agent.domain import AgentMessageRole, ConversationMessage, DocumentElement
 from paper_agent.model_profiles import ModelSnapshot
 from paper_agent.schemas import (
@@ -12,10 +13,12 @@ from paper_agent.schemas import (
     ConversationMessageResponse,
     ConversationResponse,
     ModelSnapshotResponse,
+    NoteReferenceResponse,
 )
 from paper_agent.services.agent_runtime import (
     AgentQuestion,
     AgentRuntimeConflictError,
+    AgentRuntimeInvalidSelectionError,
     AgentRuntimePrerequisiteError,
     AgentRuntimeResponseError,
     AgentRuntimeUnavailableError,
@@ -26,6 +29,7 @@ from paper_agent.services.model_profiles import (
     ModelProfileNotFoundError,
     ModelProfileService,
 )
+from paper_agent.services.annotations import draft_from_request
 from paper_agent.services.reasoning_clients import (
     ReasoningClientProvider,
     ResolvedReasoningClients,
@@ -50,6 +54,10 @@ def _provider(request: Request) -> ReasoningClientProvider:
 
 def _model_profile_service(request: Request) -> ModelProfileService:
     return request.app.state.model_profile_service
+
+
+def _annotation_repository(request: Request) -> PaperAnnotationRepository:
+    return request.app.state.annotation_repository
 
 
 def _not_found() -> HTTPException:
@@ -172,6 +180,14 @@ def ask_paper_agent(
     _require_paper(repository, paper_id_text)
     runtime = _runtime(request)
     request_id = str(payload.request_id)
+    try:
+        selection = (
+            None
+            if payload.selection is None
+            else draft_from_request(payload.selection)
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail="Selected text is invalid.") from error
     existing = repository.get_agent_turn_by_request(paper_id_text, request_id)
     if existing is not None:
         return _agent_message_response(
@@ -231,6 +247,7 @@ def ask_paper_agent(
                 client=resolved.tools,
                 model_snapshot=resolved.snapshot,
                 request_id=request_id,
+                selection=selection,
             )
     except ModelProfileNotFoundError:
         if partial_user is not None:
@@ -249,6 +266,10 @@ def ask_paper_agent(
         ) from None
     except AgentRuntimeConflictError:
         raise _request_conflict() from None
+    except AgentRuntimeInvalidSelectionError:
+        raise HTTPException(
+            status_code=422, detail="Selected text is invalid."
+        ) from None
     except AgentRuntimeResponseError:
         raise HTTPException(
             status_code=502,
@@ -282,6 +303,10 @@ def _agent_message_response(
                 turn.assistant_message.model_snapshot
             )
         ),
+        note_references=[
+            NoteReferenceResponse.from_reference(reference)
+            for reference in turn.note_references
+        ],
     )
 
 
@@ -300,6 +325,9 @@ def get_conversation(
     )
     messages = repository.get_conversation_messages(paper_id_text, conversation.id)
     citation_elements = _citation_elements(repository, paper_id_text, messages)
+    note_references = _note_references_for_messages(
+        repository, _annotation_repository(request), paper_id_text, messages
+    )
     return ConversationResponse.from_conversation(
         conversation,
         [
@@ -308,10 +336,64 @@ def get_conversation(
                 []
                 if message.role is AgentMessageRole.user
                 else _citations(citation_elements, message),
+                note_references[message.id],
             )
             for message in messages
         ],
     )
+
+
+def _note_references_for_messages(
+    repository: PaperRepository,
+    annotation_repository: PaperAnnotationRepository,
+    paper_id: str,
+    messages: tuple[ConversationMessage, ...],
+) -> dict[str, list[NoteReferenceResponse]]:
+    assistant_ids = tuple(
+        message.id
+        for message in messages
+        if message.role is AgentMessageRole.assistant
+    )
+    note_ids_by_message = repository.get_message_note_ids(
+        paper_id, assistant_ids
+    )
+    anchors = {
+        anchor.id: anchor
+        for anchor in annotation_repository.list_anchors(paper_id)
+    }
+    result: dict[str, list[NoteReferenceResponse]] = {}
+    for message in messages:
+        if message.role is AgentMessageRole.user:
+            result[message.id] = []
+            continue
+        references: list[NoteReferenceResponse] = []
+        for note_id in note_ids_by_message.get(message.id, ()):
+            try:
+                note = annotation_repository.get_note(paper_id, note_id)
+                page_number = note.page_number
+                if page_number is None and note.anchor_ids:
+                    anchor = anchors.get(note.anchor_ids[0])
+                    if anchor is not None:
+                        page_number = anchor.page_number
+                references.append(
+                    NoteReferenceResponse(
+                        note_id=note.id,
+                        note_type=note.note_type.value,
+                        page_number=page_number,
+                        available=True,
+                    )
+                )
+            except Exception:
+                references.append(
+                    NoteReferenceResponse(
+                        note_id=note_id,
+                        note_type=None,
+                        page_number=None,
+                        available=False,
+                    )
+                )
+        result[message.id] = references
+    return result
 
 
 @router.post("/agent/health", response_model=AgentHealthResponse)

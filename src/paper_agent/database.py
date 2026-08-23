@@ -321,10 +321,6 @@ conversation_message_note_citations = Table(
         ["paper_id", "message_id"],
         ["conversation_messages.paper_id", "conversation_messages.id"],
     ),
-    ForeignKeyConstraint(
-        ["note_id"],
-        ["notes.id"],
-    ),
 )
 
 conversation_message_anchors = Table(

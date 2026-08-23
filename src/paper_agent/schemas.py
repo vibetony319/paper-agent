@@ -236,6 +236,36 @@ class GraphBuildRequest(BaseModel):
     request_id: UUID
 
 
+class TextAnchorRectRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    order: int = Field(ge=0)
+    x0: float = Field(ge=0, le=1)
+    y0: float = Field(ge=0, le=1)
+    x1: float = Field(ge=0, le=1)
+    y1: float = Field(ge=0, le=1)
+
+
+class TextAnchorDraftRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    quote: str = Field(min_length=1, max_length=12_000)
+    page_number: int = Field(ge=1)
+    rects: list[TextAnchorRectRequest] = Field(min_length=1, max_length=200)
+    element_id: UUID | None = None
+
+
+class HighlightCreateRequest(TextAnchorDraftRequest):
+    color: Literal["yellow"] = "yellow"
+    request_id: UUID
+
+
+class SelectionAssistRequest(TextAnchorDraftRequest):
+    action: Literal["explain", "translate"]
+    model_profile_id: UUID
+    request_id: UUID
+
+
 class AgentMessageRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -244,6 +274,7 @@ class AgentMessageRequest(BaseModel):
     conversation_id: UUID | None = None
     model_profile_id: UUID
     request_id: UUID
+    selection: TextAnchorDraftRequest | None = None
 
     @field_validator("content")
     @classmethod
@@ -293,6 +324,24 @@ class CitationResponse(BaseModel):
         )
 
 
+class NoteReferenceResponse(BaseModel):
+    note_id: str
+    note_type: Literal["manual", "explanation", "translation"] | None
+    page_number: int | None
+    available: bool
+
+    @classmethod
+    def from_reference(cls, reference) -> "NoteReferenceResponse":
+        return cls(
+            note_id=reference.note_id,
+            note_type=(
+                None if reference.note_type is None else reference.note_type.value
+            ),
+            page_number=reference.page_number,
+            available=reference.available,
+        )
+
+
 class AgentMessageResponse(BaseModel):
     conversation_id: str
     message_id: str
@@ -301,6 +350,7 @@ class AgentMessageResponse(BaseModel):
     background_explanation: str | None
     citations: list[CitationResponse]
     model: ModelSnapshotResponse | None
+    note_references: list[NoteReferenceResponse]
 
 
 class ConversationMessageResponse(BaseModel):
@@ -309,10 +359,14 @@ class ConversationMessageResponse(BaseModel):
     content: str
     citations: list[CitationResponse]
     model: ModelSnapshotResponse | None
+    note_references: list[NoteReferenceResponse]
 
     @classmethod
     def from_message(
-        cls, message: ConversationMessage, citations: list[CitationResponse]
+        cls,
+        message: ConversationMessage,
+        citations: list[CitationResponse],
+        note_references: list[NoteReferenceResponse],
     ) -> "ConversationMessageResponse":
         return cls(
             id=message.id,
@@ -324,6 +378,7 @@ class ConversationMessageResponse(BaseModel):
                 if message.model_snapshot is None
                 else ModelSnapshotResponse.from_snapshot(message.model_snapshot)
             ),
+            note_references=note_references,
         )
 
 
@@ -515,36 +570,6 @@ class ElementResponse(BaseModel):
             location_status=element.location_status,
             order=element.order,
         )
-
-
-class TextAnchorRectRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    order: int = Field(ge=0)
-    x0: float = Field(ge=0, le=1)
-    y0: float = Field(ge=0, le=1)
-    x1: float = Field(ge=0, le=1)
-    y1: float = Field(ge=0, le=1)
-
-
-class TextAnchorDraftRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    quote: str = Field(min_length=1, max_length=12_000)
-    page_number: int = Field(ge=1)
-    rects: list[TextAnchorRectRequest] = Field(min_length=1, max_length=200)
-    element_id: UUID | None = None
-
-
-class HighlightCreateRequest(TextAnchorDraftRequest):
-    color: Literal["yellow"] = "yellow"
-    request_id: UUID
-
-
-class SelectionAssistRequest(TextAnchorDraftRequest):
-    action: Literal["explain", "translate"]
-    model_profile_id: UUID
-    request_id: UUID
 
 
 class TextAnchorRectResponse(BaseModel):

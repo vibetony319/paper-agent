@@ -9,7 +9,9 @@ from sqlalchemy.engine import Engine
 
 from paper_agent.annotations import NoteType
 from paper_agent.database import (
+    conversation_message_anchors,
     conversation_message_citations,
+    conversation_message_note_citations,
     conversation_messages,
     conversations,
     document_elements,
@@ -634,6 +636,96 @@ class PaperRepository:
             for row in rows
         )
         return _sanitize_model_provenance_pairs(messages)
+
+    def link_message_anchor(
+        self, paper_id: str, message_id: str, anchor_id: str
+    ) -> None:
+        with self.engine.begin() as connection:
+            connection.execute(
+                insert(conversation_message_anchors).values(
+                    paper_id=paper_id,
+                    message_id=message_id,
+                    anchor_id=anchor_id,
+                )
+            )
+
+    def link_message_notes(
+        self, paper_id: str, message_id: str, note_ids: tuple[str, ...]
+    ) -> None:
+        if not note_ids:
+            return
+        with self.engine.begin() as connection:
+            connection.execute(
+                insert(conversation_message_note_citations),
+                [
+                    {
+                        "paper_id": paper_id,
+                        "message_id": message_id,
+                        "note_id": note_id,
+                        "ordinal": ordinal,
+                    }
+                    for ordinal, note_id in enumerate(note_ids)
+                ],
+            )
+
+    def get_message_note_ids(
+        self, paper_id: str, message_ids: tuple[str, ...]
+    ) -> dict[str, tuple[str, ...]]:
+        if not message_ids:
+            return {}
+        with self.engine.connect() as connection:
+            rows = connection.execute(
+                select(
+                    conversation_message_note_citations.c.message_id,
+                    conversation_message_note_citations.c.note_id,
+                )
+                .where(conversation_message_note_citations.c.paper_id == paper_id)
+                .where(
+                    conversation_message_note_citations.c.message_id.in_(message_ids)
+                )
+                .order_by(
+                    conversation_message_note_citations.c.message_id,
+                    conversation_message_note_citations.c.ordinal,
+                    conversation_message_note_citations.c.note_id,
+                )
+            ).mappings()
+            note_ids_by_message: dict[str, list[str]] = {}
+            for row in rows:
+                note_ids_by_message.setdefault(row["message_id"], []).append(
+                    row["note_id"]
+                )
+            return {
+                message_id: tuple(note_ids_by_message.get(message_id, ()))
+                for message_id in message_ids
+            }
+
+    def get_message_anchor_ids(
+        self, paper_id: str, message_ids: tuple[str, ...]
+    ) -> dict[str, tuple[str, ...]]:
+        if not message_ids:
+            return {}
+        with self.engine.connect() as connection:
+            rows = connection.execute(
+                select(
+                    conversation_message_anchors.c.message_id,
+                    conversation_message_anchors.c.anchor_id,
+                )
+                .where(conversation_message_anchors.c.paper_id == paper_id)
+                .where(conversation_message_anchors.c.message_id.in_(message_ids))
+                .order_by(
+                    conversation_message_anchors.c.message_id,
+                    conversation_message_anchors.c.anchor_id,
+                )
+            ).mappings()
+            anchor_ids_by_message: dict[str, list[str]] = {}
+            for row in rows:
+                anchor_ids_by_message.setdefault(row["message_id"], []).append(
+                    row["anchor_id"]
+                )
+            return {
+                message_id: tuple(anchor_ids_by_message.get(message_id, ()))
+                for message_id in message_ids
+            }
 
     def save_page(self, paper_id: str, page: Page) -> Page:
         with self.engine.begin() as connection:
