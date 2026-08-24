@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const pdf = vi.hoisted(() => {
   const viewport = { width: 612, height: 792 };
   const render = vi.fn(() => ({ cancel: vi.fn(), promise: Promise.resolve() }));
-  const getViewport = vi.fn(() => viewport);
+  const getViewport = vi.fn<(args: { scale: number }) => { width: number; height: number }>(() => viewport);
   const streamTextContent = vi.fn(() => ({ getReader: vi.fn() }));
   const getPage = vi.fn(() => Promise.resolve({
     getViewport,
@@ -51,6 +51,7 @@ class ResizeObserverStub {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  pdf.getViewport.mockImplementation(() => pdf.viewport);
   ResizeObserverStub.instances.splice(0);
   vi.stubGlobal('ResizeObserver', ResizeObserverStub);
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext')
@@ -109,6 +110,26 @@ it('recreates the shared viewport after its container narrows', async () => {
 
   await waitFor(() => expect(pdf.render).toHaveBeenCalledTimes(2));
   expect(pdf.getViewport).toHaveBeenLastCalledWith({ scale: 0.5 });
+});
+
+it('uses the page shell width instead of a self-sized surface for its viewport', async () => {
+  const narrowViewport = { width: 306, height: 396 };
+  pdf.getViewport.mockImplementation(({ scale }) => scale === 0.5 ? narrowViewport : pdf.viewport);
+  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(function clientWidth(this: HTMLElement) {
+    if (this.classList.contains('pdf-reader__page-shell')) return 306;
+    if (this.classList.contains('pdf-page-view__surface')) return 612;
+    return 0;
+  });
+
+  render(
+    <div className="pdf-reader__page-shell">
+      <PdfPageView document={document as never} page={page} active overlays={[]} />
+    </div>,
+  );
+
+  const canvas = await screen.findByRole('img', { name: 'PDF 第 1 页' });
+  await waitFor(() => expect(canvas).toHaveStyle({ width: '306px', height: '396px' }));
+  expect(pdf.TextLayer).toHaveBeenCalledWith(expect.objectContaining({ viewport: narrowViewport }));
 });
 
 it('keeps the canvas visible when the page has no selectable text', async () => {

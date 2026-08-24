@@ -17,6 +17,10 @@ function isRenderCancellation(error: unknown): boolean {
   return error instanceof Error && error.name === 'RenderingCancelledException';
 }
 
+function pageShellFor(surface: HTMLElement): HTMLElement | null {
+  return surface.closest('.pdf-reader__page-shell');
+}
+
 export function PdfPageView({ document, page, active, overlays }: PdfPageViewProps) {
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -28,7 +32,7 @@ export function PdfPageView({ document, page, active, overlays }: PdfPageViewPro
   useEffect(() => {
     if (!active || typeof ResizeObserver === 'undefined') return undefined;
     const surface = surfaceRef.current;
-    const target = surface?.parentElement;
+    const target = surface === null ? null : pageShellFor(surface) ?? surface.parentElement;
     if (target === null || target === undefined) return undefined;
 
     const resizeObserver = new ResizeObserver((entries) => {
@@ -59,7 +63,7 @@ export function PdfPageView({ document, page, active, overlays }: PdfPageViewPro
         if (canvas === null || textContainer === null || surface === null) return;
 
         const baseViewport = pdfPage.getViewport({ scale: 1 });
-        const availableWidth = containerWidth ?? surface.clientWidth;
+        const availableWidth = containerWidth ?? pageShellFor(surface)?.clientWidth ?? surface.clientWidth;
         const scale = availableWidth > 0 && availableWidth < baseViewport.width
           ? availableWidth / baseViewport.width
           : 1;
