@@ -134,6 +134,13 @@ export function WorkspaceShell({
                 pages={document.pages}
                 activeSource={workspace.activeSource}
                 onSourceCleared={workspace.clearActiveSource}
+                highlights={workspace.highlights}
+                selection={workspace.selection}
+                selectionErrorMessage={workspace.errorMessage}
+                onSelectionSet={workspace.setSelection}
+                onSelectionClear={workspace.clearSelection}
+                onCreateHighlight={() => { void workspace.createHighlight(); }}
+                onDeleteHighlight={(highlightId) => { void workspace.deleteHighlight(highlightId); }}
               />
             </div>
             <section className="workspace-pane workspace-pane--graph" aria-label="Paper graph">

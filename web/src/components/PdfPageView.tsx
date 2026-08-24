@@ -1,16 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
 import type { PDFDocumentProxy, PDFPageProxy, RenderTask } from 'pdfjs-dist';
 
-import type { Page } from '../api/types';
+import type { Highlight, Page } from '../api/types';
 import { TextLayer } from '../pdfjs';
 import type { SourceTarget } from '../workspace/types';
 import { sourceOverlayStyle } from './pdfGeometry';
+import { AnnotationOverlay } from './AnnotationOverlay';
 
 type PdfPageViewProps = {
   document: PDFDocumentProxy;
   page: Page;
   active: boolean;
   overlays: SourceTarget[];
+  highlights?: Highlight[];
+  onHighlightNote?: (highlight: Highlight) => void;
+  onHighlightDeleted?: (highlightId: string) => void;
 };
 
 function isRenderCancellation(error: unknown): boolean {
@@ -21,7 +25,9 @@ function pageShellFor(surface: HTMLElement): HTMLElement | null {
   return surface.closest('.pdf-reader__page-shell');
 }
 
-export function PdfPageView({ document, page, active, overlays }: PdfPageViewProps) {
+export function PdfPageView({
+  document, page, active, overlays, highlights = [], onHighlightNote = () => undefined, onHighlightDeleted = () => undefined,
+}: PdfPageViewProps) {
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const textLayerRef = useRef<HTMLDivElement | null>(null);
@@ -124,6 +130,11 @@ export function PdfPageView({ document, page, active, overlays }: PdfPageViewPro
       <div ref={surfaceRef} className="pdf-page-view__surface">
         <canvas ref={canvasRef} role="img" aria-label={`PDF 第 ${page.number} 页`} />
         <div ref={textLayerRef} className="pdf-page-view__text-layer" data-testid={`pdf-text-layer-${page.number}`} />
+        <AnnotationOverlay
+          highlights={highlights}
+          onAddNote={onHighlightNote}
+          onDeleteHighlight={onHighlightDeleted}
+        />
         {overlays.map((overlay) => (
           <div
             key={overlay.id}

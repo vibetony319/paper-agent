@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react';
 
 import { ApiError, paperApi } from '../api/client';
-import type { AgentMode, Citation, PaperSummary } from '../api/types';
+import type { AgentMode, Citation, PaperSummary, TextAnchorDraft } from '../api/types';
 import {
   initialWorkspaceState,
   toSourceTarget,
@@ -144,6 +144,23 @@ export function usePaperWorkspace(
           message: error instanceof ApiError
             ? error.message
             : 'Unable to load paper notes.',
+        });
+      });
+
+    void paperApi.getAnnotations(activePaperId, { signal: controller.signal })
+      .then(({ highlights }) => {
+        if (controller.signal.aborted) return;
+        dispatch({
+          type: 'highlights/loaded', paperId: activePaperId, loadRevision: loadGeneration, highlights,
+        });
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted || isAbortError(error)) return;
+        dispatch({
+          type: 'request/failed',
+          paperId: activePaperId,
+          loadRevision: loadGeneration,
+          message: error instanceof ApiError ? error.message : '无法加载论文高亮。',
         });
       });
 
@@ -316,6 +333,56 @@ export function usePaperWorkspace(
     dispatch({ type: 'graph/focused', nodeId });
   }, []);
 
+  const setSelection = useCallback((draft: TextAnchorDraft, toolbarRect: DOMRect) => {
+    dispatch({ type: 'selection/set', draft, toolbarRect });
+  }, []);
+
+  const clearSelection = useCallback(() => {
+    dispatch({ type: 'selection/clear' });
+  }, []);
+
+  const createHighlight = useCallback(async () => {
+    if (state.activePaperId === null || state.selection === null) return null;
+    const paperId = state.activePaperId;
+    const requestLoadRevision = state.loadRevision;
+    try {
+      const highlight = await paperApi.createHighlight(paperId, {
+        ...state.selection.draft,
+        color: 'yellow',
+        request_id: crypto.randomUUID(),
+      });
+      dispatch({ type: 'highlight/created', paperId, loadRevision: requestLoadRevision, highlight });
+      return highlight;
+    } catch (error) {
+      dispatch({
+        type: 'request/failed',
+        paperId,
+        loadRevision: requestLoadRevision,
+        message: error instanceof ApiError ? `高亮保存失败：${error.message}` : '高亮保存失败，请稍后重试。',
+      });
+      return null;
+    }
+  }, [state.activePaperId, state.loadRevision, state.selection]);
+
+  const deleteHighlight = useCallback(async (highlightId: string) => {
+    if (state.activePaperId === null) return false;
+    const paperId = state.activePaperId;
+    const requestLoadRevision = state.loadRevision;
+    try {
+      await paperApi.deleteHighlight(paperId, highlightId);
+      dispatch({ type: 'highlight/deleted', paperId, loadRevision: requestLoadRevision, highlightId });
+      return true;
+    } catch (error) {
+      dispatch({
+        type: 'request/failed',
+        paperId,
+        loadRevision: requestLoadRevision,
+        message: error instanceof ApiError ? `删除高亮失败：${error.message}` : '删除高亮失败，请稍后重试。',
+      });
+      return false;
+    }
+  }, [state.activePaperId, state.loadRevision]);
+
   return {
     ...state,
     buildCoreGraph,
@@ -326,5 +393,9 @@ export function usePaperWorkspace(
     selectGraphEvidenceElement,
     clearActiveSource,
     setGraphFocus,
+    setSelection,
+    clearSelection,
+    createHighlight,
+    deleteHighlight,
   };
 }

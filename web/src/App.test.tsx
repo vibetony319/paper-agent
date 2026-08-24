@@ -133,6 +133,10 @@ function useReadyWorkspaceHandlers(paper: PaperSummary = readyPaper) {
     http.get('/api/papers', () => HttpResponse.json([paper])),
     http.get(`/api/papers/${paper.id}/document`, () => HttpResponse.json(documentFor(paper))),
     http.get(`/api/papers/${paper.id}/graph`, () => HttpResponse.json(graph)),
+    http.get(`/api/papers/${paper.id}/annotations`, () => HttpResponse.json({
+      highlights: [],
+      notes: [],
+    })),
     http.get(`/api/papers/${paper.id}/notes`, () => HttpResponse.json([
       {
         id: 'note-1',

@@ -2,9 +2,11 @@ import type {
   AgentMode,
   AgentMessage,
   BoundingBox,
+  Highlight,
   Note,
   PaperDocument,
   PaperGraph,
+  TextAnchorDraft,
 } from '../api/types';
 
 export type SourceTarget = {
@@ -20,6 +22,8 @@ export type WorkspaceState = {
   document: PaperDocument | null;
   graph: PaperGraph | null;
   notes: Note[];
+  highlights: Highlight[];
+  selection: { draft: TextAnchorDraft; toolbarRect: DOMRect } | null;
   activeSource: SourceTarget | null;
   graphFocusNodeId: string | null;
   conversationId: string | null;

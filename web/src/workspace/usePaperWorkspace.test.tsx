@@ -2,7 +2,7 @@ import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 import { ApiError, paperApi } from '../api/client';
-import type { AgentMessage, Note, PaperDocument, PaperGraph } from '../api/types';
+import type { AgentMessage, Highlight, Note, PaperDocument, PaperGraph } from '../api/types';
 import { usePaperWorkspace } from './usePaperWorkspace';
 
 const emptyGraph: PaperGraph = { nodes: [], edges: [] };
@@ -39,9 +39,13 @@ beforeEach(() => {
   vi.spyOn(paperApi, 'getDocument').mockImplementation(async (paperId) => documentFor(paperId));
   vi.spyOn(paperApi, 'getGraph').mockResolvedValue(emptyGraph);
   vi.spyOn(paperApi, 'getNotes').mockResolvedValue([]);
+  vi.spyOn(paperApi, 'getAnnotations').mockResolvedValue({ highlights: [], notes: [] });
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 it('returns and stores a core graph built for the active paper', async () => {
   const buildCoreGraph = vi.spyOn(paperApi, 'buildCoreGraph').mockResolvedValue(builtGraph);
@@ -56,6 +60,68 @@ it('returns and stores a core graph built for the active paper', async () => {
   expect(buildCoreGraph).toHaveBeenCalledWith('paper-a');
   expect(returnedGraph).toBe(builtGraph);
   expect(result.current.graph).toBe(builtGraph);
+});
+
+it('loads highlights independently from the existing notes request', async () => {
+  const highlight: Highlight = {
+    id: 'highlight-a',
+    color: 'yellow',
+    anchor: {
+      id: 'anchor-a', quote: '选中的文字', page_number: 1, element_id: null,
+      rects: [{ order: 0, x0: 0.1, y0: 0.2, x1: 0.5, y1: 0.3 }],
+    },
+  };
+  vi.spyOn(paperApi, 'getAnnotations').mockResolvedValue({ highlights: [highlight], notes: [] });
+
+  const { result } = renderHook(() => usePaperWorkspace('paper-a'));
+
+  await waitFor(() => expect(result.current.highlights).toEqual([highlight]));
+  expect(paperApi.getNotes).toHaveBeenCalledWith('paper-a', expect.objectContaining({ signal: expect.any(AbortSignal) }));
+  expect(paperApi.getAnnotations).toHaveBeenCalledWith('paper-a', expect.objectContaining({ signal: expect.any(AbortSignal) }));
+});
+
+it('persists a yellow highlight with a fresh request id and clears the selection on success', async () => {
+  const highlight: Highlight = {
+    id: 'highlight-a', color: 'yellow',
+    anchor: {
+      id: 'anchor-a', quote: '选中的文字', page_number: 1, element_id: null,
+      rects: [{ order: 0, x0: 0.1, y0: 0.2, x1: 0.5, y1: 0.3 }],
+    },
+  };
+  vi.spyOn(paperApi, 'createHighlight').mockResolvedValue(highlight);
+  vi.stubGlobal('crypto', { randomUUID: () => 'request-highlight-a' });
+  const { result } = renderHook(() => usePaperWorkspace('paper-a'));
+  await waitFor(() => expect(result.current.document).not.toBeNull());
+
+  act(() => result.current.setSelection({
+    quote: '选中的文字', page_number: 1,
+    rects: [{ order: 0, x0: 0.1, y0: 0.2, x1: 0.5, y1: 0.3 }],
+  }, { left: 20, top: 30, width: 40, height: 10 } as DOMRect));
+  await act(async () => { await result.current.createHighlight(); });
+
+  expect(paperApi.createHighlight).toHaveBeenCalledWith('paper-a', {
+    quote: '选中的文字', page_number: 1,
+    rects: [{ order: 0, x0: 0.1, y0: 0.2, x1: 0.5, y1: 0.3 }],
+    color: 'yellow', request_id: 'request-highlight-a',
+  });
+  expect(result.current.highlights).toEqual([highlight]);
+  expect(result.current.selection).toBeNull();
+});
+
+it('keeps the selection and exposes a Chinese error when highlight persistence fails', async () => {
+  vi.spyOn(paperApi, 'createHighlight').mockRejectedValue(new ApiError(503, '服务不可用。'));
+  vi.stubGlobal('crypto', { randomUUID: () => 'request-highlight-a' });
+  const { result } = renderHook(() => usePaperWorkspace('paper-a'));
+  await waitFor(() => expect(result.current.document).not.toBeNull());
+
+  act(() => result.current.setSelection({
+    quote: '选中的文字', page_number: 1,
+    rects: [{ order: 0, x0: 0.1, y0: 0.2, x1: 0.5, y1: 0.3 }],
+  }, { left: 20, top: 30, width: 40, height: 10 } as DOMRect));
+  await act(async () => { await result.current.createHighlight(); });
+
+  expect(result.current.selection?.draft.quote).toBe('选中的文字');
+  expect(result.current.errorMessage).toBe('高亮保存失败：服务不可用。');
 });
 
 it('starts a new Agent conversation when the second request changes answer scope', async () => {

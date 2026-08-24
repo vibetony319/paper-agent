@@ -91,6 +91,30 @@ it('clears paper-specific workspace data when a different paper opens', () => {
   });
 });
 
+it('adds a persisted highlight and clears only the temporary selection', () => {
+  const selection = {
+    draft: {
+      quote: '论文片段', page_number: 2,
+      rects: [{ order: 0, x0: 0.1, y0: 0.2, x1: 0.5, y1: 0.3 }],
+    },
+    toolbarRect: { left: 20, top: 30, width: 50, height: 10 } as DOMRect,
+  };
+  const state = { ...readyWorkspace({ paperId: 'paper-a', conversationId: 'chat-a' }), selection };
+
+  const next = workspaceReducer(state, {
+    type: 'highlight/created',
+    paperId: 'paper-a',
+    loadRevision: 0,
+    highlight: {
+      id: 'highlight-a', color: 'yellow',
+      anchor: { id: 'anchor-a', element_id: null, ...selection.draft },
+    },
+  });
+
+  expect(next.selection).toBeNull();
+  expect(next.highlights.map(({ id }) => id)).toEqual(['highlight-a']);
+});
+
 it('ignores an Agent response that belongs to a paper that is no longer open', () => {
   const switchedWorkspace = workspaceReducer(
     readyWorkspace({ paperId: 'paper-a', conversationId: 'chat-a' }),

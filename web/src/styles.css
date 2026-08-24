@@ -584,6 +584,75 @@ a:focus-visible {
   background: rgb(0 127 131 / 28%);
 }
 
+.annotation-overlay {
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+  z-index: 2;
+}
+
+.annotation-overlay__highlight-group {
+  inset: 0;
+  position: absolute;
+}
+
+.annotation-overlay__highlight {
+  background: rgb(245 217 76 / 42%);
+  border: 0;
+  border-radius: 0;
+  cursor: pointer;
+  min-height: 0;
+  padding: 0;
+  pointer-events: auto;
+  position: absolute;
+}
+
+.annotation-overlay__highlight:focus-visible {
+  outline: 3px solid var(--teal);
+  outline-offset: 1px;
+}
+
+.annotation-overlay__menu {
+  background: var(--paper);
+  border: 1px solid var(--line-strong);
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.25rem;
+  pointer-events: auto;
+  position: absolute;
+  right: 0.3rem;
+  top: 0.3rem;
+  z-index: 3;
+}
+
+.selection-toolbar {
+  align-items: center;
+  background: var(--ink-950);
+  border: 1px solid var(--ink-800);
+  box-shadow: 0 0.45rem 1.2rem rgb(16 29 43 / 28%);
+  display: flex;
+  gap: 0.25rem;
+  max-width: calc(100vw - 1.5rem);
+  padding: 0.28rem;
+  position: fixed;
+  z-index: 10;
+}
+
+.selection-toolbar button {
+  background: transparent;
+  border-color: transparent;
+  color: #f5f7f7;
+  font-size: 0.74rem;
+  padding: 0.42rem 0.48rem;
+  white-space: nowrap;
+}
+
+.selection-toolbar button:hover:not(:disabled) {
+  background: var(--ink-800);
+  border-color: #4b6371;
+  color: #fff;
+}
+
 .pdf-page-view__no-text {
   color: var(--ink-600);
   font-size: 0.75rem;

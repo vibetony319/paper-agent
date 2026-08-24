@@ -164,3 +164,42 @@ it('clears an active evidence target through the workspace callback', () => {
   fireEvent.click(screen.getByRole('button', { name: '清除证据定位' }));
   expect(onSourceCleared).toHaveBeenCalledOnce();
 });
+
+it('converts a pointer selection from the PDF text layer into an anchor draft', async () => {
+  const onSelectionSet = vi.fn();
+  render(
+    <PdfReader
+      paperId="paper-a"
+      pages={[manyPages[0]]}
+      activeSource={null}
+      onSourceCleared={vi.fn()}
+      onSelectionSet={onSelectionSet}
+    />,
+  );
+
+  const textLayer = await screen.findByTestId('pdf-text-layer-1');
+  const text = document.createTextNode('selected text');
+  textLayer.append(text);
+  const surface = textLayer.closest('.pdf-page-view__surface') as HTMLElement;
+  Object.defineProperty(surface, 'getBoundingClientRect', {
+    configurable: true,
+    value: () => ({ left: 100, top: 200, right: 700, bottom: 1000, width: 600, height: 800 }),
+  });
+  const selection = {
+    anchorNode: text,
+    focusNode: text,
+    rangeCount: 1,
+    getRangeAt: () => ({
+      getClientRects: () => [{ left: 160, top: 280, right: 460, bottom: 300, width: 300, height: 20 }],
+    }),
+    toString: () => 'selected text',
+  } as unknown as Selection;
+  vi.spyOn(window, 'getSelection').mockReturnValue(selection);
+
+  fireEvent.pointerUp(textLayer);
+
+  expect(onSelectionSet).toHaveBeenCalledWith({
+    quote: 'selected text', page_number: 1,
+    rects: [{ order: 0, x0: 0.1, y0: 0.1, x1: 0.6, y1: 0.125 }],
+  }, expect.objectContaining({ left: 160, top: 280 }));
+});

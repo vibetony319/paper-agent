@@ -1,17 +1,27 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 
 import { paperApi } from '../api/client';
-import type { Page } from '../api/types';
+import type { Highlight, Page, TextAnchorDraft } from '../api/types';
 import { getDocument } from '../pdfjs';
-import type { SourceTarget } from '../workspace/types';
+import type { SourceTarget, WorkspaceState } from '../workspace/types';
 import { PdfPageView } from './PdfPageView';
+import { selectionToAnchorDraft } from './pdfSelection';
+import { SelectionToolbar, type SelectionToolbarAction } from './SelectionToolbar';
 
 type PdfReaderProps = {
   paperId: string;
   pages: Page[];
   activeSource: SourceTarget | null;
   onSourceCleared: () => void;
+  highlights?: Highlight[];
+  selection?: WorkspaceState['selection'];
+  selectionErrorMessage?: string | null;
+  onSelectionSet?: (draft: TextAnchorDraft, toolbarRect: DOMRect) => void;
+  onSelectionClear?: () => void;
+  onCreateHighlight?: () => void;
+  onDeleteHighlight?: (highlightId: string) => void;
+  onSelectionAction?: (action: Exclude<SelectionToolbarAction, 'highlight'>, draft: TextAnchorDraft) => void;
 };
 
 type ReaderStatus = 'loading' | 'ready' | 'error';
@@ -30,15 +40,54 @@ function addOverscan(pageNumbers: number[], activePages: Set<number>): Set<numbe
   return result;
 }
 
-export function PdfReader({ paperId, pages, activeSource, onSourceCleared }: PdfReaderProps) {
+export function PdfReader({
+  paperId,
+  pages,
+  activeSource,
+  onSourceCleared,
+  highlights = [],
+  selection = null,
+  selectionErrorMessage = null,
+  onSelectionSet,
+  onSelectionClear,
+  onCreateHighlight,
+  onDeleteHighlight,
+  onSelectionAction,
+}: PdfReaderProps) {
   const orderedPages = useMemo(() => sortedPages(pages), [pages]);
   const pageNumbers = useMemo(() => orderedPages.map((page) => page.number), [orderedPages]);
   const pageSignature = pageNumbers.join(',');
-  const [document, setDocument] = useState<PDFDocumentProxy | null>(null);
+  const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null);
   const [status, setStatus] = useState<ReaderStatus>('loading');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [visiblePages, setVisiblePages] = useState<Set<number>>(() => new Set(pageNumbers.slice(0, 1)));
   const pageShells = useRef(new Map<number, HTMLDivElement>());
+  const readerRef = useRef<HTMLElement>(null);
+
+  const clearTemporarySelection = useCallback(() => {
+    window.getSelection()?.removeAllRanges();
+    onSelectionClear?.();
+    readerRef.current?.focus();
+  }, [onSelectionClear]);
+
+  const captureSelection = useCallback(() => {
+    const reader = readerRef.current;
+    const browserSelection = window.getSelection();
+    if (reader === null) return;
+    if (browserSelection === null || browserSelection.rangeCount === 0) {
+      onSelectionClear?.();
+      return;
+    }
+    const result = selectionToAnchorDraft(browserSelection, reader);
+    if (result.ok) onSelectionSet?.(result.draft, result.toolbarRect);
+    else onSelectionClear?.();
+  }, [onSelectionClear, onSelectionSet]);
+
+  useEffect(() => {
+    const onSelectionChange = () => captureSelection();
+    document.addEventListener('selectionchange', onSelectionChange);
+    return () => document.removeEventListener('selectionchange', onSelectionChange);
+  }, [captureSelection]);
 
   useEffect(() => {
     setVisiblePages(new Set(pageNumbers.slice(0, 1)));
@@ -46,7 +95,7 @@ export function PdfReader({ paperId, pages, activeSource, onSourceCleared }: Pdf
 
   useEffect(() => {
     if (pages.length === 0) {
-      setDocument(null);
+      setPdfDocument(null);
       setStatus('ready');
       setErrorMessage(null);
       return undefined;
@@ -54,14 +103,14 @@ export function PdfReader({ paperId, pages, activeSource, onSourceCleared }: Pdf
 
     let mounted = true;
     const loadingTask = getDocument({ url: paperApi.getSourceUrl(paperId) });
-    setDocument(null);
+    setPdfDocument(null);
     setStatus('loading');
     setErrorMessage(null);
 
     void loadingTask.promise.then(
       (pdfDocument) => {
         if (!mounted) return;
-        setDocument(pdfDocument);
+        setPdfDocument(pdfDocument);
         setStatus('ready');
       },
       () => {
@@ -111,7 +160,19 @@ export function PdfReader({ paperId, pages, activeSource, onSourceCleared }: Pdf
   const activePages = addOverscan(pageNumbers, new Set([...visiblePages, ...forcedPages]));
 
   return (
-    <section className="pdf-reader" aria-label="论文阅读器">
+    <section
+      ref={readerRef}
+      className="pdf-reader"
+      aria-label="论文阅读器"
+      tabIndex={-1}
+      onPointerUp={captureSelection}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape' && selection !== null) {
+          event.preventDefault();
+          clearTemporarySelection();
+        }
+      }}
+    >
       <header className="pdf-reader__header">
         <div>
           <p className="pdf-reader__eyebrow">原始论文</p>
@@ -143,6 +204,7 @@ export function PdfReader({ paperId, pages, activeSource, onSourceCleared }: Pdf
           {orderedPages.map((page) => {
             const isActive = activePages.has(page.number);
             const overlays = activeSource?.pageNumber === page.number ? [activeSource] : [];
+            const pageHighlights = highlights.filter(({ anchor }) => anchor.page_number === page.number);
             return (
               <div
                 key={page.id}
@@ -155,14 +217,39 @@ export function PdfReader({ paperId, pages, activeSource, onSourceCleared }: Pdf
                 data-pdf-page-number={page.number}
                 style={{ aspectRatio: `${page.width} / ${page.height}` }}
               >
-                {document !== null && isActive ? (
-                  <PdfPageView document={document} page={page} active overlays={overlays} />
+                {pdfDocument !== null && isActive ? (
+                  <PdfPageView
+                    document={pdfDocument}
+                    page={page}
+                    active
+                    overlays={overlays}
+                    highlights={pageHighlights}
+                    onHighlightNote={(highlight) => onSelectionAction?.('note', {
+                      quote: highlight.anchor.quote,
+                      page_number: highlight.anchor.page_number,
+                      rects: highlight.anchor.rects,
+                      ...(highlight.anchor.element_id === null ? {} : { element_id: highlight.anchor.element_id }),
+                    })}
+                    onHighlightDeleted={(highlightId) => onDeleteHighlight?.(highlightId)}
+                  />
                 ) : null}
               </div>
             );
           })}
         </div>
       )}
+      {selectionErrorMessage !== null ? <p className="pdf-reader__error" role="alert">{selectionErrorMessage}</p> : null}
+      {selection !== null ? (
+        <SelectionToolbar
+          draft={selection.draft}
+          toolbarRect={selection.toolbarRect}
+          onDismiss={clearTemporarySelection}
+          onAction={(action) => {
+            if (action === 'highlight') onCreateHighlight?.();
+            else onSelectionAction?.(action, selection.draft);
+          }}
+        />
+      ) : null}
     </section>
   );
 }
