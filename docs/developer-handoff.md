@@ -1,17 +1,17 @@
 # paper-agent 开发交接
 
-更新时间：2026-08-24 22:50（Asia/Shanghai）
+更新时间：2026-08-24 23:27（Asia/Shanghai）
 
 ## 1. 当前结论
 
-项目正在按“论文阅读工作区升级”总计划推进。Plan 1–3 已全部完成，Plan 4 前端工作区已完成五个任务。
+项目正在按“论文阅读工作区升级”总计划推进。Plan 1–3 已全部完成，Plan 4 前端工作区已完成七个任务。
 
 - 当前分支：`codex/reader-workspace-v2`
-- 最新功能提交：`ad09c0a feat: select and highlight paper text`。
+- 最新功能提交：`0ab07a0 feat: use one model across the reading workspace`。
 - Plan 1“多模型档案与调用追溯”：Task 1–7 全部完成并提交。
 - Plan 2“批注、解释翻译与笔记记忆”：Task 1–7 全部完成并提交。
 - Plan 3“论文及关联数据安全删除”：Task 1–6 全部完成并提交（含文档 `docs/data-model.md`）。
-- Plan 4“中文论文阅读工作区前端”：Task 1–6 已完成并提交。Task 6 增加解释/翻译流式浮层、仅在完成事件后持久化的生成笔记、选区旁手写笔记、中文笔记筛选与编辑/复制/删除，并让 annotations bundle 返回 anchors 以便刷新后定位无高亮笔记。
+- Plan 4“中文论文阅读工作区前端”：Task 1–7 已完成并提交。Task 7 将阅读区改为可调整的双栏，小屏为保留状态的论文/工具切换；右侧固定为论文助手、知识图谱、笔记三 tab，聊天框固定在其下。聊天、图谱构建及既有选区辅助统一使用聊天框当前模型，响应和图谱构建均可显示持久模型快照。
 - Plan 5“开发者文档与整体验收”尚未开始。
 
 接手规则：当前所有工作均已提交，工作树干净；仍不要 reset、checkout、clean 或覆盖工作区。`AGENTS.md` 是环境文件，禁止暂存。
@@ -61,10 +61,11 @@
 | Plan 4 Task 4 连续 PDF、虚拟化与 TextLayer | `a9b88ae feat: render selectable continuous pdf pages` | 已提交 |
 | Plan 4 Task 5 浏览器选区、高亮与覆盖层 | `ad09c0a feat: select and highlight paper text` | 已提交 |
 | Plan 4 Task 6 解释、翻译与锚定笔记 | `100c231 feat: explain selections into anchored notes` | 已提交 |
+| Plan 4 Task 7 统一当前模型、右侧工作台与可调整双栏 | `0ab07a0 feat: use one model across the reading workspace` | 已提交 |
 
 ## 4. 当前未提交内容
 
-Task 5 的生产代码、测试和最小行为样式已提交。仅三个未跟踪文件：`AGENTS.md`（环境提供，禁止暂存）、`CONTRIBUTING.md`、`docs/README.md`（指南与导航，历史上一直未跟踪，保持原样，是否纳入版本库留待 Plan 5 决定）。`.superpowers/sdd/` 下的任务报告是本地执行记录，不纳入提交。
+Task 7 的生产代码、测试和最小结构样式已提交。仅三个未跟踪文件：`AGENTS.md`（环境提供，禁止暂存）、`CONTRIBUTING.md`、`docs/README.md`（指南与导航，历史上一直未跟踪，保持原样，是否纳入版本库留待 Plan 5 决定）。`.superpowers/sdd/` 下的任务报告是本地执行记录，不纳入提交。
 
 ## 5. 关键裁决与偏离
 
@@ -80,7 +81,10 @@ Task 5 的生产代码、测试和最小行为样式已提交。仅三个未跟�
 - `clear_api_key` 是前端便捷字段，客户端翻译为 `api_key: null` 发送，请求体不出现 `clear_api_key`。
 - Task 5 的页面所有权 DOM 契约为 `[data-pdf-page]`，坐标归一化基准为 `.pdf-page-view__surface`；计划中的旧 `.pdf-page__surface` 不再使用。批注使用与 document/graph/notes 同一 abort signal 和 generation guard 独立加载，未替换既有 notes 请求路径。
 - `GET /api/papers/{paper_id}/annotations` 现以可选的 additive `anchors` 字段返回所有文本锚点；前端在新旧服务端响应间兼容空 anchors，并将矩形并集统一转换为 `SourceTarget`。这让手写或生成、但未创建高亮的笔记在刷新后仍可显示原文并定位。
-- Task 6 只启用选区解释、翻译和记笔记；无当前模型时前两项保持禁用并给出中文提示，`问助手` 仍明确禁用，等待 Task 7 聊天框。
+- Task 7 的 `GraphBuildInput` 与完整 `AskAgentInput` 均强制 `model_profile_id` 和 `request_id`。工作区在每个聊天或图谱构建请求内部使用 `crypto.randomUUID()`，因此不再发送旧的空 POST body。
+- 当前模型选择器只存在于固定 `ChatComposer`。切换模型不会重置同一回答范围下的会话；聊天、图谱构建和选区解释/翻译均使用这一选择。无模型时发送、两类图谱构建和选区辅助均禁用并给出中文提示。
+- `问助手` 将当前 `TextAnchorDraft` 作为可移除附件写入聊天框并聚焦，不自动发送；成功后清除附件，失败保留以供重试。Agent 消息显示其不可变模型徽章，笔记引用与论文引用分开并可通过持久 anchor 或元素来源定位。
+- `ResizableSplit` 默认 62%，限制 45%–78%，持久化键为 `paper-agent:reader-split`；键盘左右键每次调整 2%。小于 880px 时显示论文/工具切换而不卸载任一子树。
 
 ## 6. 最新验证证据
 
@@ -106,18 +110,18 @@ npx tsc --noEmit --project tsconfig.app.json
 - Plan 4 Task 4：聚焦测试 `npm test -- src/pdfjs.test.ts src/components/PdfPageView.test.tsx src/components/PdfReader.test.tsx` 为 `13 passed`（3 个测试文件）；完整前端套件 `npm test` 为 `149 passed`（16 个测试文件）；`npm run build` 通过。构建输出仅有 Vite 对 PDF.js 主包大于 500 kB 的提示，没有构建或类型错误。
 - Plan 4 Task 5：聚焦测试 `npm test -- src/components/pdfSelection.test.ts src/components/SelectionToolbar.test.tsx src/components/AnnotationOverlay.test.tsx src/components/PdfReader.test.tsx src/workspace` 为 `52 passed`（6 个测试文件）；完整前端套件 `npm test` 为 `160 passed`（19 个测试文件）；`npm run build` 通过。构建输出仅有 Vite 对 PDF.js 主包大于 500 kB 的提示，没有构建或类型错误。
 - Plan 4 Task 6：后端 `tests/integration/test_annotations_api.py` 为 `6 passed`；聚焦前端 `npm test -- src/components/InlineAssistantPopover.test.tsx src/components/NotesPanel.test.tsx src/workspace` 为 `45 passed`（4 个测试文件）；完整前端套件为 `168 passed`（21 个测试文件）；`npm run build` 通过。构建保留既有 PDF.js 大于 500 kB 提示。
+- Plan 4 Task 7：聚焦前端 `npm test -- src/api/client.test.ts src/components/ChatComposer.test.tsx src/components/ResizableSplit.test.tsx src/components/WorkspaceShell.test.tsx src/components/GraphPanel.test.tsx src/workspace` 为 `85 passed`（7 个测试文件）；完整前端套件 `npm test` 为 `175 passed`（23 个测试文件）；`npm run build` 通过。构建保留既有 PDF.js 大于 500 kB 提示。
 
 ## 7. 准确的接手步骤
 
 1. 确认位于 `codex/reader-workspace-v2`，并核对第 4 节所列的三个未跟踪环境/指南文件保持原样。
-2. 从 Plan 4 Task 7 继续：右侧工作台三 tab、固定聊天框统一当前模型、可调整双栏与小屏切换；不要回退 Task 6 的 anchors 合同或将生成笔记写入主聊天历史。
-3. 依次执行 Task 7–8。Task 8 编辑 CSS 前重读 `$design-taste-frontend`（`C:/Users/Admin/.codex/skills/taste-skill/SKILL.md`）并按其 preflight 记录检查；设计参数固定 `DESIGN_VARIANCE=4`、`MOTION_INTENSITY=3`、`VISUAL_DENSITY=7`。
+2. 从 Plan 4 Task 8 继续：完成视觉系统、中文化、可访问性预检与完整前端验证。不要回退 Task 6 的 anchors 合同，或将生成笔记写入主聊天历史。
+3. Task 8 编辑 CSS 前重读 `$design-taste-frontend`（`C:/Users/Admin/.codex/skills/taste-skill/SKILL.md`）并按其 preflight 记录检查；设计参数固定 `DESIGN_VARIANCE=4`、`MOTION_INTENSITY=3`、`VISUAL_DENSITY=7`。
 4. 每个任务严格按计划的测试命令验证后再提交，提交信息以计划为准。
 5. Plan 4 完成后进入 Plan 5。
 
 ## 8. 下一阶段清单
 
-- Plan 4 Task 7：右侧工作台三 tab、固定聊天框统一当前模型、可调整双栏与小屏切换。
 - Plan 4 Task 8：视觉系统、中文化、可访问性预检、完整前端验证与生产构建。
 - Plan 5：中文 README、架构/ADR、Playwright 桌面与移动端、最终发布证据。
 
