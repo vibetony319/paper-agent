@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, expect, it, vi } from 'vitest';
 
@@ -24,11 +24,13 @@ const paper: PaperSummary = {
   id: 'paper-a', original_filename: 'paper.pdf', status: 'completed', stage0_status: 'completed', stage1_status: 'completed', stage2_status: 'completed', stage3_status: null, error: null,
 };
 
+const paperB: PaperSummary = { ...paper, id: 'paper-b', original_filename: 'paper-b.pdf' };
+
 function workspaceFixture() {
   return {
     activePaperId: 'paper-a', loadRevision: 1,
     document: { paper: { id: 'paper-a', original_filename: 'paper.pdf', status: 'completed' as const }, pages: [], sections: [], elements: [], notes: [] },
-    graph: { nodes: [], edges: [] }, notes: [] as Note[], anchors: [] as TextAnchor[], highlights: [], selection: null, activeSource: null, messages: [] as AgentMessage[], errorMessage: null, notesErrorMessage: null,
+    graph: { nodes: [], edges: [] }, notes: [] as Note[], anchors: [] as TextAnchor[], highlights: [], selection: null, activeSource: null, messages: [] as AgentMessage[], exchanges: [] as Array<{ question: string; message: AgentMessage }>, errorMessage: null, notesErrorMessage: null,
     clearActiveSource: vi.fn(), setSelection: vi.fn(), clearSelection: vi.fn(), createHighlight: vi.fn(), deleteHighlight: vi.fn(), runSelectionAssist: vi.fn(), saveNote: vi.fn(),
     selectCitation: vi.fn(), selectGraphEvidenceElement: vi.fn(), selectAnchorSource: vi.fn(), updateNote: vi.fn(), deleteNote: vi.fn(),
     askAgent: vi.fn(), buildCoreGraph: vi.fn(), buildDeepGraph: vi.fn(),
@@ -48,6 +50,22 @@ it('attaches the current selection to the always-mounted composer without sendin
   expect(screen.getByLabelText('向论文助手提问')).toHaveFocus();
 });
 
+it('does not carry a paper A selection attachment into a paper B Agent request', async () => {
+  const user = userEvent.setup();
+  const workspaceA = workspaceFixture();
+  const workspaceB = { ...workspaceFixture(), activePaperId: 'paper-b', document: { ...workspaceA.document, paper: { ...workspaceA.document.paper, id: 'paper-b', original_filename: 'paper-b.pdf' } }, askAgent: vi.fn().mockResolvedValue(null) };
+  const { rerender } = render(<WorkspaceShell paper={paper} workspace={workspaceA as never} onRetryPaperLoading={vi.fn()} onReturnToLibrary={vi.fn()} onOpenModelSettings={vi.fn()} onDeleteRequested={vi.fn()} modelProfiles={[profile]} selectedModelProfileId="qwen" onSelectedModelProfileIdChange={vi.fn()} />);
+
+  await user.click(screen.getByRole('button', { name: '问助手' }));
+  expect(screen.getByLabelText('已附加选区')).toHaveTextContent('选区内容');
+  rerender(<WorkspaceShell paper={paperB} workspace={workspaceB as never} onRetryPaperLoading={vi.fn()} onReturnToLibrary={vi.fn()} onOpenModelSettings={vi.fn()} onDeleteRequested={vi.fn()} modelProfiles={[profile]} selectedModelProfileId="qwen" onSelectedModelProfileIdChange={vi.fn()} />);
+
+  expect(screen.queryByLabelText('已附加选区')).not.toBeInTheDocument();
+  await user.type(screen.getByLabelText('向论文助手提问'), '论文 B 的问题');
+  await user.click(screen.getByRole('button', { name: '发送' }));
+  await waitFor(() => expect(workspaceB.askAgent).toHaveBeenCalledWith('论文 B 的问题', 'paper_only', 'qwen', undefined));
+});
+
 it('keeps the composer mounted while switching all three right-side tabs', async () => {
   const user = userEvent.setup();
   const workspace = workspaceFixture();
@@ -60,19 +78,23 @@ it('keeps the composer mounted while switching all three right-side tabs', async
   expect(screen.getAllByText('当前模型')).toHaveLength(1);
 });
 
-it('shows immutable response model badges and locates persisted note references separately from paper citations', async () => {
+it('shows submitted questions, immutable model badges, and routes paper and note sources separately', async () => {
   const user = userEvent.setup();
   const workspace = workspaceFixture();
   workspace.messages = [{
-    conversation_id: 'conversation-a', message_id: 'message-a', status: 'grounded', paper_answer: '回答', background_explanation: null, citations: [],
+    conversation_id: 'conversation-a', message_id: 'message-a', status: 'grounded', paper_answer: '回答', background_explanation: null, citations: [{ id: 'element-a', kind: 'paragraph', page_number: 2, bbox: { x0: 0.1, y0: 0.2, x1: 0.6, y1: 0.3 } }],
     model: { profile_id: 'qwen', display_name: '本地 Qwen', base_url: 'http://localhost/v1', model_name: 'qwen3', revision: 1 },
     note_references: [{ note_id: 'note-a', note_type: 'manual', page_number: 2, available: true }],
   }];
+  workspace.exchanges = [{ question: '这个回答来自哪里？', message: workspace.messages[0] }];
   workspace.notes = [{ id: 'note-a', body: '笔记', element_id: null, page_number: 2, anchor_ids: ['anchor-a'] }];
   workspace.anchors = [{ id: 'anchor-a', quote: '持久原文', page_number: 2, element_id: null, rects: [{ order: 0, x0: 0.1, y0: 0.2, x1: 0.6, y1: 0.3 }] }];
   render(<WorkspaceShell paper={paper} workspace={workspace as never} onRetryPaperLoading={vi.fn()} onReturnToLibrary={vi.fn()} onOpenModelSettings={vi.fn()} onDeleteRequested={vi.fn()} modelProfiles={[profile]} selectedModelProfileId="qwen" onSelectedModelProfileIdChange={vi.fn()} />);
 
   expect(screen.getAllByText('本地 Qwen')[0]).toBeVisible();
+  expect(screen.getByText('这个回答来自哪里？')).toBeVisible();
+  await user.click(screen.getByRole('button', { name: '论文：第 2 页 paragraph' }));
+  expect(workspace.selectCitation).toHaveBeenCalledWith(expect.objectContaining({ id: 'element-a' }));
   await user.click(screen.getByRole('button', { name: '笔记：第 2 页' }));
   expect(workspace.selectAnchorSource).toHaveBeenCalledWith(expect.objectContaining({ id: 'anchor-a', kind: 'text_anchor' }));
 });

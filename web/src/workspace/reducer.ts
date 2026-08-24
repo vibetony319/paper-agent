@@ -28,6 +28,7 @@ export const initialWorkspaceState: WorkspaceState = {
   conversationId: null,
   conversationMode: null,
   messages: [],
+  exchanges: [],
   errorMessage: null,
   notesErrorMessage: null,
 };
@@ -62,6 +63,7 @@ export type WorkspaceAction =
     loadRevision: number;
     conversationId: string;
     mode: AgentMode;
+    question: string;
     message: AgentMessage;
   }
   | { type: 'notes/created'; paperId: string; loadRevision: number; mutationGeneration?: number; note: Note }
@@ -178,6 +180,7 @@ export function workspaceReducer(
           conversationId: action.conversationId,
           conversationMode: action.mode,
           messages: [...state.messages, action.message],
+          exchanges: [...state.exchanges, { question: action.question, message: action.message }],
           errorMessage: null,
         }
         : state;

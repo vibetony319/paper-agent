@@ -83,6 +83,11 @@ it('uses a fresh current-model payload for graph and Agent calls without resetti
   expect(core).toHaveBeenCalledWith('paper-a', { model_profile_id: 'deepseek', request_id: 'core-request' });
   expect(deep).toHaveBeenCalledWith('paper-a', { model_profile_id: 'deepseek', request_id: 'deep-request' });
   expect(result.current.conversationId).toBe('conversation-a');
+  expect(result.current.messages.map(({ message_id }) => message_id)).toEqual(['message-a', 'message-b']);
+  expect(result.current.exchanges).toEqual([
+    { question: '第一个问题', message: first },
+    { question: '第二个问题', message: second },
+  ]);
 });
 
 it('loads highlights independently from the existing notes request', async () => {

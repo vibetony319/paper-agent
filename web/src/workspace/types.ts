@@ -34,6 +34,12 @@ export type WorkspaceState = {
   conversationId: string | null;
   conversationMode: AgentMode | null;
   messages: AgentMessage[];
+  exchanges: AgentExchange[];
   errorMessage: string | null;
   notesErrorMessage: string | null;
+};
+
+export type AgentExchange = {
+  question: string;
+  message: AgentMessage;
 };

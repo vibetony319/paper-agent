@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, expect, it, vi } from 'vitest';
 
@@ -28,13 +28,25 @@ const response: AgentMessage = {
   paper_answer: '回答', background_explanation: null, citations: [],
 };
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((nextResolve, nextReject) => {
+    resolve = nextResolve;
+    reject = nextReject;
+  });
+  return { promise, resolve, reject };
+}
+
+const firstAttachment = { draft: selection, token: 'attachment-a' };
+
 afterEach(cleanup);
 
 it('sends the selected model and attached selection, then clears the attachment only after success', async () => {
   const user = userEvent.setup();
   const askAgent = vi.fn().mockResolvedValue(response);
   const onAttachmentClear = vi.fn();
-  render(<ChatComposer paperId="paper-a" profiles={profiles} selectedModelProfileId="qwen" onSelectedModelProfileIdChange={vi.fn()} askAgent={askAgent} attachment={selection} onAttachmentClear={onAttachmentClear} />);
+  render(<ChatComposer paperId="paper-a" profiles={profiles} selectedModelProfileId="qwen" onSelectedModelProfileIdChange={vi.fn()} askAgent={askAgent} attachment={firstAttachment} onAttachmentClear={onAttachmentClear} />);
 
   expect(screen.getByLabelText('已附加选区')).toHaveTextContent('选择的论文原文');
   await user.type(screen.getByLabelText('向论文助手提问'), '解释这一段');
@@ -42,21 +54,97 @@ it('sends the selected model and attached selection, then clears the attachment 
 
   await waitFor(() => expect(askAgent).toHaveBeenCalledWith('解释这一段', 'paper_only', 'qwen', selection));
   expect(onAttachmentClear).toHaveBeenCalledOnce();
+  expect(onAttachmentClear).toHaveBeenCalledWith('attachment-a');
 });
 
-it('keeps the selection attachment for retry when sending fails and allows removing it', async () => {
+it('keeps the question and selection attachment for retry when sending fails and allows removing it', async () => {
   const user = userEvent.setup();
   const askAgent = vi.fn().mockResolvedValue(null);
   const onAttachmentClear = vi.fn();
-  render(<ChatComposer paperId="paper-a" profiles={profiles} selectedModelProfileId="qwen" onSelectedModelProfileIdChange={vi.fn()} askAgent={askAgent} attachment={selection} onAttachmentClear={onAttachmentClear} />);
+  render(<ChatComposer paperId="paper-a" profiles={profiles} selectedModelProfileId="qwen" onSelectedModelProfileIdChange={vi.fn()} askAgent={askAgent} attachment={firstAttachment} onAttachmentClear={onAttachmentClear} />);
 
   await user.type(screen.getByLabelText('向论文助手提问'), '解释这一段');
   await user.click(screen.getByRole('button', { name: '发送' }));
   expect(await screen.findByRole('alert')).toHaveTextContent('发送失败，请重试。');
   expect(onAttachmentClear).not.toHaveBeenCalled();
+  expect(screen.getByLabelText('向论文助手提问')).toHaveValue('解释这一段');
 
   await user.click(screen.getByRole('button', { name: '移除选区附件' }));
-  expect(onAttachmentClear).toHaveBeenCalledOnce();
+  expect(onAttachmentClear).toHaveBeenCalledWith('attachment-a');
+});
+
+it('does not clear a newer selection attachment when an earlier send succeeds', async () => {
+  const user = userEvent.setup();
+  const pendingRequest = deferred<AgentMessage | null>();
+  const askAgent = vi.fn().mockReturnValue(pendingRequest.promise);
+  const onAttachmentClear = vi.fn();
+  const newerAttachment = {
+    draft: { ...selection, quote: '新选择的论文原文' },
+    token: 'attachment-b',
+  };
+  const { rerender } = render(<ChatComposer paperId="paper-a" profiles={profiles} selectedModelProfileId="qwen" onSelectedModelProfileIdChange={vi.fn()} askAgent={askAgent} attachment={firstAttachment} onAttachmentClear={onAttachmentClear} />);
+
+  await user.type(screen.getByLabelText('向论文助手提问'), '解释旧选区');
+  await user.click(screen.getByRole('button', { name: '发送' }));
+  expect(screen.getByRole('button', { name: '发送中…' })).toBeDisabled();
+  rerender(<ChatComposer paperId="paper-a" profiles={profiles} selectedModelProfileId="qwen" onSelectedModelProfileIdChange={vi.fn()} askAgent={askAgent} attachment={newerAttachment} onAttachmentClear={onAttachmentClear} />);
+
+  await act(async () => { pendingRequest.resolve(response); await pendingRequest.promise; });
+
+  expect(screen.getByLabelText('已附加选区')).toHaveTextContent('新选择的论文原文');
+  expect(onAttachmentClear).not.toHaveBeenCalled();
+});
+
+it('ignores a completed request from paper A after switching to paper B', async () => {
+  const user = userEvent.setup();
+  const pendingRequest = deferred<AgentMessage | null>();
+  const askAgent = vi.fn().mockReturnValue(pendingRequest.promise);
+  const onAttachmentClear = vi.fn();
+  const paperBAttachment = { draft: { ...selection, quote: '论文 B 选区' }, token: 'attachment-b' };
+  const { rerender } = render(<ChatComposer paperId="paper-a" profiles={profiles} selectedModelProfileId="qwen" onSelectedModelProfileIdChange={vi.fn()} askAgent={askAgent} attachment={firstAttachment} onAttachmentClear={onAttachmentClear} />);
+
+  await user.type(screen.getByLabelText('向论文助手提问'), '论文 A 问题');
+  await user.click(screen.getByRole('button', { name: '发送' }));
+  rerender(<ChatComposer paperId="paper-b" profiles={profiles} selectedModelProfileId="qwen" onSelectedModelProfileIdChange={vi.fn()} askAgent={askAgent} attachment={paperBAttachment} onAttachmentClear={onAttachmentClear} focusRequest={1} />);
+  await user.type(screen.getByLabelText('向论文助手提问'), '论文 B 草稿');
+
+  await act(async () => { pendingRequest.resolve(response); await pendingRequest.promise; });
+
+  expect(screen.getByLabelText('向论文助手提问')).toHaveValue('论文 B 草稿');
+  expect(screen.getByLabelText('已附加选区')).toHaveTextContent('论文 B 选区');
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  expect(onAttachmentClear).not.toHaveBeenCalled();
+  expect(screen.getByLabelText('向论文助手提问')).toHaveFocus();
+});
+
+it('ignores a rejected request from paper A after switching to paper B', async () => {
+  const user = userEvent.setup();
+  const pendingRequest = deferred<AgentMessage | null>();
+  const askAgent = vi.fn().mockReturnValue(pendingRequest.promise);
+  const { rerender } = render(<ChatComposer paperId="paper-a" profiles={profiles} selectedModelProfileId="qwen" onSelectedModelProfileIdChange={vi.fn()} askAgent={askAgent} attachment={firstAttachment} onAttachmentClear={vi.fn()} />);
+
+  await user.type(screen.getByLabelText('向论文助手提问'), '论文 A 问题');
+  await user.click(screen.getByRole('button', { name: '发送' }));
+  rerender(<ChatComposer paperId="paper-b" profiles={profiles} selectedModelProfileId="qwen" onSelectedModelProfileIdChange={vi.fn()} askAgent={askAgent} attachment={null} onAttachmentClear={vi.fn()} />);
+  await user.type(screen.getByLabelText('向论文助手提问'), '论文 B 草稿');
+
+  await act(async () => { pendingRequest.reject(new Error('请求失败')); try { await pendingRequest.promise; } catch {} });
+
+  expect(screen.getByLabelText('向论文助手提问')).toHaveValue('论文 B 草稿');
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+});
+
+it('does not start a duplicate send while the current request is pending', async () => {
+  const user = userEvent.setup();
+  const pendingRequest = deferred<AgentMessage | null>();
+  const askAgent = vi.fn().mockReturnValue(pendingRequest.promise);
+  render(<ChatComposer paperId="paper-a" profiles={profiles} selectedModelProfileId="qwen" onSelectedModelProfileIdChange={vi.fn()} askAgent={askAgent} attachment={null} onAttachmentClear={vi.fn()} />);
+
+  await user.type(screen.getByLabelText('向论文助手提问'), '不要重复发送');
+  await user.click(screen.getByRole('button', { name: '发送' }));
+  await user.click(screen.getByRole('button', { name: '发送中…' }));
+
+  expect(askAgent).toHaveBeenCalledOnce();
 });
 
 it('uses the composer as the single model boundary and explains why sending is unavailable without one', async () => {

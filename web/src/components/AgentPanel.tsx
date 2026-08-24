@@ -1,8 +1,9 @@
 import type { AgentMessage, Citation } from '../api/types';
+import type { AgentExchange } from '../workspace/types';
 
 export interface AgentPanelProps {
   paperId: string | null;
-  messages: AgentMessage[];
+  exchanges: AgentExchange[];
   onSelectCitation: (citation: Citation) => void;
   onSelectNoteReference?: (noteId: string) => void;
 }
@@ -11,7 +12,7 @@ function statusLabel(status: AgentMessage['status']): string {
   return status === 'grounded' ? '已基于论文证据回答' : '论文证据不足';
 }
 
-export function AgentPanel({ paperId, messages, onSelectCitation, onSelectNoteReference }: AgentPanelProps) {
+export function AgentPanel({ paperId, exchanges, onSelectCitation, onSelectNoteReference }: AgentPanelProps) {
   return (
     <section className="agent-panel" aria-labelledby="agent-panel-title">
       <header className="agent-panel__header">
@@ -19,8 +20,9 @@ export function AgentPanel({ paperId, messages, onSelectCitation, onSelectNoteRe
         <p className="agent-panel__quiet-status">{paperId === null ? '请选择论文。' : '在下方输入问题。'}</p>
       </header>
       <div className="agent-panel__conversation" aria-live="polite">
-        {messages.length === 0 ? <p className="agent-panel__empty">回答会显示在这里。</p> : messages.map((message) => (
+        {exchanges.length === 0 ? <p className="agent-panel__empty">回答会显示在这里。</p> : exchanges.map(({ question, message }) => (
           <article className="agent-panel__exchange" key={message.message_id}>
+            <p className="agent-panel__question">{question}</p>
             <div className="agent-panel__message-meta">
               <p className={`agent-panel__status agent-panel__status--${message.status}`}>{statusLabel(message.status)}</p>
               <span className="agent-panel__model-badge">{message.model?.display_name ?? '旧版本模型记录不可用'}</span>

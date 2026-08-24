@@ -3,6 +3,11 @@ import { useEffect, useId, useRef, useState } from 'react';
 import type { AgentMessage, AgentMode, ModelProfile, TextAnchorDraft } from '../api/types';
 import { ModelSelector } from './ModelSelector';
 
+export type ComposerAttachment = {
+  draft: TextAnchorDraft;
+  token: string;
+};
+
 export interface ChatComposerProps {
   paperId: string | null;
   profiles: ModelProfile[];
@@ -14,8 +19,8 @@ export interface ChatComposerProps {
     modelProfileId: string,
     selection?: TextAnchorDraft,
   ) => Promise<AgentMessage | null>;
-  attachment: TextAnchorDraft | null;
-  onAttachmentClear: () => void;
+  attachment: ComposerAttachment | null;
+  onAttachmentClear: (token: string) => void;
   focusRequest?: number;
 }
 
@@ -35,12 +40,19 @@ export function ChatComposer({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const inputId = useId();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const currentPaperId = useRef(paperId);
+  const currentAttachment = useRef(attachment);
+  const requestVersion = useRef(0);
+
+  currentPaperId.current = paperId;
+  currentAttachment.current = attachment;
 
   useEffect(() => {
     if (focusRequest > 0) textareaRef.current?.focus();
   }, [focusRequest]);
 
   useEffect(() => {
+    requestVersion.current += 1;
     setContent('');
     setMode('paper_only');
     setPending(false);
@@ -51,20 +63,30 @@ export function ChatComposer({
     event.preventDefault();
     const question = content.trim();
     if (!question || pending || paperId === null || selectedModelProfileId === null) return;
+    const requestId = ++requestVersion.current;
+    const requestPaperId = paperId;
+    const sentAttachment = attachment;
+    const isCurrentRequest = () => (
+      requestVersion.current === requestId && currentPaperId.current === requestPaperId
+    );
     setPending(true);
     setErrorMessage(null);
     try {
-      const response = await askAgent(question, mode, selectedModelProfileId, attachment ?? undefined);
+      const response = await askAgent(question, mode, selectedModelProfileId, sentAttachment?.draft);
+      if (!isCurrentRequest()) return;
       if (response === null) {
         setErrorMessage('发送失败，请重试。');
         return;
       }
       setContent('');
-      if (attachment !== null) onAttachmentClear();
+      if (sentAttachment !== null && currentAttachment.current?.token === sentAttachment.token) {
+        onAttachmentClear(sentAttachment.token);
+      }
     } catch {
+      if (!isCurrentRequest()) return;
       setErrorMessage('发送失败，请重试。');
     } finally {
-      setPending(false);
+      if (isCurrentRequest()) setPending(false);
     }
   };
 
@@ -92,8 +114,8 @@ export function ChatComposer({
       </div>
       {attachment !== null && (
         <div className="chat-composer__attachment" aria-label="已附加选区">
-          <span>选区：{attachment.quote}</span>
-          <button type="button" onClick={onAttachmentClear} aria-label="移除选区附件">移除</button>
+          <span>选区：{attachment.draft.quote}</span>
+          <button type="button" onClick={() => onAttachmentClear(attachment.token)} aria-label="移除选区附件">移除</button>
         </div>
       )}
       <label htmlFor={inputId}>向论文助手提问</label>

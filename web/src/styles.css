@@ -298,7 +298,11 @@ a:focus-visible {
 }
 
 .workspace-shell {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100dvh;
   min-width: 0;
+  overflow: hidden;
 }
 
 .workspace-topbar {
@@ -390,13 +394,17 @@ a:focus-visible {
 .resizable-split {
   display: grid;
   grid-template-columns: minmax(0, var(--reader-split, 62%)) 0.72rem minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
   min-width: 0;
   overflow-x: clip;
 }
 
 .resizable-split__paper,
 .resizable-split__tools {
+  min-height: 0;
   min-width: 0;
+  overflow-y: auto;
 }
 
 .resizable-split__separator {
@@ -424,6 +432,8 @@ a:focus-visible {
 }
 
 .workspace-pane {
+  height: 100%;
+  min-height: 0;
   min-width: 0;
 }
 
@@ -838,7 +848,8 @@ a:focus-visible {
   color: var(--ink-900);
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
-  min-height: calc(100dvh - 4.4rem);
+  height: 100%;
+  min-height: 0;
   min-width: 0;
 }
 
@@ -1121,6 +1132,7 @@ a:focus-visible {
   .resizable-split {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
   }
 
   .resizable-split__switches {
@@ -1140,9 +1152,6 @@ a:focus-visible {
     border-right: 0;
   }
 
-  .right-panel {
-    min-height: calc(100dvh - 4.4rem - 2.8rem);
-  }
 }
 
 @media (max-width: 43.75rem) {

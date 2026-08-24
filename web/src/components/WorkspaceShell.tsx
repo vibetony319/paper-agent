@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 
-import type { ModelProfile, PaperSummary, TextAnchorDraft } from '../api/types';
+import type { ModelProfile, PaperSummary } from '../api/types';
 import type { usePaperWorkspace } from '../workspace/usePaperWorkspace';
 import { paperStageSummary } from './PaperLibrary';
 import { PdfReader } from './PdfReader';
 import { ResizableSplit } from './ResizableSplit';
 import { RightPanel } from './RightPanel';
+import type { ComposerAttachment } from './ChatComposer';
 import { toAnchorSourceTarget } from '../workspace/sourceTarget';
 
 type PaperWorkspace = ReturnType<typeof usePaperWorkspace>;
@@ -36,8 +37,9 @@ export function WorkspaceShell({
   const [paperActionsOpen, setPaperActionsOpen] = useState(false);
   const paperActionsButtonRef = useRef<HTMLButtonElement>(null);
   const deletePaperItemRef = useRef<HTMLButtonElement>(null);
-  const [composerAttachment, setComposerAttachment] = useState<TextAnchorDraft | null>(null);
+  const [composerAttachment, setComposerAttachment] = useState<(ComposerAttachment & { paperId: string }) | null>(null);
   const [composerFocusRequest, setComposerFocusRequest] = useState(0);
+  const nextComposerAttachmentToken = useRef(0);
   const ownsActivePaper = workspace.activePaperId === paper.id;
   const document = ownsActivePaper ? workspace.document : null;
   const graph = ownsActivePaper ? workspace.graph : null;
@@ -55,6 +57,15 @@ export function WorkspaceShell({
       deletePaperItemRef.current?.focus();
     }
   }, [paperActionsOpen]);
+
+  useEffect(() => {
+    setComposerAttachment(null);
+    setComposerFocusRequest(0);
+  }, [paper.id]);
+
+  const currentComposerAttachment = composerAttachment?.paperId === paper.id
+    ? composerAttachment
+    : null;
 
   return (
     <div className="workspace-shell">
@@ -152,7 +163,12 @@ export function WorkspaceShell({
                 runSelectionAssist={workspace.runSelectionAssist}
                 selectionActions={{
                   ask: (draft) => {
-                    setComposerAttachment(draft);
+                    nextComposerAttachmentToken.current += 1;
+                    setComposerAttachment({
+                      paperId: paper.id,
+                      draft,
+                      token: String(nextComposerAttachmentToken.current),
+                    });
                     setComposerFocusRequest((current) => current + 1);
                   },
                 }}
@@ -167,7 +183,7 @@ export function WorkspaceShell({
               <RightPanel
                 paperId={paper.id}
                 agent={{
-                  messages: workspace.messages,
+                  exchanges: workspace.exchanges,
                   onSelectCitation: workspace.selectCitation,
                   onSelectNoteReference: (noteId) => {
                     const note = workspace.notes.find((item) => item.id === noteId);
@@ -202,8 +218,10 @@ export function WorkspaceShell({
                   selectedModelProfileId,
                   onSelectedModelProfileIdChange,
                   askAgent: workspace.askAgent,
-                  attachment: composerAttachment,
-                  onAttachmentClear: () => setComposerAttachment(null),
+                  attachment: currentComposerAttachment,
+                  onAttachmentClear: (token) => setComposerAttachment((current) => (
+                    current?.paperId === paper.id && current.token === token ? null : current
+                  )),
                   focusRequest: composerFocusRequest,
                 }}
               />

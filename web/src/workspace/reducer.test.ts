@@ -87,6 +87,7 @@ it('clears paper-specific workspace data when a different paper opens', () => {
     conversationId: null,
     conversationMode: null,
     messages: [],
+    exchanges: [],
     notesErrorMessage: null,
   });
 });
@@ -151,6 +152,7 @@ it('ignores an Agent response that belongs to a paper that is no longer open', (
     loadRevision: 0,
     conversationId: 'chat-a',
     mode: 'paper_only',
+    question: '过期问题。',
     message: {
       conversation_id: 'chat-a',
       message_id: 'message-late',
@@ -187,6 +189,7 @@ it.each([
     loadRevision: 1,
     conversationId: 'stale-chat',
     mode: 'paper_only',
+    question: '过期问题。',
     message: {
       conversation_id: 'stale-chat',
       message_id: 'stale-message',
@@ -251,6 +254,7 @@ it('resets paper-specific state when the same paper opens with a new load revisi
     conversationId: null,
     conversationMode: null,
     messages: [],
+    exchanges: [],
     errorMessage: null,
     notesErrorMessage: null,
   });

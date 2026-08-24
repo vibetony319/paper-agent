@@ -295,6 +295,7 @@ export function usePaperWorkspace(
         loadRevision: requestLoadRevision,
         conversationId: message.conversation_id,
         mode,
+        question: content,
         message,
       });
       return message;

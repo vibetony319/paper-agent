@@ -15,6 +15,8 @@ it('uses a validated stored width, clamps pointer and keyboard adjustments, and 
   render(<ResizableSplit paper={<div>论文内容</div>} tools={<div>工具内容</div>} />);
   const separator = screen.getByRole('separator', { name: '调整论文与工具宽度' });
   const split = screen.getByTestId('resizable-split');
+  expect(screen.getByText('论文内容').parentElement).toHaveClass('resizable-split__paper');
+  expect(screen.getByText('工具内容').parentElement).toHaveClass('resizable-split__tools');
   Object.defineProperty(split, 'getBoundingClientRect', { value: () => ({ left: 0, width: 1000 }) });
 
   expect(split).toHaveStyle({ '--reader-split': '78%' });
