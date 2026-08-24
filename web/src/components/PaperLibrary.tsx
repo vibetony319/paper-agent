@@ -7,6 +7,7 @@ export interface PaperLibraryProps {
   activePaperId: string | null;
   paperUpdate: PaperSummary | null;
   onPaperSelected: (paper: PaperSummary) => void;
+  onPaperDeleteRequested: (paper: PaperSummary) => void;
 }
 
 type Stage = {
@@ -17,26 +18,26 @@ type Stage = {
 function statusLabel(status: ProcessingStatus | null): string {
   switch (status) {
     case 'completed':
-      return 'Ready';
+      return '已完成';
     case 'queued':
-      return 'Pending';
+      return '等待中';
     case 'running':
-      return 'Running';
+      return '处理中';
     case 'partial':
-      return 'Partial';
+      return '部分完成';
     case 'failed':
-      return 'Failed';
+      return '失败';
     case null:
-      return 'Unavailable';
+      return '未开始';
   }
 }
 
 function stagesFor(paper: PaperSummary): Stage[] {
   return [
-    { label: 'Geometry', status: paper.stage0_status },
-    { label: 'Structure', status: paper.stage1_status },
-    { label: 'Core graph', status: paper.stage2_status },
-    { label: 'Deep graph', status: paper.stage3_status },
+    { label: '页面定位', status: paper.stage0_status },
+    { label: '结构解析', status: paper.stage1_status },
+    { label: '核心图谱', status: paper.stage2_status },
+    { label: '深度图谱', status: paper.stage3_status },
   ];
 }
 
@@ -68,7 +69,12 @@ export function paperStageSummary(paper: PaperSummary): string {
     .join(', ');
 }
 
-export function PaperLibrary({ activePaperId, paperUpdate, onPaperSelected }: PaperLibraryProps) {
+export function PaperLibrary({
+  activePaperId,
+  paperUpdate,
+  onPaperSelected,
+  onPaperDeleteRequested,
+}: PaperLibraryProps) {
   const [papers, setPapers] = useState<PaperSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploadingFilename, setUploadingFilename] = useState<string | null>(null);
@@ -88,7 +94,7 @@ export function PaperLibrary({ activePaperId, paperUpdate, onPaperSelected }: Pa
       })
       .catch((error: unknown) => {
         if (active) {
-          setListError(publicError(error, 'Unable to load the paper library.'));
+          setListError(publicError(error, '无法加载论文库。'));
         }
       })
       .finally(() => {
@@ -122,7 +128,7 @@ export function PaperLibrary({ activePaperId, paperUpdate, onPaperSelected }: Pa
       setPapers((current) => mergePapers(current, [paper]));
       onPaperSelected(paper);
     } catch (error) {
-      setUploadError(publicError(error, 'Unable to upload this PDF.'));
+      setUploadError(publicError(error, '无法上传此 PDF。'));
     } finally {
       uploadInFlight.current = false;
       setUploadingFilename(null);
@@ -130,15 +136,15 @@ export function PaperLibrary({ activePaperId, paperUpdate, onPaperSelected }: Pa
   };
 
   return (
-    <aside className="paper-library" aria-label="Paper library">
+    <section className="paper-library" aria-labelledby="paper-library-title">
       <header className="paper-library__header">
-        <p className="paper-library__eyebrow">Local research desk</p>
-        <h2>Paper library</h2>
-        <p>Read source evidence, graph connections, and research notes together.</p>
+        <p className="paper-library__eyebrow">本地研究工作台</p>
+        <h1 id="paper-library-title">论文库</h1>
+        <p>在一个本地阅读视图中查看原始页面、证据关联和研究笔记。</p>
       </header>
 
       <div className="paper-library__upload">
-        <label htmlFor="paper-upload">Upload PDF</label>
+        <label htmlFor="paper-upload">上传 PDF</label>
         <input
           id="paper-upload"
           type="file"
@@ -152,47 +158,60 @@ export function PaperLibrary({ activePaperId, paperUpdate, onPaperSelected }: Pa
             }
           }}
         />
-        <p className="paper-library__upload-help">One PDF can be processed at a time.</p>
+        <p className="paper-library__upload-help">一次处理一篇 PDF。</p>
       </div>
 
       {loading && (
-        <p className="paper-library__status" role="status">Loading paper library…</p>
+        <p className="paper-library__status" role="status">正在加载论文库…</p>
       )}
       {uploadingFilename !== null && (
         <p className="paper-library__status" role="status">
-          Uploading {uploadingFilename}…
+          正在上传 {uploadingFilename}…
         </p>
       )}
       {listError !== null && <p className="paper-library__error" role="alert">{listError}</p>}
       {uploadError !== null && <p className="paper-library__error" role="alert">{uploadError}</p>}
 
       {!loading && listError === null && papers.length === 0 ? (
-        <p className="paper-library__empty">No papers in the library yet.</p>
+        <p className="paper-library__empty">论文库中还没有论文。</p>
       ) : null}
 
       {papers.length > 0 && (
-        <nav className="paper-library__papers" aria-label="Available papers">
+        <nav className="paper-library__papers" aria-label="可用论文">
           {papers.map((paper) => (
-            <button
+            <article
               key={paper.id}
-              type="button"
               className="paper-library__paper"
-              aria-current={activePaperId === paper.id ? 'page' : undefined}
-              onClick={() => onPaperSelected(paper)}
             >
-              <span className="paper-library__filename">{paper.original_filename}</span>
-              <span className="paper-library__stages">
-                {stagesFor(paper).map((stage) => (
-                  <span className="paper-library__stage" key={stage.label}>
-                    <span>{stage.label} </span>
-                    <strong>{statusLabel(stage.status)}</strong>
-                  </span>
-                ))}
-              </span>
-            </button>
+              <button
+                type="button"
+                className="paper-library__open"
+                aria-current={activePaperId === paper.id ? 'page' : undefined}
+                aria-label={`打开 ${paper.original_filename}`}
+                onClick={() => onPaperSelected(paper)}
+              >
+                <span className="paper-library__filename">{paper.original_filename}</span>
+                <span className="paper-library__stages">
+                  {stagesFor(paper).map((stage) => (
+                    <span className="paper-library__stage" key={stage.label}>
+                      <span>{stage.label} </span>
+                      <strong>{statusLabel(stage.status)}</strong>
+                    </span>
+                  ))}
+                </span>
+              </button>
+              <button
+                className="paper-library__delete"
+                type="button"
+                aria-label={`删除 ${paper.original_filename}`}
+                onClick={() => onPaperDeleteRequested(paper)}
+              >
+                删除
+              </button>
+            </article>
           ))}
         </nav>
       )}
-    </aside>
+    </section>
   );
 }

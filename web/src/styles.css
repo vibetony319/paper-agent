@@ -81,23 +81,21 @@ a:focus-visible {
 }
 
 .app-shell {
-  display: grid;
-  grid-template-columns: minmax(15.5rem, 18rem) minmax(0, 1fr);
   min-height: 100dvh;
 }
 
 .paper-library {
-  align-self: start;
+  box-sizing: border-box;
   background: var(--ink-950);
   color: #e7ecef;
   display: flex;
   flex-direction: column;
   gap: 0.9rem;
-  height: 100dvh;
+  margin: 0 auto;
+  max-width: 78rem;
+  min-height: 100dvh;
   overflow-y: auto;
-  padding: 1.1rem 0.9rem;
-  position: sticky;
-  top: 0;
+  padding: 1.5rem clamp(1rem, 4vw, 3rem);
 }
 
 .paper-library__header {
@@ -105,12 +103,12 @@ a:focus-visible {
   padding: 0.2rem 0.15rem 0.9rem;
 }
 
-.paper-library__header h2,
+.paper-library__header h1,
 .paper-library__header p {
   margin: 0;
 }
 
-.paper-library__header h2 {
+.paper-library__header h1 {
   color: #f5f7f7;
   font-size: 1.18rem;
   letter-spacing: -0.015em;
@@ -203,23 +201,35 @@ a:focus-visible {
   border-color: #435766;
   color: #dfe6e9;
   display: grid;
+  gap: 0.45rem;
+  padding: 0.52rem;
+}
+
+.paper-library__open {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  display: grid;
   gap: 0.58rem;
-  padding: 0.68rem;
+  padding: 0.16rem;
   text-align: left;
   width: 100%;
 }
 
-.paper-library__paper:hover:not(:disabled) {
+.paper-library__open:hover:not(:disabled) {
   background: #172b3a;
   border-color: #728793;
   color: #f5f7f7;
 }
 
-.paper-library__paper[aria-current='page'] {
+.paper-library__open[aria-current='page'] {
   background: #1c3240;
-  border-color: var(--teal);
   box-shadow: inset 3px 0 0 var(--teal);
   color: #f7f9f9;
+}
+
+.paper-library__delete {
+  justify-self: start;
 }
 
 .paper-library__filename {
@@ -325,6 +335,56 @@ a:focus-visible {
   line-height: 1.4;
   max-width: 38rem;
   text-align: right;
+}
+
+.workspace-topbar__paper-actions {
+  position: relative;
+}
+
+.workspace-topbar__paper-actions [role='menu'] {
+  background: var(--paper);
+  border: 1px solid var(--line-strong);
+  display: grid;
+  min-width: 7rem;
+  padding: 0.3rem;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.3rem);
+  z-index: 2;
+}
+
+.confirm-delete-dialog {
+  border: 1px solid var(--line-strong);
+  box-shadow: 0 0.8rem 2.4rem rgb(16 29 43 / 28%);
+  color: var(--ink-900);
+  max-width: min(31rem, calc(100vw - 2rem));
+  padding: 1rem;
+}
+
+.confirm-delete-dialog::backdrop {
+  background: rgb(16 29 43 / 38%);
+}
+
+.confirm-delete-dialog h2,
+.confirm-delete-dialog p {
+  margin: 0;
+}
+
+.confirm-delete-dialog p + p {
+  margin-top: 0.7rem;
+}
+
+.confirm-delete-dialog__actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  margin-top: 1rem;
+}
+
+.confirm-delete-dialog__confirm {
+  background: #8f3030;
+  border-color: #8f3030;
+  color: #fff;
 }
 
 .workspace-grid {

@@ -1,3 +1,5 @@
+import { useState, type ReactNode } from 'react';
+
 import type { PaperSummary } from '../api/types';
 import type { usePaperWorkspace } from '../workspace/usePaperWorkspace';
 import { GraphPanel } from './GraphPanel';
@@ -11,13 +13,22 @@ export interface WorkspaceShellProps {
   paper: PaperSummary;
   workspace: PaperWorkspace;
   onRetryPaperLoading: () => void;
+  onReturnToLibrary: () => void;
+  onOpenModelSettings: () => void;
+  onDeleteRequested: (paper: PaperSummary) => void;
+  modelSelector: ReactNode;
 }
 
 export function WorkspaceShell({
   paper,
   workspace,
   onRetryPaperLoading,
+  onReturnToLibrary,
+  onOpenModelSettings,
+  onDeleteRequested,
+  modelSelector,
 }: WorkspaceShellProps) {
+  const [paperActionsOpen, setPaperActionsOpen] = useState(false);
   const ownsActivePaper = workspace.activePaperId === paper.id;
   const document = ownsActivePaper ? workspace.document : null;
   const graph = ownsActivePaper ? workspace.graph : null;
@@ -28,25 +39,49 @@ export function WorkspaceShell({
   return (
     <div className="workspace-shell">
       <header className="workspace-topbar">
+        <button type="button" onClick={onReturnToLibrary}>返回论文库</button>
         <div>
-          <p className="workspace-topbar__label">Active paper</p>
           <h1>{paper.original_filename}</h1>
         </div>
-        <p className="workspace-topbar__summary">{paperStageSummary(paper)}</p>
+        <p className="workspace-topbar__summary">处理状态：{paperStageSummary(paper)}</p>
+        {modelSelector}
+        <button type="button" onClick={onOpenModelSettings}>模型设置</button>
+        <div className="workspace-topbar__paper-actions">
+          <button
+            type="button"
+            aria-haspopup="menu"
+            aria-expanded={paperActionsOpen}
+            onClick={() => setPaperActionsOpen((current) => !current)}
+          >
+            论文操作
+          </button>
+          {paperActionsOpen && <div role="menu" aria-label="论文操作">
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setPaperActionsOpen(false);
+                onDeleteRequested(paper);
+              }}
+            >
+              删除论文
+            </button>
+          </div>}
+        </div>
       </header>
 
       {blockingError !== null ? (
-        <section className="workspace-state workspace-state--error" aria-label="Workspace error">
-          <h2>Paper workspace unavailable</h2>
+        <section className="workspace-state workspace-state--error" aria-label="论文工作区错误">
+          <h2>论文阅读工作区暂不可用</h2>
           <p role="alert">{blockingError}</p>
-          <p>The paper remains available in the library. Retry when processing is ready.</p>
-          <button type="button" onClick={onRetryPaperLoading}>Retry paper loading</button>
+          <p>论文仍在论文库中，可在处理完成后重试。</p>
+          <button type="button" onClick={onRetryPaperLoading}>重试加载论文</button>
         </section>
       ) : document === null || graph === null ? (
-        <section className="workspace-state" aria-label="Workspace loading">
-          <h2>Preparing the research panes</h2>
-          <p role="status">Loading paper workspace…</p>
-          <p>The reader, graph, and research tools will open after the document and graph are ready.</p>
+        <section className="workspace-state" aria-label="论文工作区加载">
+          <h2>正在准备阅读面板</h2>
+          <p role="status">正在加载论文阅读工作区…</p>
+          <p>文档和知识图谱准备完成后，将打开阅读器与研究工具。</p>
         </section>
       ) : (
         <>

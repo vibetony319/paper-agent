@@ -157,12 +157,12 @@ it('loads the paper library and opens an existing paper with readable stage stat
 
   render(<App />);
 
-  expect(screen.getByRole('status')).toHaveTextContent('Loading paper library');
-  const paperButton = await screen.findByRole('button', { name: /routing-paper\.pdf/i });
-  expect(paperButton).toHaveTextContent('Geometry Ready');
-  expect(paperButton).toHaveTextContent('Structure Ready');
-  expect(paperButton).toHaveTextContent('Core graph Pending');
-  expect(paperButton).toHaveTextContent('Deep graph Unavailable');
+  expect(screen.getByRole('status')).toHaveTextContent('正在加载论文库');
+  const paperButton = await screen.findByRole('button', { name: '打开 routing-paper.pdf' });
+  expect(paperButton).toHaveTextContent('页面定位 已完成');
+  expect(paperButton).toHaveTextContent('结构解析 已完成');
+  expect(paperButton).toHaveTextContent('核心图谱 等待中');
+  expect(paperButton).toHaveTextContent('深度图谱 未开始');
 
   await user.click(paperButton);
 
@@ -170,6 +170,86 @@ it('loads the paper library and opens an existing paper with readable stage stat
   expect(screen.getByLabelText('Paper reader')).toBeVisible();
   expect(screen.getByLabelText('Paper graph')).toBeVisible();
   expect(screen.getByRole('complementary', { name: 'Research tools' })).toBeVisible();
+});
+
+it('uses a focused library view and returns there after permanent deletion', async () => {
+  const user = userEvent.setup();
+  const remainingPaper: PaperSummary = {
+    ...readyPaper,
+    id: 'paper-b',
+    original_filename: 'remaining-paper.pdf',
+  };
+  let deleted = false;
+  useReadyWorkspaceHandlers();
+  server.use(
+    http.get('/api/papers', () => HttpResponse.json(
+      deleted ? [remainingPaper] : [readyPaper, remainingPaper],
+    )),
+    http.delete('/api/papers/paper-a', () => {
+      deleted = true;
+      return new HttpResponse(null, { status: 204 });
+    }),
+  );
+
+  render(<App />);
+
+  expect(await screen.findByRole('heading', { name: '论文库' })).toBeVisible();
+  await user.click(screen.getByRole('button', { name: '打开 routing-paper.pdf' }));
+  await user.click(screen.getByRole('button', { name: '论文操作' }));
+  await user.click(screen.getByRole('menuitem', { name: '删除论文' }));
+  expect(screen.getByText('PDF、解析结果、知识图谱、高亮、笔记和对话将被永久删除。')).toBeVisible();
+
+  await user.click(screen.getByRole('button', { name: '确认永久删除' }));
+
+  expect(await screen.findByRole('heading', { name: '论文库' })).toBeVisible();
+  expect(screen.queryByRole('button', { name: '打开 routing-paper.pdf' })).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '打开 remaining-paper.pdf' })).toBeVisible();
+});
+
+it('returns to the focused library without losing its papers', async () => {
+  const user = userEvent.setup();
+  const secondPaper: PaperSummary = {
+    ...readyPaper,
+    id: 'paper-b',
+    original_filename: 'second-paper.pdf',
+  };
+  useReadyWorkspaceHandlers();
+  server.use(http.get('/api/papers', () => HttpResponse.json([readyPaper, secondPaper])));
+
+  render(<App />);
+
+  await user.click(await screen.findByRole('button', { name: '打开 routing-paper.pdf' }));
+  expect(await screen.findByRole('heading', { name: 'routing-paper.pdf', level: 1 })).toBeVisible();
+  await user.click(screen.getByRole('button', { name: '返回论文库' }));
+
+  expect(await screen.findByRole('heading', { name: '论文库' })).toBeVisible();
+  expect(screen.getByRole('button', { name: '打开 routing-paper.pdf' })).toBeVisible();
+  expect(screen.getByRole('button', { name: '打开 second-paper.pdf' })).toBeVisible();
+});
+
+it('opens permanent deletion from a library paper and keeps the reader after a busy conflict', async () => {
+  const user = userEvent.setup();
+  useReadyWorkspaceHandlers();
+  server.use(http.delete('/api/papers/paper-a', () => HttpResponse.json(
+    { code: 'PAPER_BUSY', detail: '论文正在处理中，请稍后重试。' },
+    { status: 409 },
+  )));
+
+  render(<App />);
+
+  await user.click(await screen.findByRole('button', { name: '删除 routing-paper.pdf' }));
+  expect(screen.getByRole('dialog', { name: '删除论文' })).toBeVisible();
+  await user.click(screen.getByRole('button', { name: '取消' }));
+
+  await user.click(screen.getByRole('button', { name: '打开 routing-paper.pdf' }));
+  await screen.findByLabelText('Paper reader');
+  await user.click(screen.getByRole('button', { name: '论文操作' }));
+  await user.click(screen.getByRole('menuitem', { name: '删除论文' }));
+  await user.click(screen.getByRole('button', { name: '确认永久删除' }));
+
+  expect(await screen.findByRole('alert')).toHaveTextContent('论文正在处理中，请稍后重试。');
+  expect(screen.getByRole('heading', { name: 'routing-paper.pdf', level: 1 })).toBeVisible();
+  expect(screen.getByLabelText('Paper reader')).toBeVisible();
 });
 
 it('refreshes the active header and library stages after a successful core graph build', async () => {
@@ -189,29 +269,35 @@ it('refreshes the active header and library stages after a successful core graph
     }],
     edges: [],
   };
+  let listedPaper = unbuiltPaper;
   server.use(
-    http.get('/api/papers', () => HttpResponse.json([unbuiltPaper])),
+    http.get('/api/papers', () => HttpResponse.json([listedPaper])),
     http.get('/api/papers/paper-a/document', () => HttpResponse.json(documentFor(unbuiltPaper))),
     http.get('/api/papers/paper-a/graph', () => HttpResponse.json({ nodes: [], edges: [] })),
     http.get('/api/papers/paper-a/notes', () => HttpResponse.json([])),
-    http.post('/api/papers/paper-a/graph/core', () => HttpResponse.json(builtGraph)),
+    http.post('/api/papers/paper-a/graph/core', () => {
+      listedPaper = builtPaper;
+      return HttpResponse.json(builtGraph);
+    }),
     http.get('/api/papers/paper-a', () => HttpResponse.json(builtPaper)),
   );
 
   render(<App />);
-  const paperButton = await screen.findByRole('button', { name: /routing-paper\.pdf/i });
+  const paperButton = await screen.findByRole('button', { name: '打开 routing-paper.pdf' });
   await user.click(paperButton);
   expect(await screen.findByText('Graph node count: 0')).toBeVisible();
-  expect(screen.getByText(/core graph unavailable/i)).toBeVisible();
-  expect(paperButton).toHaveTextContent('Core graph Unavailable');
+  expect(screen.getByText(/核心图谱 未开始/)).toBeVisible();
+  expect(paperButton).toHaveTextContent('核心图谱 未开始');
 
   await user.click(screen.getByRole('button', { name: 'Build core graph' }));
 
   expect(await screen.findByText('Graph node count: 1')).toBeVisible();
   await waitFor(() => {
-    expect(screen.getByText(/core graph ready/i)).toBeVisible();
-    expect(paperButton).toHaveTextContent('Core graph Ready');
+    expect(screen.getByText(/核心图谱 已完成/)).toBeVisible();
   });
+  await user.click(screen.getByRole('button', { name: '返回论文库' }));
+  expect(await screen.findByRole('button', { name: '打开 routing-paper.pdf' }))
+    .toHaveTextContent('核心图谱 已完成');
 });
 
 it('opens an uploaded paper, inserts it once, and prevents a second in-flight upload', async () => {
@@ -242,31 +328,33 @@ it('opens an uploaded paper, inserts it once, and prevents a second in-flight up
   );
 
   render(<App />);
-  expect(await screen.findByRole('button', { name: /processing-copy\.pdf/i })).toBeVisible();
+  expect(await screen.findByRole('button', { name: '打开 processing-copy.pdf' })).toBeVisible();
 
-  const upload = screen.getByLabelText('Upload PDF');
+  const upload = screen.getByLabelText('上传 PDF');
   await user.upload(upload, new File(['%PDF-1.7'], 'uploaded-paper.pdf', {
     type: 'application/pdf',
   }));
 
   expect(upload).toBeDisabled();
-  expect(screen.getByRole('status')).toHaveTextContent('Uploading uploaded-paper.pdf');
+  expect(screen.getByRole('status')).toHaveTextContent('正在上传 uploaded-paper.pdf');
   expect(releaseUpload).toBeTypeOf('function');
   releaseUpload?.();
 
   expect(await screen.findByRole('heading', { name: 'uploaded-paper.pdf', level: 1 })).toBeVisible();
-  expect(screen.getAllByRole('button', { name: /uploaded-paper\.pdf/i })).toHaveLength(1);
-  expect(screen.queryByRole('button', { name: /processing-copy\.pdf/i })).not.toBeInTheDocument();
   expect(await screen.findByLabelText('Paper reader')).toBeVisible();
   expect(screen.getByLabelText('Paper graph')).toBeVisible();
+
+  await user.click(screen.getByRole('button', { name: '返回论文库' }));
+  expect(await screen.findByRole('button', { name: '打开 uploaded-paper.pdf' })).toBeVisible();
+  expect(screen.queryByRole('button', { name: '打开 processing-copy.pdf' })).not.toBeInTheDocument();
 });
 
 it('shows an accessible empty library and workbench state', async () => {
   server.use(http.get('/api/papers', () => HttpResponse.json([])));
   render(<App />);
 
-  expect(await screen.findByText('No papers in the library yet.')).toBeVisible();
-  expect(screen.getByText('Select a paper or upload a PDF to begin.')).toBeVisible();
+  expect(await screen.findByText('论文库中还没有论文。')).toBeVisible();
+  expect(screen.getByRole('heading', { name: '论文库' })).toBeVisible();
 });
 
 it('shows a public-safe paper library error', async () => {
@@ -289,15 +377,15 @@ it('keeps upload failures public-safe and leaves the current library usable', as
   )));
 
   render(<App />);
-  await screen.findByRole('button', { name: /routing-paper\.pdf/i });
-  await user.upload(screen.getByLabelText('Upload PDF'), new File(['%PDF-'], 'bad.pdf', {
+  await screen.findByRole('button', { name: '打开 routing-paper.pdf' });
+  await user.upload(screen.getByLabelText('上传 PDF'), new File(['%PDF-'], 'bad.pdf', {
     type: 'application/pdf',
   }));
 
   expect(await screen.findByRole('alert')).toHaveTextContent('Request failed.');
   expect(screen.queryByText(/private|raw failure/i)).not.toBeInTheDocument();
-  expect(screen.getByRole('button', { name: /routing-paper\.pdf/i })).toBeEnabled();
-  expect(screen.getByLabelText('Upload PDF')).toBeEnabled();
+  expect(screen.getByRole('button', { name: '打开 routing-paper.pdf' })).toBeEnabled();
+  expect(screen.getByLabelText('上传 PDF')).toBeEnabled();
 });
 
 it('routes graph evidence, Agent citations, and note sources through one workspace selection', async () => {
@@ -319,7 +407,7 @@ it('routes graph evidence, Agent citations, and note sources through one workspa
   server.use(http.post('/api/papers/paper-a/agent/messages', () => HttpResponse.json(answer)));
 
   render(<App />);
-  await user.click(await screen.findByRole('button', { name: /routing-paper\.pdf/i }));
+  await user.click(await screen.findByRole('button', { name: '打开 routing-paper.pdf' }));
   await screen.findByLabelText('Paper graph');
 
   await user.click(screen.getByRole('button', { name: 'Select graph evidence' }));
@@ -352,8 +440,8 @@ it('shows a safe workspace loading state and does not mount panes after a load e
 
   const user = userEvent.setup();
   const { unmount } = render(<App />);
-  await user.click(await screen.findByRole('button', { name: /routing-paper\.pdf/i }));
-  expect(screen.getByRole('status')).toHaveTextContent('Loading paper workspace');
+  await user.click(await screen.findByRole('button', { name: '打开 routing-paper.pdf' }));
+  expect(screen.getByRole('status')).toHaveTextContent('正在加载论文阅读工作区');
   expect(screen.queryByLabelText('Paper reader')).not.toBeInTheDocument();
   await screen.findByLabelText('Paper reader');
   unmount();
@@ -364,14 +452,14 @@ it('shows a safe workspace loading state and does not mount panes after a load e
     { status: 409 },
   )));
   render(<App />);
-  await user.click(await screen.findByRole('button', { name: /routing-paper\.pdf/i }));
+  await user.click(await screen.findByRole('button', { name: '打开 routing-paper.pdf' }));
 
   expect(await screen.findByRole('alert')).toHaveTextContent('Paper document is not ready.');
   await waitFor(() => expect(screen.queryByLabelText('Paper reader')).not.toBeInTheDocument());
   expect(screen.queryByLabelText('Paper graph')).not.toBeInTheDocument();
 });
 
-it('retries a transient document conflict by reselecting the same active paper', async () => {
+it('retries a transient document conflict from the workspace action', async () => {
   const user = userEvent.setup();
   let documentRequests = 0;
   useReadyWorkspaceHandlers();
@@ -383,11 +471,11 @@ it('retries a transient document conflict by reselecting the same active paper',
   }));
 
   render(<App />);
-  const paperButton = await screen.findByRole('button', { name: /routing-paper\.pdf/i });
+  const paperButton = await screen.findByRole('button', { name: '打开 routing-paper.pdf' });
   await user.click(paperButton);
   expect(await screen.findByRole('alert')).toHaveTextContent('Paper document is not ready.');
 
-  await user.click(paperButton);
+  await user.click(screen.getByRole('button', { name: '重试加载论文' }));
 
   expect(await screen.findByLabelText('Paper reader')).toBeVisible();
   expect(screen.getByLabelText('Paper graph')).toBeVisible();
@@ -406,37 +494,16 @@ it('retries a transient graph failure from the blocking workspace action', async
   }));
 
   render(<App />);
-  await user.click(await screen.findByRole('button', { name: /routing-paper\.pdf/i }));
+  await user.click(await screen.findByRole('button', { name: '打开 routing-paper.pdf' }));
   expect(await screen.findByRole('alert')).toHaveTextContent(
     'Paper graph is temporarily unavailable.',
   );
 
-  await user.click(screen.getByRole('button', { name: 'Retry paper loading' }));
+  await user.click(screen.getByRole('button', { name: '重试加载论文' }));
 
   expect(await screen.findByLabelText('Paper reader')).toBeVisible();
   expect(screen.getByLabelText('Paper graph')).toBeVisible();
   expect(graphRequests).toBe(2);
-});
-
-it('does not reload a ready paper or clear its Agent draft when it is reselected', async () => {
-  const user = userEvent.setup();
-  let documentRequests = 0;
-  useReadyWorkspaceHandlers();
-  server.use(http.get('/api/papers/paper-a/document', () => {
-    documentRequests += 1;
-    return HttpResponse.json(documentFor(readyPaper));
-  }));
-
-  render(<App />);
-  const paperButton = await screen.findByRole('button', { name: /routing-paper\.pdf/i });
-  await user.click(paperButton);
-  const draft = await screen.findByLabelText('Ask about this paper');
-  await user.type(draft, 'Keep this draft');
-
-  await user.click(paperButton);
-
-  expect(draft).toHaveValue('Keep this draft');
-  expect(documentRequests).toBe(1);
 });
 
 it('keeps the research panes ready and reports a notes-only load failure', async () => {
@@ -448,7 +515,7 @@ it('keeps the research panes ready and reports a notes-only load failure', async
   )));
 
   render(<App />);
-  await user.click(await screen.findByRole('button', { name: /routing-paper\.pdf/i }));
+  await user.click(await screen.findByRole('button', { name: '打开 routing-paper.pdf' }));
 
   expect(await screen.findByLabelText('Paper reader')).toBeVisible();
   expect(screen.getByLabelText('Paper graph')).toBeVisible();
@@ -475,7 +542,7 @@ it('opens the reader, graph, and tools while the notes request is unresolved', a
   }));
 
   render(<App />);
-  await user.click(await screen.findByRole('button', { name: /routing-paper\.pdf/i }));
+  await user.click(await screen.findByRole('button', { name: '打开 routing-paper.pdf' }));
 
   expect(await screen.findByLabelText('Paper reader')).toBeVisible();
   expect(screen.getByLabelText('Paper graph')).toBeVisible();
@@ -489,7 +556,7 @@ it('turns a workspace network failure into a public-safe error state', async () 
   server.use(http.get('/api/papers/paper-a/document', () => HttpResponse.error()));
 
   render(<App />);
-  await user.click(await screen.findByRole('button', { name: /routing-paper\.pdf/i }));
+  await user.click(await screen.findByRole('button', { name: '打开 routing-paper.pdf' }));
 
   expect(await screen.findByRole('alert')).toHaveTextContent(
     'Unable to load the paper workspace.',
@@ -507,11 +574,11 @@ it('selects the default model near the chat box and keeps the choice per paper',
 
   render(<App />);
 
+  await user.click(await screen.findByRole('button', { name: '打开 routing-paper.pdf' }));
+  await screen.findByLabelText('Paper reader');
+
   const selector = await screen.findByLabelText('当前模型');
   await waitFor(() => expect(selector).toHaveValue('qwen'));
-
-  await user.click(await screen.findByRole('button', { name: /routing-paper\.pdf/i }));
-  await screen.findByLabelText('Paper reader');
 
   await user.selectOptions(selector, 'deepseek');
 
@@ -521,14 +588,14 @@ it('selects the default model near the chat box and keeps the choice per paper',
 
 it('opens the chinese model settings dialog from the top bar and returns focus', async () => {
   const user = userEvent.setup();
-  server.use(
-    http.get('/api/papers', () => HttpResponse.json([])),
-    http.get('/api/model-profiles', () => HttpResponse.json([
-      modelProfileFixture(),
-    ])),
-  );
+  useReadyWorkspaceHandlers();
+  server.use(http.get('/api/model-profiles', () => HttpResponse.json([
+    modelProfileFixture(),
+  ])));
 
   render(<App />);
+
+  await user.click(await screen.findByRole('button', { name: '打开 routing-paper.pdf' }));
 
   await user.click(screen.getByRole('button', { name: '模型设置' }));
 
