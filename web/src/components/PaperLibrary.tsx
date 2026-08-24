@@ -8,6 +8,7 @@ export interface PaperLibraryProps {
   paperUpdate: PaperSummary | null;
   onPaperSelected: (paper: PaperSummary) => void;
   onPaperDeleteRequested: (paper: PaperSummary) => void;
+  focusHeading: boolean;
 }
 
 type Stage = {
@@ -74,13 +75,21 @@ export function PaperLibrary({
   paperUpdate,
   onPaperSelected,
   onPaperDeleteRequested,
+  focusHeading,
 }: PaperLibraryProps) {
+  const headingRef = useRef<HTMLHeadingElement>(null);
   const [papers, setPapers] = useState<PaperSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploadingFilename, setUploadingFilename] = useState<string | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const uploadInFlight = useRef(false);
+
+  useEffect(() => {
+    if (focusHeading) {
+      headingRef.current?.focus();
+    }
+  }, [focusHeading]);
 
   useEffect(() => {
     let active = true;
@@ -139,7 +148,7 @@ export function PaperLibrary({
     <section className="paper-library" aria-labelledby="paper-library-title">
       <header className="paper-library__header">
         <p className="paper-library__eyebrow">本地研究工作台</p>
-        <h1 id="paper-library-title">论文库</h1>
+        <h1 id="paper-library-title" ref={headingRef} tabIndex={-1}>论文库</h1>
         <p>在一个本地阅读视图中查看原始页面、证据关联和研究笔记。</p>
       </header>
 

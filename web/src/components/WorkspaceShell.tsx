@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 
 import type { PaperSummary } from '../api/types';
 import type { usePaperWorkspace } from '../workspace/usePaperWorkspace';
@@ -29,12 +29,25 @@ export function WorkspaceShell({
   modelSelector,
 }: WorkspaceShellProps) {
   const [paperActionsOpen, setPaperActionsOpen] = useState(false);
+  const paperActionsButtonRef = useRef<HTMLButtonElement>(null);
+  const deletePaperItemRef = useRef<HTMLButtonElement>(null);
   const ownsActivePaper = workspace.activePaperId === paper.id;
   const document = ownsActivePaper ? workspace.document : null;
   const graph = ownsActivePaper ? workspace.graph : null;
   const blockingError = ownsActivePaper && (document === null || graph === null)
     ? workspace.errorMessage
     : null;
+
+  const closePaperActions = () => {
+    setPaperActionsOpen(false);
+    paperActionsButtonRef.current?.focus();
+  };
+
+  useEffect(() => {
+    if (paperActionsOpen) {
+      deletePaperItemRef.current?.focus();
+    }
+  }, [paperActionsOpen]);
 
   return (
     <div className="workspace-shell">
@@ -48,20 +61,41 @@ export function WorkspaceShell({
         <button type="button" onClick={onOpenModelSettings}>模型设置</button>
         <div className="workspace-topbar__paper-actions">
           <button
+            ref={paperActionsButtonRef}
             type="button"
             aria-haspopup="menu"
             aria-expanded={paperActionsOpen}
             onClick={() => setPaperActionsOpen((current) => !current)}
+            onKeyDown={(event) => {
+              if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                event.preventDefault();
+                setPaperActionsOpen(true);
+              } else if (event.key === 'Escape' && paperActionsOpen) {
+                event.preventDefault();
+                closePaperActions();
+              }
+            }}
           >
             论文操作
           </button>
           {paperActionsOpen && <div role="menu" aria-label="论文操作">
             <button
+              ref={deletePaperItemRef}
               type="button"
               role="menuitem"
               onClick={() => {
                 setPaperActionsOpen(false);
+                paperActionsButtonRef.current?.focus();
                 onDeleteRequested(paper);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                  event.preventDefault();
+                  deletePaperItemRef.current?.focus();
+                } else if (event.key === 'Escape') {
+                  event.preventDefault();
+                  closePaperActions();
+                }
               }}
             >
               删除论文

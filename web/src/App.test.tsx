@@ -201,9 +201,33 @@ it('uses a focused library view and returns there after permanent deletion', asy
 
   await user.click(screen.getByRole('button', { name: '确认永久删除' }));
 
-  expect(await screen.findByRole('heading', { name: '论文库' })).toBeVisible();
+  expect(await screen.findByRole('heading', { name: '论文库' })).toHaveFocus();
   expect(screen.queryByRole('button', { name: '打开 routing-paper.pdf' })).not.toBeInTheDocument();
   expect(screen.getByRole('button', { name: '打开 remaining-paper.pdf' })).toBeVisible();
+});
+
+it('moves focus through the paper actions menu and restores it after Escape', async () => {
+  const user = userEvent.setup();
+  useReadyWorkspaceHandlers();
+
+  render(<App />);
+
+  await user.click(await screen.findByRole('button', { name: '打开 routing-paper.pdf' }));
+  const actionsButton = screen.getByRole('button', { name: '论文操作' });
+  actionsButton.focus();
+
+  await user.keyboard('{Enter}');
+  const deleteItem = screen.getByRole('menuitem', { name: '删除论文' });
+  expect(deleteItem).toHaveFocus();
+
+  await user.keyboard('{ArrowDown}');
+  expect(deleteItem).toHaveFocus();
+  await user.keyboard('{ArrowUp}');
+  expect(deleteItem).toHaveFocus();
+
+  await user.keyboard('{Escape}');
+  expect(screen.queryByRole('menuitem', { name: '删除论文' })).not.toBeInTheDocument();
+  expect(actionsButton).toHaveFocus();
 });
 
 it('returns to the focused library without losing its papers', async () => {

@@ -14,6 +14,7 @@ export function App() {
   const [view, setView] = useState<'library' | 'reader'>('library');
   const [paperPendingDeletion, setPaperPendingDeletion] = useState<PaperSummary | null>(null);
   const [libraryRevision, setLibraryRevision] = useState(0);
+  const [libraryHeadingFocusRequested, setLibraryHeadingFocusRequested] = useState(false);
   const [workspaceLoadRevision, setWorkspaceLoadRevision] = useState(0);
   const [modelSettingsOpen, setModelSettingsOpen] = useState(false);
   const updateActivePaperSummary = useCallback((paper: PaperSummary) => {
@@ -38,6 +39,7 @@ export function App() {
       setWorkspaceLoadRevision(0);
     }
     setActivePaper(paper);
+    setLibraryHeadingFocusRequested(false);
     setView('reader');
   };
 
@@ -54,6 +56,7 @@ export function App() {
     if (activePaper?.id === paperId) {
       setActivePaper(null);
     }
+    setLibraryHeadingFocusRequested(true);
     setLibraryRevision((current) => current + 1);
     setView('library');
   };
@@ -67,6 +70,7 @@ export function App() {
           paperUpdate={activePaper}
           onPaperSelected={selectPaper}
           onPaperDeleteRequested={setPaperPendingDeletion}
+          focusHeading={libraryHeadingFocusRequested}
         />
       ) : activePaper !== null ? (
         <WorkspaceShell
