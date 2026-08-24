@@ -106,13 +106,14 @@ it('loads a one-hop subgraph after node selection and offers only located eviden
       graph={graph}
       documentElements={elements}
       onSelectEvidence={onSelectEvidence}
+      selectedModelProfileId="qwen"
       buildCoreGraph={noGraphBuild}
       buildDeepGraph={noGraphBuild}
     />,
   );
 
   fireEvent.click(await screen.findByRole('button', { name: 'Token router' }));
-  expect(screen.getByText('Loading focused graph…')).toBeVisible();
+  expect(screen.getByText('正在加载聚焦图谱…')).toBeVisible();
 
   await waitFor(() => expect(paperApi.getGraphSubgraph)
     .toHaveBeenCalledWith('paper-a', 'method', 1));
@@ -120,9 +121,9 @@ it('loads a one-hop subgraph after node selection and offers only located eviden
   expect(screen.getByText('method')).toBeVisible();
   expect(screen.getByText('Routes tokens.')).toBeVisible();
 
-  fireEvent.click(screen.getByRole('button', { name: 'Evidence 1' }));
+  fireEvent.click(screen.getByRole('button', { name: '证据 1' }));
   expect(onSelectEvidence).toHaveBeenCalledWith('located');
-  expect(screen.getByRole('button', { name: 'Evidence 2: No source location' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: '证据 2：原文位置不可用' })).toBeDisabled();
 });
 
 it('disables evidence whose located bbox is malformed', async () => {
@@ -145,6 +146,7 @@ it('disables evidence whose located bbox is malformed', async () => {
       graph={malformedEvidenceGraph}
       documentElements={[malformedElement]}
       onSelectEvidence={vi.fn()}
+      selectedModelProfileId="qwen"
       buildCoreGraph={noGraphBuild}
       buildDeepGraph={noGraphBuild}
     />,
@@ -152,7 +154,7 @@ it('disables evidence whose located bbox is malformed', async () => {
 
   fireEvent.click(await screen.findByRole('button', { name: 'Token router' }));
 
-  expect(screen.getByRole('button', { name: 'Evidence 1: No source location' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: '证据 1：原文位置不可用' })).toBeDisabled();
 });
 
 it('keeps the last valid graph visible when a focused graph request fails safely', async () => {
@@ -166,6 +168,7 @@ it('keeps the last valid graph visible when a focused graph request fails safely
       graph={graph}
       documentElements={elements}
       onSelectEvidence={vi.fn()}
+      selectedModelProfileId="qwen"
       buildCoreGraph={noGraphBuild}
       buildDeepGraph={noGraphBuild}
     />,
@@ -197,6 +200,7 @@ it('ignores a focused graph response after the active paper changes', async () =
       graph={graph}
       documentElements={elements}
       onSelectEvidence={vi.fn()}
+      selectedModelProfileId="qwen"
       buildCoreGraph={noGraphBuild}
       buildDeepGraph={noGraphBuild}
     />,
@@ -209,6 +213,7 @@ it('ignores a focused graph response after the active paper changes', async () =
       graph={paperBGraph}
       documentElements={[]}
       onSelectEvidence={vi.fn()}
+      selectedModelProfileId="qwen"
       buildCoreGraph={noGraphBuild}
       buildDeepGraph={noGraphBuild}
     />,
@@ -246,6 +251,7 @@ it('removes a previous root layout immediately and never renders its stale resul
       graph={graph}
       documentElements={elements}
       onSelectEvidence={vi.fn()}
+      selectedModelProfileId="qwen"
       buildCoreGraph={noGraphBuild}
       buildDeepGraph={noGraphBuild}
     />,
@@ -258,6 +264,7 @@ it('removes a previous root layout immediately and never renders its stale resul
       graph={updatedPaperAGraph}
       documentElements={elements}
       onSelectEvidence={vi.fn()}
+      selectedModelProfileId="qwen"
       buildCoreGraph={noGraphBuild}
       buildDeepGraph={noGraphBuild}
     />,
@@ -272,6 +279,7 @@ it('removes a previous root layout immediately and never renders its stale resul
       graph={paperBGraph}
       documentElements={[]}
       onSelectEvidence={vi.fn()}
+      selectedModelProfileId="qwen"
       buildCoreGraph={noGraphBuild}
       buildDeepGraph={noGraphBuild}
     />,
@@ -297,15 +305,16 @@ it('builds only on click and accepts a successful graph refresh', async () => {
       graph={{ nodes: [], edges: [] }}
       documentElements={elements}
       onSelectEvidence={vi.fn()}
+      selectedModelProfileId="qwen"
       buildCoreGraph={buildCoreGraph}
       buildDeepGraph={vi.fn().mockResolvedValue(null)}
     />,
   );
 
   expect(buildCoreGraph).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole('button', { name: 'Build core graph' }));
+  fireEvent.click(screen.getByRole('button', { name: '构建核心图谱' }));
 
-  await waitFor(() => expect(buildCoreGraph).toHaveBeenCalledWith());
+  await waitFor(() => expect(buildCoreGraph).toHaveBeenCalledWith('qwen'));
   expect(apiBuildCoreGraph).not.toHaveBeenCalled();
   expect(await screen.findByRole('button', { name: 'Token router' })).toBeVisible();
 });
@@ -322,14 +331,35 @@ it('shows a safe API message when an injected graph build fails', async () => {
       graph={graph}
       documentElements={elements}
       onSelectEvidence={vi.fn()}
+      selectedModelProfileId="qwen"
       buildCoreGraph={vi.fn().mockResolvedValue(null)}
       buildDeepGraph={buildDeepGraph}
     />,
   );
 
-  fireEvent.click(screen.getByRole('button', { name: 'Build deep graph' }));
+  fireEvent.click(screen.getByRole('button', { name: '构建深度图谱' }));
 
   expect(await screen.findByRole('alert')).toHaveTextContent('Deep graph processing is unavailable.');
   expect(paperApi.buildDeepGraph).not.toHaveBeenCalled();
   expect(screen.getByTestId('graph-canvas')).toHaveTextContent('Token router');
+});
+
+it('requires the current model before either graph build and displays the recorded stage model', async () => {
+  const buildCoreGraph = vi.fn().mockResolvedValue(null);
+  render(
+    <GraphPanel
+      paperId="paper-a"
+      graph={{ nodes: [], edges: [] }}
+      documentElements={elements}
+      onSelectEvidence={vi.fn()}
+      selectedModelProfileId={null}
+      stageModel={{ profile_id: 'qwen', display_name: '本地 Qwen', base_url: 'http://localhost/v1', model_name: 'qwen3', revision: 1 }}
+      buildCoreGraph={buildCoreGraph}
+      buildDeepGraph={vi.fn().mockResolvedValue(null)}
+    />,
+  );
+
+  expect(screen.getByRole('button', { name: '构建核心图谱' })).toBeDisabled();
+  expect(screen.getByText('请先选择当前模型，再构建知识图谱。')).toBeVisible();
+  expect(screen.getByText('构建模型：本地 Qwen')).toBeVisible();
 });

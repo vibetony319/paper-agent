@@ -186,7 +186,7 @@ export function usePaperWorkspace(
     };
   }, [activePaperId, loadRevision]);
 
-  const buildCoreGraph = useCallback(async () => {
+  const buildCoreGraph = useCallback(async (modelProfileId: string) => {
     if (state.activePaperId === null) {
       return null;
     }
@@ -194,7 +194,10 @@ export function usePaperWorkspace(
     const requestLoadGeneration = state.loadRevision;
     const requestWorkspaceRevision = loadRevision;
     try {
-      const graph = await paperApi.buildCoreGraph(paperId);
+      const graph = await paperApi.buildCoreGraph(paperId, {
+        model_profile_id: modelProfileId,
+        request_id: crypto.randomUUID(),
+      });
       dispatch({
         type: 'graph/loaded', paperId, loadRevision: requestLoadGeneration, graph,
       });
@@ -224,7 +227,7 @@ export function usePaperWorkspace(
     state.loadRevision,
   ]);
 
-  const buildDeepGraph = useCallback(async () => {
+  const buildDeepGraph = useCallback(async (modelProfileId: string) => {
     if (state.activePaperId === null) {
       return null;
     }
@@ -232,7 +235,10 @@ export function usePaperWorkspace(
     const requestLoadGeneration = state.loadRevision;
     const requestWorkspaceRevision = loadRevision;
     try {
-      const graph = await paperApi.buildDeepGraph(paperId);
+      const graph = await paperApi.buildDeepGraph(paperId, {
+        model_profile_id: modelProfileId,
+        request_id: crypto.randomUUID(),
+      });
       dispatch({
         type: 'graph/loaded', paperId, loadRevision: requestLoadGeneration, graph,
       });
@@ -262,7 +268,12 @@ export function usePaperWorkspace(
     state.loadRevision,
   ]);
 
-  const askAgent = useCallback(async (content: string, mode: AgentMode) => {
+  const askAgent = useCallback(async (
+    content: string,
+    mode: AgentMode,
+    modelProfileId: string,
+    selection?: TextAnchorDraft,
+  ) => {
     if (state.activePaperId === null) {
       return null;
     }
@@ -274,6 +285,9 @@ export function usePaperWorkspace(
         content,
         mode,
         conversation_id: conversationId ?? undefined,
+        model_profile_id: modelProfileId,
+        request_id: crypto.randomUUID(),
+        ...(selection === undefined ? {} : { selection }),
       });
       dispatch({
         type: 'conversation/set',

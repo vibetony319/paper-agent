@@ -54,12 +54,35 @@ it('returns and stores a core graph built for the active paper', async () => {
 
   let returnedGraph: PaperGraph | null | undefined;
   await act(async () => {
-    returnedGraph = await result.current.buildCoreGraph();
+    returnedGraph = await result.current.buildCoreGraph('qwen');
   });
 
-  expect(buildCoreGraph).toHaveBeenCalledWith('paper-a');
+  expect(buildCoreGraph).toHaveBeenCalledWith('paper-a', expect.objectContaining({
+    model_profile_id: 'qwen', request_id: expect.any(String),
+  }));
   expect(returnedGraph).toBe(builtGraph);
   expect(result.current.graph).toBe(builtGraph);
+});
+
+it('uses a fresh current-model payload for graph and Agent calls without resetting a same-mode conversation', async () => {
+  const first: AgentMessage = { conversation_id: 'conversation-a', message_id: 'message-a', status: 'grounded', paper_answer: '回答一', background_explanation: null, citations: [] };
+  const second: AgentMessage = { ...first, message_id: 'message-b', paper_answer: '回答二' };
+  const core = vi.spyOn(paperApi, 'buildCoreGraph').mockResolvedValue(builtGraph);
+  const deep = vi.spyOn(paperApi, 'buildDeepGraph').mockResolvedValue(builtGraph);
+  const agent = vi.spyOn(paperApi, 'askAgent').mockResolvedValueOnce(first).mockResolvedValueOnce(second);
+  vi.stubGlobal('crypto', { randomUUID: vi.fn().mockReturnValueOnce('agent-request-a').mockReturnValueOnce('agent-request-b').mockReturnValueOnce('core-request').mockReturnValueOnce('deep-request') });
+  const { result } = renderHook(() => usePaperWorkspace('paper-a'));
+  await waitFor(() => expect(result.current.document).not.toBeNull());
+
+  await act(async () => { await result.current.askAgent('第一个问题', 'paper_only', 'qwen'); });
+  await act(async () => { await result.current.askAgent('第二个问题', 'paper_only', 'deepseek', { quote: '选择原文', page_number: 2, rects: [] }); });
+  await act(async () => { await result.current.buildCoreGraph('deepseek'); await result.current.buildDeepGraph('deepseek'); });
+
+  expect(agent).toHaveBeenNthCalledWith(1, 'paper-a', { content: '第一个问题', mode: 'paper_only', conversation_id: undefined, model_profile_id: 'qwen', request_id: 'agent-request-a' });
+  expect(agent).toHaveBeenNthCalledWith(2, 'paper-a', { content: '第二个问题', mode: 'paper_only', conversation_id: 'conversation-a', model_profile_id: 'deepseek', request_id: 'agent-request-b', selection: { quote: '选择原文', page_number: 2, rects: [] } });
+  expect(core).toHaveBeenCalledWith('paper-a', { model_profile_id: 'deepseek', request_id: 'core-request' });
+  expect(deep).toHaveBeenCalledWith('paper-a', { model_profile_id: 'deepseek', request_id: 'deep-request' });
+  expect(result.current.conversationId).toBe('conversation-a');
 });
 
 it('loads highlights independently from the existing notes request', async () => {
@@ -224,32 +247,29 @@ it('starts a new Agent conversation when the second request changes answer scope
   await waitFor(() => expect(result.current.document).not.toBeNull());
 
   await act(async () => {
-    await result.current.askAgent('What does the paper show?', 'paper_only');
+    await result.current.askAgent('What does the paper show?', 'paper_only', 'qwen');
   });
   await waitFor(() => expect(result.current.conversationId).toBe('paper-only-conversation'));
   await act(async () => {
-    await result.current.askAgent('Why does that matter?', 'external_knowledge');
+    await result.current.askAgent('Why does that matter?', 'external_knowledge', 'qwen');
   });
   await waitFor(() => expect(result.current.conversationId).toBe('background-conversation'));
   await act(async () => {
-    await result.current.askAgent('What follows from that?', 'external_knowledge');
+    await result.current.askAgent('What follows from that?', 'external_knowledge', 'qwen');
   });
 
-  expect(askAgent).toHaveBeenNthCalledWith(1, 'paper-a', {
-    content: 'What does the paper show?',
-    mode: 'paper_only',
-    conversation_id: undefined,
-  });
-  expect(askAgent).toHaveBeenNthCalledWith(2, 'paper-a', {
-    content: 'Why does that matter?',
-    mode: 'external_knowledge',
-    conversation_id: undefined,
-  });
-  expect(askAgent).toHaveBeenNthCalledWith(3, 'paper-a', {
-    content: 'What follows from that?',
-    mode: 'external_knowledge',
-    conversation_id: 'background-conversation',
-  });
+  expect(askAgent).toHaveBeenNthCalledWith(1, 'paper-a', expect.objectContaining({
+    content: 'What does the paper show?', mode: 'paper_only', conversation_id: undefined,
+    model_profile_id: 'qwen', request_id: expect.any(String),
+  }));
+  expect(askAgent).toHaveBeenNthCalledWith(2, 'paper-a', expect.objectContaining({
+    content: 'Why does that matter?', mode: 'external_knowledge', conversation_id: undefined,
+    model_profile_id: 'qwen', request_id: expect.any(String),
+  }));
+  expect(askAgent).toHaveBeenNthCalledWith(3, 'paper-a', expect.objectContaining({
+    content: 'What follows from that?', mode: 'external_knowledge', conversation_id: 'background-conversation',
+    model_profile_id: 'qwen', request_id: expect.any(String),
+  }));
   expect(result.current.conversationId).toBe('background-conversation');
 });
 
@@ -261,8 +281,8 @@ it('returns null without calling a builder when no paper is active', async () =>
   let coreResult: PaperGraph | null | undefined;
   let deepResult: PaperGraph | null | undefined;
   await act(async () => {
-    coreResult = await result.current.buildCoreGraph();
-    deepResult = await result.current.buildDeepGraph();
+    coreResult = await result.current.buildCoreGraph('qwen');
+    deepResult = await result.current.buildDeepGraph('qwen');
   });
 
   expect(coreResult).toBeNull();
@@ -280,7 +300,7 @@ it('reports and rethrows a deep graph API error', async () => {
   let caught: unknown;
   await act(async () => {
     try {
-      await result.current.buildDeepGraph();
+      await result.current.buildDeepGraph('qwen');
     } catch (error) {
       caught = error;
     }
@@ -387,9 +407,9 @@ it('ignores old graph, Agent, and note completions after retrying the same paper
   );
   await waitFor(() => expect(result.current.document).not.toBeNull());
 
-  const coreRequest = result.current.buildCoreGraph();
-  const deepRequest = result.current.buildDeepGraph();
-  const agentRequest = result.current.askAgent('Old question.', 'paper_only');
+  const coreRequest = result.current.buildCoreGraph('qwen');
+  const deepRequest = result.current.buildDeepGraph('qwen');
+  const agentRequest = result.current.askAgent('Old question.', 'paper_only', 'qwen');
   const noteRequest = result.current.saveNote('Old note.');
 
   rerender({ revision: 1 });
@@ -438,7 +458,7 @@ it('ignores an obsolete A graph completion after retrying A, switching to B, and
     { initialProps: { paperId: 'paper-a' as string | null, revision: 0 } },
   );
   await waitFor(() => expect(result.current.document).not.toBeNull());
-  const obsoleteRequest = result.current.buildCoreGraph();
+  const obsoleteRequest = result.current.buildCoreGraph('qwen');
 
   rerender({ paperId: 'paper-a', revision: 1 });
   await waitFor(() => expect(result.current.loadRevision).toBe(1));
@@ -476,7 +496,7 @@ it('ignores an old mutation failure after retrying the same paper', async () => 
     { initialProps: { revision: 0 } },
   );
   await waitFor(() => expect(result.current.document).not.toBeNull());
-  const oldRequest = result.current.buildDeepGraph();
+  const oldRequest = result.current.buildDeepGraph('qwen');
   const settledOldRequest = oldRequest.catch((error: unknown) => error);
 
   rerender({ revision: 1 });

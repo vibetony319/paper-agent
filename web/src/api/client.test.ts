@@ -301,3 +301,38 @@ it('deletes a paper with an explicit confirmation and resolves undefined on 204'
   await expect(paperApi.deletePaper('paper-a', 'paper-a')).resolves.toBeUndefined();
   expect(receivedBody).toEqual({ confirmation: 'paper-a' });
 });
+
+it('sends required current-model graph and Agent request payloads', async () => {
+  const received: Record<string, unknown> = {};
+  server.use(
+    http.post('/api/papers/paper-a/graph/core', async ({ request }) => {
+      received.core = await request.json();
+      return HttpResponse.json({ nodes: [], edges: [] });
+    }),
+    http.post('/api/papers/paper-a/graph/deep', async ({ request }) => {
+      received.deep = await request.json();
+      return HttpResponse.json({ nodes: [], edges: [] });
+    }),
+    http.post('/api/papers/paper-a/agent/messages', async ({ request }) => {
+      received.agent = await request.json();
+      return HttpResponse.json({ conversation_id: 'conversation-a', message_id: 'message-a', status: 'grounded', paper_answer: '回答', background_explanation: null, citations: [] });
+    }),
+  );
+
+  const graphInput = { model_profile_id: 'qwen', request_id: 'graph-request-a' };
+  await paperApi.buildCoreGraph('paper-a', graphInput);
+  await paperApi.buildDeepGraph('paper-a', graphInput);
+  await paperApi.askAgent('paper-a', {
+    content: '解释方法', mode: 'paper_only', model_profile_id: 'qwen', request_id: 'agent-request-a',
+    selection: { quote: '原文', page_number: 2, rects: [] },
+  });
+
+  expect(received).toEqual({
+    core: graphInput,
+    deep: graphInput,
+    agent: {
+      content: '解释方法', mode: 'paper_only', model_profile_id: 'qwen', request_id: 'agent-request-a',
+      selection: { quote: '原文', page_number: 2, rects: [] },
+    },
+  });
+});

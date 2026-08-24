@@ -1,357 +1,78 @@
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, expect, it, vi } from 'vitest';
 
-import type { AgentMessage, Citation, DocumentElement, Note } from '../api/types';
-import type { SourceTarget } from '../workspace/types';
-import { AgentPanel } from './AgentPanel';
-import { NotesPanel } from './NotesPanel';
-import { RightPanel } from './RightPanel';
+vi.mock('./PdfReader', () => ({
+  PdfReader: ({ selectionActions }: { selectionActions?: { ask?: (draft: { quote: string; page_number: number; rects: [] }) => void } }) => (
+    <button type="button" onClick={() => selectionActions?.ask?.({ quote: '选区内容', page_number: 2, rects: [] })}>问助手</button>
+  ),
+}));
 
-const citation: Citation = {
-  id: 'element-3',
-  kind: 'paragraph',
-  page_number: 3,
-  bbox: { x0: 0.1, y0: 0.2, x1: 0.8, y1: 0.3 },
+vi.mock('./ResizableSplit', () => ({
+  ResizableSplit: ({ paper, tools }: { paper: React.ReactNode; tools: React.ReactNode }) => <div>{paper}{tools}</div>,
+}));
+
+import type { AgentMessage, ModelProfile, Note, PaperSummary, TextAnchor } from '../api/types';
+import { WorkspaceShell } from './WorkspaceShell';
+
+const profile: ModelProfile = {
+  id: 'qwen', display_name: '本地 Qwen', base_url: 'http://localhost/v1', model_name: 'qwen3', enabled: true, is_default: true, revision: 1,
+  has_api_key: false, api_key_mask: null, capabilities: { basic_chat: true, structured_output: true, tool_calling: false, checked_at: null }, read_only: false,
 };
 
-const groundedResponse: AgentMessage = {
-  conversation_id: 'conversation-1',
-  message_id: 'message-1',
-  status: 'grounded',
-  paper_answer: 'The method routes tokens through a learned gate.',
-  background_explanation: 'A router is a learned dispatch mechanism.',
-  citations: [citation],
+const paper: PaperSummary = {
+  id: 'paper-a', original_filename: 'paper.pdf', status: 'completed', stage0_status: 'completed', stage1_status: 'completed', stage2_status: 'completed', stage3_status: null, error: null,
 };
 
-const sourceTarget: SourceTarget = {
-  id: 'element-3',
-  kind: 'paragraph',
-  pageNumber: 3,
-  bbox: citation.bbox,
-};
-
-const locatedElement: DocumentElement = {
-  id: 'element-3',
-  kind: 'paragraph',
-  text: 'Located source.',
-  page_number: 3,
-  bbox: citation.bbox,
-  section_id: null,
-  location_status: 'located',
-  order: 3,
-};
+function workspaceFixture() {
+  return {
+    activePaperId: 'paper-a', loadRevision: 1,
+    document: { paper: { id: 'paper-a', original_filename: 'paper.pdf', status: 'completed' as const }, pages: [], sections: [], elements: [], notes: [] },
+    graph: { nodes: [], edges: [] }, notes: [] as Note[], anchors: [] as TextAnchor[], highlights: [], selection: null, activeSource: null, messages: [] as AgentMessage[], errorMessage: null, notesErrorMessage: null,
+    clearActiveSource: vi.fn(), setSelection: vi.fn(), clearSelection: vi.fn(), createHighlight: vi.fn(), deleteHighlight: vi.fn(), runSelectionAssist: vi.fn(), saveNote: vi.fn(),
+    selectCitation: vi.fn(), selectGraphEvidenceElement: vi.fn(), selectAnchorSource: vi.fn(), updateNote: vi.fn(), deleteNote: vi.fn(),
+    askAgent: vi.fn(), buildCoreGraph: vi.fn(), buildDeepGraph: vi.fn(),
+  };
+}
 
 afterEach(cleanup);
 
-it('sends a paper-only question, keeps the server status visible, and jumps on citation click', async () => {
+it('attaches the current selection to the always-mounted composer without sending and focuses it', async () => {
   const user = userEvent.setup();
-  const askAgent = vi.fn().mockResolvedValue(groundedResponse);
-  const onSelectCitation = vi.fn();
+  const workspace = workspaceFixture();
+  render(<WorkspaceShell paper={paper} workspace={workspace as never} onRetryPaperLoading={vi.fn()} onReturnToLibrary={vi.fn()} onOpenModelSettings={vi.fn()} onDeleteRequested={vi.fn()} modelProfiles={[profile]} selectedModelProfileId="qwen" onSelectedModelProfileIdChange={vi.fn()} />);
 
-  render(
-    <AgentPanel
-      paperId="paper-a"
-      messages={[]}
-      askAgent={askAgent}
-      onSelectCitation={onSelectCitation}
-    />,
-  );
-
-  await user.type(screen.getByLabelText('Ask about this paper'), 'What is the method?');
-  await user.click(screen.getByRole('button', { name: 'Ask' }));
-
-  await waitFor(() => expect(askAgent).toHaveBeenCalledWith('What is the method?', 'paper_only'));
-  expect(await screen.findByText('Grounded in this paper')).toBeVisible();
-  expect(screen.getByText('What is the method?')).toBeVisible();
-  expect(screen.getByText(groundedResponse.paper_answer)).toBeVisible();
-  expect(screen.getByText(groundedResponse.background_explanation!)).toBeVisible();
-
-  await user.click(screen.getByRole('button', { name: 'Page 3 paragraph' }));
-  expect(onSelectCitation).toHaveBeenCalledWith(citation);
+  await user.click(screen.getByRole('button', { name: '问助手' }));
+  expect(workspace.askAgent).not.toHaveBeenCalled();
+  expect(screen.getByLabelText('已附加选区')).toHaveTextContent('选区内容');
+  expect(screen.getByLabelText('向论文助手提问')).toHaveFocus();
 });
 
-it('does not advance the visible conversation after an empty or failed Agent response', async () => {
+it('keeps the composer mounted while switching all three right-side tabs', async () => {
   const user = userEvent.setup();
-  const askAgent = vi.fn().mockResolvedValue(null);
+  const workspace = workspaceFixture();
+  render(<WorkspaceShell paper={paper} workspace={workspace as never} onRetryPaperLoading={vi.fn()} onReturnToLibrary={vi.fn()} onOpenModelSettings={vi.fn()} onDeleteRequested={vi.fn()} modelProfiles={[profile]} selectedModelProfileId="qwen" onSelectedModelProfileIdChange={vi.fn()} />);
 
-  render(
-    <AgentPanel
-      paperId="paper-a"
-      messages={[]}
-      askAgent={askAgent}
-      onSelectCitation={vi.fn()}
-    />,
-  );
-
-  await user.type(screen.getByLabelText('Ask about this paper'), '   ');
-  expect(screen.getByRole('button', { name: 'Ask' })).toBeDisabled();
-
-  await user.clear(screen.getByLabelText('Ask about this paper'));
-  await user.type(screen.getByLabelText('Ask about this paper'), 'Will this persist?');
-  await user.click(screen.getByRole('button', { name: 'Ask' }));
-
-  await waitFor(() => expect(askAgent).toHaveBeenCalledOnce());
-  expect(askAgent).toHaveBeenCalledWith('Will this persist?', 'paper_only');
-  expect(await screen.findByRole('alert'))
-    .toHaveTextContent('Unable to receive an Agent response.');
-  expect(screen.queryByRole('article')).not.toBeInTheDocument();
-  expect(screen.getByLabelText('Ask about this paper')).toHaveValue('Will this persist?');
-  expect(screen.queryByText('Grounded in this paper')).not.toBeInTheDocument();
+  for (const tab of ['论文助手', '知识图谱', '笔记']) {
+    await user.click(screen.getByRole('tab', { name: tab }));
+    expect(screen.getByLabelText('向论文助手提问')).toBeInTheDocument();
+  }
+  expect(screen.getAllByText('当前模型')).toHaveLength(1);
 });
 
-it('shows the insufficient-evidence status without inventing citations or explanation', () => {
-  const insufficient: AgentMessage = {
-    ...groundedResponse,
-    message_id: 'message-insufficient',
-    status: 'insufficient_evidence',
-    paper_answer: '',
-    background_explanation: null,
-    citations: [],
-  };
-
-  render(
-    <AgentPanel
-      paperId="paper-a"
-      messages={[insufficient]}
-      askAgent={vi.fn()}
-      onSelectCitation={vi.fn()}
-    />,
-  );
-
-  expect(screen.getByText('Insufficient paper evidence')).toBeVisible();
-  expect(screen.queryByRole('button', { name: /page/i })).not.toBeInTheDocument();
-  expect(screen.queryByText(/background explanation/i)).not.toBeInTheDocument();
-});
-
-it('ignores an Agent response that resolves after the active paper changes', async () => {
+it('shows immutable response model badges and locates persisted note references separately from paper citations', async () => {
   const user = userEvent.setup();
-  let resolveResponse: ((message: AgentMessage | null) => void) | undefined;
-  const askAgent = vi.fn(() => new Promise<AgentMessage | null>((resolve) => {
-    resolveResponse = resolve;
-  }));
+  const workspace = workspaceFixture();
+  workspace.messages = [{
+    conversation_id: 'conversation-a', message_id: 'message-a', status: 'grounded', paper_answer: '回答', background_explanation: null, citations: [],
+    model: { profile_id: 'qwen', display_name: '本地 Qwen', base_url: 'http://localhost/v1', model_name: 'qwen3', revision: 1 },
+    note_references: [{ note_id: 'note-a', note_type: 'manual', page_number: 2, available: true }],
+  }];
+  workspace.notes = [{ id: 'note-a', body: '笔记', element_id: null, page_number: 2, anchor_ids: ['anchor-a'] }];
+  workspace.anchors = [{ id: 'anchor-a', quote: '持久原文', page_number: 2, element_id: null, rects: [{ order: 0, x0: 0.1, y0: 0.2, x1: 0.6, y1: 0.3 }] }];
+  render(<WorkspaceShell paper={paper} workspace={workspace as never} onRetryPaperLoading={vi.fn()} onReturnToLibrary={vi.fn()} onOpenModelSettings={vi.fn()} onDeleteRequested={vi.fn()} modelProfiles={[profile]} selectedModelProfileId="qwen" onSelectedModelProfileIdChange={vi.fn()} />);
 
-  const { rerender } = render(
-    <AgentPanel
-      paperId="paper-a"
-      messages={[]}
-      askAgent={askAgent}
-      onSelectCitation={vi.fn()}
-    />,
-  );
-
-  await user.type(screen.getByLabelText('Ask about this paper'), 'Old paper question');
-  await user.click(screen.getByRole('button', { name: 'Ask' }));
-  rerender(
-    <AgentPanel
-      paperId="paper-b"
-      messages={[]}
-      askAgent={askAgent}
-      onSelectCitation={vi.fn()}
-    />,
-  );
-  resolveResponse?.(groundedResponse);
-
-  await waitFor(() => expect(screen.queryByText(groundedResponse.paper_answer)).not.toBeInTheDocument());
-  expect(screen.queryByText('Old paper question')).not.toBeInTheDocument();
-});
-
-it('ignores a null Agent result that resolves after the active paper changes', async () => {
-  const user = userEvent.setup();
-  let resolveResponse: ((message: AgentMessage | null) => void) | undefined;
-  const askAgent = vi.fn(() => new Promise<AgentMessage | null>((resolve) => {
-    resolveResponse = resolve;
-  }));
-
-  const { rerender } = render(
-    <AgentPanel
-      paperId="paper-a"
-      messages={[]}
-      askAgent={askAgent}
-      onSelectCitation={vi.fn()}
-    />,
-  );
-
-  await user.type(screen.getByLabelText('Ask about this paper'), 'Old paper question');
-  await user.click(screen.getByRole('button', { name: 'Ask' }));
-  expect(askAgent).toHaveBeenCalledWith('Old paper question', 'paper_only');
-  rerender(
-    <AgentPanel
-      paperId="paper-b"
-      messages={[]}
-      askAgent={askAgent}
-      onSelectCitation={vi.fn()}
-    />,
-  );
-  await act(async () => {
-    resolveResponse?.(null);
-    await Promise.resolve();
-  });
-
-  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-  expect(screen.getByLabelText('Ask about this paper')).toHaveValue('');
-  expect(screen.queryByRole('article')).not.toBeInTheDocument();
-});
-
-it('creates a note attached to the active source target and de-duplicates its authoritative update', async () => {
-  const user = userEvent.setup();
-  const savedNote: Note = {
-    id: 'note-1', body: 'Check this assumption.', element_id: sourceTarget.id, page_number: 3,
-  };
-  const saveNote = vi.fn().mockResolvedValue(savedNote);
-
-  const { rerender } = render(
-    <NotesPanel
-      paperId="paper-a"
-      activeSource={sourceTarget}
-      notes={[]}
-      documentElements={[locatedElement]}
-      saveNote={saveNote}
-      onSelectSource={vi.fn()}
-    />,
-  );
-
-  expect(screen.getByText('当前定位：第 3 页')).toBeVisible();
-  await user.type(screen.getByLabelText('新建笔记'), savedNote.body);
-  await user.click(screen.getByRole('button', { name: '保存笔记' }));
-
-  await waitFor(() => expect(saveNote)
-    .toHaveBeenCalledWith(savedNote.body, sourceTarget.id, sourceTarget.pageNumber));
-  expect(screen.getAllByText(savedNote.body)).toHaveLength(1);
-
-  rerender(
-    <NotesPanel
-      paperId="paper-a"
-      activeSource={sourceTarget}
-      notes={[savedNote]}
-      documentElements={[locatedElement]}
-      saveNote={saveNote}
-      onSelectSource={vi.fn()}
-    />,
-  );
-  expect(screen.getAllByText(savedNote.body)).toHaveLength(1);
-});
-
-it('retains an unbound note draft and shows a safe alert when save returns null', async () => {
-  const user = userEvent.setup();
-  const saveNote = vi.fn().mockResolvedValue(null);
-
-  render(
-    <NotesPanel
-      paperId="paper-a"
-      activeSource={null}
-      notes={[]}
-      documentElements={[]}
-      saveNote={saveNote}
-      onSelectSource={vi.fn()}
-    />,
-  );
-
-  expect(screen.getByText('未选择证据位置')).toBeVisible();
-  await user.type(screen.getByLabelText('新建笔记'), 'A free-standing observation.');
-  await user.click(screen.getByRole('button', { name: '保存笔记' }));
-  await waitFor(() => expect(saveNote)
-    .toHaveBeenCalledWith('A free-standing observation.', undefined, undefined));
-  expect(await screen.findByRole('alert')).toHaveTextContent('笔记保存失败，请稍后重试。');
-  expect(screen.getByLabelText('新建笔记')).toHaveValue('A free-standing observation.');
-  expect(screen.queryByRole('article')).not.toBeInTheDocument();
-});
-
-it('only enables jumps for notes with a valid element location', async () => {
-  const user = userEvent.setup();
-  const onSelectSource = vi.fn();
-  const malformedElement: DocumentElement = {
-    ...locatedElement,
-    id: 'malformed',
-    bbox: { x0: 0.5, y0: 0.2, x1: 0.5, y1: 0.3 },
-  };
-
-  render(
-    <NotesPanel
-      paperId="paper-a"
-      activeSource={null}
-      notes={[
-        { id: 'located-note', body: 'Located note.', element_id: 'element-3', page_number: 3 },
-        { id: 'bad-note', body: 'Unlocatable note.', element_id: 'malformed', page_number: 3 },
-        { id: 'free-note', body: 'Free note.', element_id: null, page_number: null },
-      ]}
-      documentElements={[locatedElement, malformedElement]}
-      saveNote={vi.fn().mockResolvedValue(null)}
-      onSelectSource={onSelectSource}
-    />,
-  );
-
-  await user.click(screen.getByRole('button', { name: '定位到第 3 页 paragraph' }));
-  expect(onSelectSource).toHaveBeenCalledWith('element-3');
-  expect(screen.getAllByRole('button', { name: '原文位置不可用' })[0]).toBeDisabled();
-});
-
-it('ignores a null note result that resolves after the active paper changes', async () => {
-  const user = userEvent.setup();
-  let resolveNote: ((note: Note | null) => void) | undefined;
-  const saveNote = vi.fn(() => new Promise<Note | null>((resolve) => {
-    resolveNote = resolve;
-  }));
-
-  const { rerender } = render(
-    <NotesPanel
-      paperId="paper-a"
-      activeSource={sourceTarget}
-      notes={[]}
-      documentElements={[locatedElement]}
-      saveNote={saveNote}
-      onSelectSource={vi.fn()}
-    />,
-  );
-
-  await user.type(screen.getByLabelText('新建笔记'), 'Old paper note.');
-  await user.click(screen.getByRole('button', { name: '保存笔记' }));
-  expect(saveNote).toHaveBeenCalledWith('Old paper note.', sourceTarget.id, sourceTarget.pageNumber);
-  rerender(
-    <NotesPanel
-      paperId="paper-b"
-      activeSource={null}
-      notes={[]}
-      documentElements={[]}
-      saveNote={saveNote}
-      onSelectSource={vi.fn()}
-    />,
-  );
-  await act(async () => {
-    resolveNote?.(null);
-    await Promise.resolve();
-  });
-
-  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-  expect(screen.getByLabelText('新建笔记')).toHaveValue('');
-  expect(screen.queryByRole('article')).not.toBeInTheDocument();
-});
-
-it('keeps both panel drafts mounted while switching accessible tabs', async () => {
-  const user = userEvent.setup();
-
-  render(
-    <RightPanel
-      paperId="paper-a"
-      agent={{ messages: [], askAgent: vi.fn(), onSelectCitation: vi.fn() }}
-      notes={{
-        activeSource: null,
-        notes: [],
-        documentElements: [],
-        saveNote: vi.fn(),
-        onSelectSource: vi.fn(),
-      }}
-    />,
-  );
-
-  expect(screen.getByRole('tab', { name: 'Agent' })).toHaveAttribute('aria-selected', 'true');
-  expect(screen.getByRole('tab', { name: 'Notes' })).toHaveAttribute('aria-selected', 'false');
-  await user.type(screen.getByLabelText('Ask about this paper'), 'Keep this draft.');
-  await user.click(screen.getByRole('tab', { name: 'Notes' }));
-  await user.type(screen.getByLabelText('新建笔记'), 'Keep this note.');
-  await user.click(screen.getByRole('tab', { name: 'Agent' }));
-
-  expect(screen.getByLabelText('Ask about this paper')).toHaveValue('Keep this draft.');
-  await user.click(screen.getByRole('tab', { name: 'Notes' }));
-  expect(screen.getByLabelText('新建笔记')).toHaveValue('Keep this note.');
+  expect(screen.getAllByText('本地 Qwen')[0]).toBeVisible();
+  await user.click(screen.getByRole('button', { name: '笔记：第 2 页' }));
+  expect(workspace.selectAnchorSource).toHaveBeenCalledWith(expect.objectContaining({ id: 'anchor-a', kind: 'text_anchor' }));
 });

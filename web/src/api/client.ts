@@ -5,6 +5,7 @@ import type {
   Conversation,
   CreateHighlightInput,
   CreateNoteInput,
+  GraphBuildInput,
   Highlight,
   ModelProfile,
   ModelProfileCreateInput,
@@ -117,16 +118,16 @@ export const paperApi = {
     );
   },
 
-  buildCoreGraph: (paperId: string) =>
+  buildCoreGraph: (paperId: string, input: GraphBuildInput) =>
     request<PaperGraph>(
       `/api/papers/${encodeURIComponent(paperId)}/graph/core`,
-      jsonRequest('POST'),
+      jsonRequest('POST', input),
     ),
 
-  buildDeepGraph: (paperId: string) =>
+  buildDeepGraph: (paperId: string, input: GraphBuildInput) =>
     request<PaperGraph>(
       `/api/papers/${encodeURIComponent(paperId)}/graph/deep`,
-      jsonRequest('POST'),
+      jsonRequest('POST', input),
     ),
 
   getAnnotations: (paperId: string, init?: Pick<RequestInit, 'signal'>) =>

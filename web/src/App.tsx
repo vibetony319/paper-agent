@@ -1,7 +1,6 @@
 import { useCallback, useState } from 'react';
 
 import type { PaperSummary } from './api/types';
-import { ModelSelector } from './components/ModelSelector';
 import { ModelSettingsDialog } from './components/ModelSettingsDialog';
 import { ConfirmDeleteDialog } from './components/ConfirmDeleteDialog';
 import { PaperLibrary } from './components/PaperLibrary';
@@ -80,14 +79,9 @@ export function App() {
           onReturnToLibrary={returnToLibrary}
           onOpenModelSettings={() => setModelSettingsOpen(true)}
           onDeleteRequested={setPaperPendingDeletion}
-          modelSelector={(
-            <ModelSelector
-              profiles={modelProfiles.profiles}
-              value={modelProfiles.selectedProfileId}
-              onChange={modelProfiles.selectProfile}
-            />
-          )}
+          modelProfiles={modelProfiles.profiles}
           selectedModelProfileId={modelProfiles.selectedProfileId}
+          onSelectedModelProfileIdChange={modelProfiles.selectProfile}
         />
       ) : null}
       <ModelSettingsDialog

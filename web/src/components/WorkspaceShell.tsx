@@ -1,11 +1,12 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
-import type { PaperSummary } from '../api/types';
+import type { ModelProfile, PaperSummary, TextAnchorDraft } from '../api/types';
 import type { usePaperWorkspace } from '../workspace/usePaperWorkspace';
-import { GraphPanel } from './GraphPanel';
 import { paperStageSummary } from './PaperLibrary';
 import { PdfReader } from './PdfReader';
+import { ResizableSplit } from './ResizableSplit';
 import { RightPanel } from './RightPanel';
+import { toAnchorSourceTarget } from '../workspace/sourceTarget';
 
 type PaperWorkspace = ReturnType<typeof usePaperWorkspace>;
 
@@ -16,8 +17,9 @@ export interface WorkspaceShellProps {
   onReturnToLibrary: () => void;
   onOpenModelSettings: () => void;
   onDeleteRequested: (paper: PaperSummary) => void;
-  modelSelector: ReactNode;
+  modelProfiles: ModelProfile[];
   selectedModelProfileId: string | null;
+  onSelectedModelProfileIdChange: (id: string) => void;
 }
 
 export function WorkspaceShell({
@@ -27,12 +29,15 @@ export function WorkspaceShell({
   onReturnToLibrary,
   onOpenModelSettings,
   onDeleteRequested,
-  modelSelector,
+  modelProfiles,
   selectedModelProfileId,
+  onSelectedModelProfileIdChange,
 }: WorkspaceShellProps) {
   const [paperActionsOpen, setPaperActionsOpen] = useState(false);
   const paperActionsButtonRef = useRef<HTMLButtonElement>(null);
   const deletePaperItemRef = useRef<HTMLButtonElement>(null);
+  const [composerAttachment, setComposerAttachment] = useState<TextAnchorDraft | null>(null);
+  const [composerFocusRequest, setComposerFocusRequest] = useState(0);
   const ownsActivePaper = workspace.activePaperId === paper.id;
   const document = ownsActivePaper ? workspace.document : null;
   const graph = ownsActivePaper ? workspace.graph : null;
@@ -59,7 +64,6 @@ export function WorkspaceShell({
           <h1>{paper.original_filename}</h1>
         </div>
         <p className="workspace-topbar__summary">处理状态：{paperStageSummary(paper)}</p>
-        {modelSelector}
         <button type="button" onClick={onOpenModelSettings}>模型设置</button>
         <div className="workspace-topbar__paper-actions">
           <button
@@ -129,8 +133,9 @@ export function WorkspaceShell({
               {workspace.notesErrorMessage}
             </p>
           )}
-          <div className="workspace-grid">
-            <div className="workspace-pane workspace-pane--reader">
+          <ResizableSplit
+            paper={(
+              <div className="workspace-pane workspace-pane--reader">
               <PdfReader
                 paperId={paper.id}
                 pages={document.pages}
@@ -145,28 +150,41 @@ export function WorkspaceShell({
                 onDeleteHighlight={(highlightId) => { void workspace.deleteHighlight(highlightId); }}
                 selectedModelProfileId={selectedModelProfileId}
                 runSelectionAssist={workspace.runSelectionAssist}
+                selectionActions={{
+                  ask: (draft) => {
+                    setComposerAttachment(draft);
+                    setComposerFocusRequest((current) => current + 1);
+                  },
+                }}
                 onCreateSelectionNote={(body, draft) => workspace.saveNote(
                   body, undefined, undefined, draft,
                 )}
               />
-            </div>
-            <section className="workspace-pane workspace-pane--graph" aria-label="Paper graph">
-              <GraphPanel
-                paperId={paper.id}
-                graph={graph}
-                documentElements={document.elements}
-                onSelectEvidence={workspace.selectGraphEvidenceElement}
-                buildCoreGraph={workspace.buildCoreGraph}
-                buildDeepGraph={workspace.buildDeepGraph}
-              />
-            </section>
-            <div className="workspace-pane workspace-pane--tools">
+              </div>
+            )}
+            tools={(
+              <div className="workspace-pane workspace-pane--tools">
               <RightPanel
                 paperId={paper.id}
                 agent={{
                   messages: workspace.messages,
-                  askAgent: workspace.askAgent,
                   onSelectCitation: workspace.selectCitation,
+                  onSelectNoteReference: (noteId) => {
+                    const note = workspace.notes.find((item) => item.id === noteId);
+                    const anchor = note?.anchor_ids?.map((id) => workspace.anchors.find((item) => item.id === id)).find(Boolean);
+                    const source = anchor === undefined ? null : toAnchorSourceTarget(anchor);
+                    if (source !== null) workspace.selectAnchorSource(source);
+                    else if (note?.element_id !== null && note?.element_id !== undefined) workspace.selectGraphEvidenceElement(note.element_id);
+                  },
+                }}
+                graph={{
+                  graph,
+                  documentElements: document.elements,
+                  onSelectEvidence: workspace.selectGraphEvidenceElement,
+                  selectedModelProfileId,
+                  stageModel: paper.stage3_model ?? paper.stage2_model ?? null,
+                  buildCoreGraph: workspace.buildCoreGraph,
+                  buildDeepGraph: workspace.buildDeepGraph,
                 }}
                 notes={{
                   activeSource: workspace.activeSource,
@@ -179,9 +197,19 @@ export function WorkspaceShell({
                   updateNote: workspace.updateNote,
                   deleteNote: workspace.deleteNote,
                 }}
+                composer={{
+                  profiles: modelProfiles,
+                  selectedModelProfileId,
+                  onSelectedModelProfileIdChange,
+                  askAgent: workspace.askAgent,
+                  attachment: composerAttachment,
+                  onAttachmentClear: () => setComposerAttachment(null),
+                  focusRequest: composerFocusRequest,
+                }}
               />
-            </div>
-          </div>
+              </div>
+            )}
+          />
         </>
       )}
     </div>

@@ -245,4 +245,12 @@ export interface AskAgentInput {
   content: string;
   mode: AgentMode;
   conversation_id?: string;
+  model_profile_id: string;
+  request_id: string;
+  selection?: TextAnchorDraft;
+}
+
+export interface GraphBuildInput {
+  model_profile_id: string;
+  request_id: string;
 }

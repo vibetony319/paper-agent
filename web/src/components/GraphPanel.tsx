@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Background, Controls, ReactFlow, type NodeMouseHandler } from '@xyflow/react';
 
 import { ApiError, paperApi } from '../api/client';
-import type { DocumentElement, PaperGraph } from '../api/types';
+import type { DocumentElement, ModelSnapshot, PaperGraph } from '../api/types';
 import { hasValidSourceLocation } from '../workspace/sourceTarget';
 import {
   focusGraph,
@@ -16,8 +16,10 @@ export type GraphPanelProps = {
   graph: PaperGraph;
   documentElements?: DocumentElement[];
   onSelectEvidence: (elementId: string) => void;
-  buildCoreGraph: () => Promise<PaperGraph | null>;
-  buildDeepGraph: () => Promise<PaperGraph | null>;
+  selectedModelProfileId: string | null;
+  stageModel?: ModelSnapshot | null;
+  buildCoreGraph: (modelProfileId: string) => Promise<PaperGraph | null>;
+  buildDeepGraph: (modelProfileId: string) => Promise<PaperGraph | null>;
 };
 
 type PendingAction = 'core' | 'deep' | 'focus' | null;
@@ -46,6 +48,8 @@ export function GraphPanel({
   graph,
   documentElements = [],
   onSelectEvidence,
+  selectedModelProfileId,
+  stageModel = null,
   buildCoreGraph,
   buildDeepGraph,
 }: GraphPanelProps) {
@@ -171,7 +175,7 @@ export function GraphPanel({
   };
 
   const buildGraph = (kind: Exclude<PendingAction, 'focus'>) => {
-    if (pendingAction !== null) {
+    if (pendingAction !== null || selectedModelProfileId === null) {
       return;
     }
 
@@ -180,7 +184,9 @@ export function GraphPanel({
     const selectedRootIdentity = rootIdentity;
     setPendingAction(kind);
     setErrorMessage(null);
-    const request = kind === 'core' ? buildCoreGraph() : buildDeepGraph();
+    const request = kind === 'core'
+      ? buildCoreGraph(selectedModelProfileId)
+      : buildDeepGraph(selectedModelProfileId);
 
     void request
       .then((nextGraph) => {
@@ -223,37 +229,40 @@ export function GraphPanel({
     <section className="graph-panel" aria-labelledby="graph-panel-title">
       <header className="graph-panel__header">
         <div>
-          <p className="graph-panel__eyebrow">Evidence graph</p>
-          <h2 id="graph-panel-title">Paper connections</h2>
+          <p className="graph-panel__eyebrow">知识图谱</p>
+          <h2 id="graph-panel-title">论文关系</h2>
         </div>
-        <div className="graph-panel__actions" aria-label="Graph build actions">
+        <div className="graph-panel__actions" aria-label="图谱构建操作">
           <button
             type="button"
             onClick={() => buildGraph('core')}
-            disabled={pendingAction !== null}
+            disabled={pendingAction !== null || selectedModelProfileId === null}
           >
-            {pendingAction === 'core' ? 'Building core graph…' : 'Build core graph'}
+            {pendingAction === 'core' ? '正在构建核心图谱…' : '构建核心图谱'}
           </button>
           <button
             type="button"
             onClick={() => buildGraph('deep')}
-            disabled={pendingAction !== null}
+            disabled={pendingAction !== null || selectedModelProfileId === null}
           >
-            {pendingAction === 'deep' ? 'Building deep graph…' : 'Build deep graph'}
+            {pendingAction === 'deep' ? '正在构建深度图谱…' : '构建深度图谱'}
           </button>
         </div>
       </header>
 
+      {selectedModelProfileId === null && <p className="graph-panel__guidance">请先选择当前模型，再构建知识图谱。</p>}
+      {stageModel !== null && <p className="graph-panel__stage-model">构建模型：{stageModel.display_name}</p>}
+
       {errorMessage !== null && <p className="graph-panel__error" role="alert">{errorMessage}</p>}
-      {pendingAction === 'focus' && <p className="graph-panel__status">Loading focused graph…</p>}
+      {pendingAction === 'focus' && <p className="graph-panel__status">正在加载聚焦图谱…</p>}
 
       {visibleGraph.nodes.length === 0 ? (
         <div className="graph-panel__empty">
-          <p>No graph connections are available yet.</p>
-          <p>Build a core graph when the paper has finished processing.</p>
+          <p>暂无可用图谱关系。</p>
+          <p>论文处理完成后，可使用当前模型构建核心图谱。</p>
         </div>
       ) : (
-        <div className="graph-panel__canvas" aria-label="Paper graph canvas">
+        <div className="graph-panel__canvas" aria-label="论文图谱画布">
           <ReactFlow
             nodes={flowIsCurrent ? flowGraph.nodes : []}
             edges={flowIsCurrent ? flowGraph.edges : []}
@@ -272,7 +281,7 @@ export function GraphPanel({
 
       <aside className="graph-panel__inspector" aria-live="polite">
         {selectedNode === null ? (
-          <p>Select a graph node to inspect its evidence.</p>
+          <p>选择图谱节点以查看证据。</p>
         ) : (
           <>
             <p className="graph-panel__eyebrow">{selectedNode.node_type}</p>
@@ -280,13 +289,13 @@ export function GraphPanel({
             <p>{selectedNode.summary}</p>
             <div className="graph-panel__evidence" aria-label="Node evidence">
               {selectedNode.evidence_element_ids.length === 0 ? (
-                <p>No linked evidence is available for this node.</p>
+                <p>此节点暂无关联证据。</p>
               ) : selectedNode.evidence_element_ids.map((elementId, index) => {
                 const element = elementsById.get(elementId);
                 const located = element !== undefined && hasValidSourceLocation(element);
                 const label = located
-                  ? `Evidence ${index + 1}`
-                  : `Evidence ${index + 1}: No source location`;
+                  ? `证据 ${index + 1}`
+                  : `证据 ${index + 1}：原文位置不可用`;
 
                 return (
                   <button
