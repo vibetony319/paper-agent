@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { RenderTask } from 'pdfjs-dist';
+import type { PDFDocumentProxy } from 'pdfjs-dist';
 
 import { paperApi } from '../api/client';
 import type { Page } from '../api/types';
 import { getDocument } from '../pdfjs';
 import type { SourceTarget } from '../workspace/types';
-import { sourceOverlayStyle } from './pdfGeometry';
+import { PdfPageView } from './PdfPageView';
 
 type PdfReaderProps = {
   paperId: string;
@@ -16,171 +16,106 @@ type PdfReaderProps = {
 
 type ReaderStatus = 'loading' | 'ready' | 'error';
 
-function sortedPageNumbers(pages: Page[]): number[] {
-  return [...new Set(pages.map((page) => page.number))].sort((left, right) => left - right);
+function sortedPages(pages: Page[]): Page[] {
+  return [...pages].sort((left, right) => left.number - right.number);
 }
 
-function closestAvailablePage(pageNumbers: number[], requestedPage: number): number {
-  return pageNumbers.reduce((closest, pageNumber) => (
-    Math.abs(pageNumber - requestedPage) < Math.abs(closest - requestedPage)
-      ? pageNumber
-      : closest
-  ));
-}
-
-function preferredPage(pageNumbers: number[], activeSource: SourceTarget | null): number | null {
-  if (pageNumbers.length === 0) {
-    return null;
+function addOverscan(pageNumbers: number[], activePages: Set<number>): Set<number> {
+  const result = new Set(activePages);
+  for (const pageNumber of activePages) {
+    const index = pageNumbers.indexOf(pageNumber);
+    if (index > 0) result.add(pageNumbers[index - 1]);
+    if (index >= 0 && index < pageNumbers.length - 1) result.add(pageNumbers[index + 1]);
   }
-
-  if (activeSource !== null && pageNumbers.includes(activeSource.pageNumber)) {
-    return activeSource.pageNumber;
-  }
-
-  return pageNumbers[0];
+  return result;
 }
 
-function isRenderCancellation(error: unknown): boolean {
-  return error instanceof Error && error.name === 'RenderingCancelledException';
-}
-
-export function PdfReader({
-  paperId,
-  pages,
-  activeSource,
-  onSourceCleared,
-}: PdfReaderProps) {
-  const pageNumbers = useMemo(() => sortedPageNumbers(pages), [pages]);
+export function PdfReader({ paperId, pages, activeSource, onSourceCleared }: PdfReaderProps) {
+  const orderedPages = useMemo(() => sortedPages(pages), [pages]);
+  const pageNumbers = useMemo(() => orderedPages.map((page) => page.number), [orderedPages]);
   const pageSignature = pageNumbers.join(',');
-  const [pageNumber, setPageNumber] = useState<number | null>(() => preferredPage(pageNumbers, activeSource));
+  const [document, setDocument] = useState<PDFDocumentProxy | null>(null);
   const [status, setStatus] = useState<ReaderStatus>('loading');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const previousPaperId = useRef(paperId);
+  const [visiblePages, setVisiblePages] = useState<Set<number>>(() => new Set(pageNumbers.slice(0, 1)));
+  const pageShells = useRef(new Map<number, HTMLDivElement>());
 
   useEffect(() => {
-    const nextPage = preferredPage(pageNumbers, activeSource);
-
-    if (previousPaperId.current !== paperId) {
-      previousPaperId.current = paperId;
-      setPageNumber(nextPage);
-      return;
-    }
-
-    if (activeSource !== null && pageNumbers.includes(activeSource.pageNumber)) {
-      setPageNumber(activeSource.pageNumber);
-      return;
-    }
-
-    setPageNumber((currentPage) => (
-      currentPage !== null && pageNumbers.includes(currentPage) ? currentPage : nextPage
-    ));
-  }, [activeSource, pageNumbers, pageSignature, paperId]);
+    setVisiblePages(new Set(pageNumbers.slice(0, 1)));
+  }, [pageSignature, paperId]);
 
   useEffect(() => {
-    if (pageNumber === null) {
+    if (pages.length === 0) {
+      setDocument(null);
       setStatus('ready');
       setErrorMessage(null);
       return undefined;
     }
 
-    let active = true;
-    let renderTask: RenderTask | undefined;
-    const canvas = canvasRef.current;
+    let mounted = true;
     const loadingTask = getDocument({ url: paperApi.getSourceUrl(paperId) });
-
-    const isActiveCanvas = () => active && canvas !== null && canvasRef.current === canvas;
-
+    setDocument(null);
     setStatus('loading');
     setErrorMessage(null);
 
-    const renderPage = async () => {
-      try {
-        const document = await loadingTask.promise;
-        if (!isActiveCanvas()) {
-          return;
-        }
-
-        const page = await document.getPage(pageNumber);
-        if (!isActiveCanvas()) {
-          return;
-        }
-
-        if (canvas === null) {
-          return;
-        }
-
-        const context = canvas.getContext('2d');
-        if (context === null) {
-          throw new Error('Canvas rendering is unavailable.');
-        }
-        const canvasShell = canvas.parentElement;
-        if (canvasShell === null) {
-          throw new Error('Canvas shell is unavailable.');
-        }
-
-        const viewport = page.getViewport({ scale: 1.25 });
-        const pixelRatio = window.devicePixelRatio || 1;
-        if (!isActiveCanvas()) {
-          return;
-        }
-        canvas.width = Math.floor(viewport.width * pixelRatio);
-        canvas.height = Math.floor(viewport.height * pixelRatio);
-        canvasShell.style.width = `${Math.floor(viewport.width)}px`;
-        canvasShell.style.maxWidth = '100%';
-        canvas.style.width = '100%';
-        canvas.style.height = 'auto';
-
-        if (!isActiveCanvas()) {
-          return;
-        }
-        renderTask = page.render({
-          canvas,
-          canvasContext: context,
-          viewport,
-          transform: pixelRatio === 1 ? undefined : [pixelRatio, 0, 0, pixelRatio, 0, 0],
-        });
-        await renderTask.promise;
-
-        if (isActiveCanvas()) {
-          setStatus('ready');
-        }
-      } catch (error) {
-        if (active && !isRenderCancellation(error)) {
-          setStatus('error');
-          setErrorMessage('Unable to render the original PDF.');
-        }
-      }
-    };
-
-    void renderPage();
+    void loadingTask.promise.then(
+      (pdfDocument) => {
+        if (!mounted) return;
+        setDocument(pdfDocument);
+        setStatus('ready');
+      },
+      () => {
+        if (!mounted) return;
+        setStatus('error');
+        setErrorMessage('原始 PDF 暂时无法加载。');
+      },
+    );
 
     return () => {
-      active = false;
-      renderTask?.cancel();
+      mounted = false;
       void loadingTask.destroy().catch(() => undefined);
     };
-  }, [pageNumber, paperId]);
+  }, [paperId]);
 
-  const currentPageIndex = pageNumber === null ? -1 : pageNumbers.indexOf(pageNumber);
-  const hasPreviousPage = currentPageIndex > 0;
-  const hasNextPage = currentPageIndex >= 0 && currentPageIndex < pageNumbers.length - 1;
-  const overlayStyle = activeSource?.pageNumber === pageNumber ? sourceOverlayStyle(activeSource) : null;
-  const minimumPage = pageNumbers[0];
-  const maximumPage = pageNumbers.at(-1);
-
-  const selectPage = (requestedPage: number) => {
-    if (pageNumbers.length > 0) {
-      setPageNumber(closestAvailablePage(pageNumbers, requestedPage));
+  useEffect(() => {
+    if (orderedPages.length === 0 || typeof IntersectionObserver === 'undefined') {
+      return undefined;
     }
-  };
+
+    const observer = new IntersectionObserver((entries) => {
+      setVisiblePages((current) => {
+        const next = new Set(current);
+        for (const entry of entries) {
+          const pageNumber = Number((entry.target as HTMLElement).dataset.pdfPageNumber);
+          if (!Number.isInteger(pageNumber)) continue;
+          if (entry.isIntersecting) next.add(pageNumber);
+          else next.delete(pageNumber);
+        }
+        return next;
+      });
+    }, { rootMargin: '1200px 0px' });
+
+    for (const shell of pageShells.current.values()) observer.observe(shell);
+    return () => observer.disconnect();
+  }, [pageSignature, orderedPages.length]);
+
+  useEffect(() => {
+    if (activeSource === null || !pageNumbers.includes(activeSource.pageNumber)) return;
+    const target = pageShells.current.get(activeSource.pageNumber);
+    if (target === undefined) return;
+    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    target.scrollIntoView({ block: 'center', behavior: reducedMotion ? 'auto' : 'smooth' });
+  }, [activeSource, pageNumbers]);
+
+  const forcedPages = activeSource === null ? new Set<number>() : new Set([activeSource.pageNumber]);
+  const activePages = addOverscan(pageNumbers, new Set([...visiblePages, ...forcedPages]));
 
   return (
-    <section className="pdf-reader" aria-label="Paper reader">
+    <section className="pdf-reader" aria-label="论文阅读器">
       <header className="pdf-reader__header">
         <div>
-          <p className="pdf-reader__eyebrow">Source evidence</p>
-          <h2>Original PDF</h2>
+          <p className="pdf-reader__eyebrow">原始论文</p>
+          <h2>PDF 阅读</h2>
         </div>
         <a
           className="pdf-reader__source-link"
@@ -188,73 +123,45 @@ export function PdfReader({
           target="_blank"
           rel="noreferrer"
         >
-          Open original PDF
+          打开原始 PDF
         </a>
       </header>
 
-      {pageNumbers.length === 0 ? (
-        <p className="pdf-reader__empty">No parsed pages are available for this paper.</p>
+      {activeSource !== null ? (
+        <div className="pdf-reader__controls">
+          <span>已定位到第 {activeSource.pageNumber} 页证据</span>
+          <button type="button" onClick={onSourceCleared}>清除证据定位</button>
+        </div>
+      ) : null}
+
+      {orderedPages.length === 0 ? (
+        <p className="pdf-reader__empty">这篇论文没有可用的页面。</p>
       ) : (
-        <>
-          <div className="pdf-reader__controls" aria-label="PDF pagination">
-            <button
-              type="button"
-              onClick={() => setPageNumber(pageNumbers[currentPageIndex - 1])}
-              disabled={!hasPreviousPage}
-            >
-              Previous page
-            </button>
-            <label>
-              Page number
-              <input
-                aria-label="Page number"
-                type="number"
-                min={minimumPage}
-                max={maximumPage}
-                value={pageNumber ?? ''}
-                onChange={(event) => {
-                  const requestedPage = Number(event.currentTarget.value);
-                  if (Number.isInteger(requestedPage)) {
-                    selectPage(requestedPage);
-                  }
-                }}
-              />
-            </label>
-            <span aria-live="polite">Page {pageNumber} of {pageNumbers.length}</span>
-            <button
-              type="button"
-              onClick={() => setPageNumber(pageNumbers[currentPageIndex + 1])}
-              disabled={!hasNextPage}
-            >
-              Next page
-            </button>
-            {overlayStyle !== null ? (
-              <button type="button" onClick={onSourceCleared}>Clear evidence highlight</button>
-            ) : null}
-          </div>
-
-          {status === 'loading' ? <p className="pdf-reader__status" role="status">Rendering page…</p> : null}
+        <div className="pdf-reader__pages" aria-busy={status === 'loading'}>
+          {status === 'loading' ? <p className="pdf-reader__status" role="status">正在加载原始 PDF…</p> : null}
           {status === 'error' ? <p className="pdf-reader__error" role="alert">{errorMessage}</p> : null}
-
-          <div className="pdf-reader__page" aria-busy={status === 'loading'}>
-            <div className="pdf-reader__canvas-shell">
-              <canvas
-                key={`${paperId}-${pageNumber}`}
-                ref={canvasRef}
-                role="img"
-                aria-label={`Rendered PDF page ${pageNumber}`}
-              />
-              {overlayStyle !== null ? (
-                <div
-                  className="pdf-reader__overlay"
-                  data-testid="source-overlay"
-                  style={overlayStyle}
-                  aria-label={`Selected ${activeSource?.kind} evidence`}
-                />
-              ) : null}
-            </div>
-          </div>
-        </>
+          {orderedPages.map((page) => {
+            const isActive = activePages.has(page.number);
+            const overlays = activeSource?.pageNumber === page.number ? [activeSource] : [];
+            return (
+              <div
+                key={page.id}
+                ref={(element) => {
+                  if (element === null) pageShells.current.delete(page.number);
+                  else pageShells.current.set(page.number, element);
+                }}
+                className="pdf-reader__page-shell"
+                data-testid={`pdf-page-shell-${page.number}`}
+                data-pdf-page-number={page.number}
+                style={{ aspectRatio: `${page.width} / ${page.height}` }}
+              >
+                {document !== null && isActive ? (
+                  <PdfPageView document={document} page={page} active overlays={overlays} />
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
       )}
     </section>
   );

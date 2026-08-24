@@ -526,6 +526,71 @@ a:focus-visible {
   position: relative;
 }
 
+.pdf-reader__pages {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.pdf-reader__page-shell {
+  align-items: center;
+  background: #dfe5e7;
+  display: flex;
+  justify-content: center;
+  min-height: 12rem;
+  overflow: hidden;
+  padding: clamp(0.5rem, 2vw, 1.2rem);
+  position: relative;
+  width: 100%;
+}
+
+.pdf-page-view {
+  display: grid;
+  justify-items: center;
+  max-width: 100%;
+}
+
+.pdf-page-view__surface {
+  line-height: 0;
+  max-width: 100%;
+  position: relative;
+}
+
+.pdf-page-view__surface canvas {
+  background: var(--white);
+  box-shadow: 0 1px 3px rgb(16 29 43 / 22%);
+  display: block;
+  max-width: 100%;
+}
+
+.pdf-page-view__text-layer {
+  color: transparent;
+  inset: 0;
+  line-height: 1;
+  overflow: hidden;
+  position: absolute;
+  text-size-adjust: none;
+  transform-origin: 0 0;
+}
+
+.pdf-page-view__text-layer :is(span, br) {
+  color: transparent;
+  cursor: text;
+  position: absolute;
+  transform-origin: 0 0;
+  white-space: pre;
+}
+
+.pdf-page-view__text-layer ::selection {
+  background: rgb(0 127 131 / 28%);
+}
+
+.pdf-page-view__no-text {
+  color: var(--ink-600);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  margin: 0.45rem 0 0;
+}
+
 .pdf-reader__canvas-shell {
   flex: 0 0 auto;
   line-height: 0;

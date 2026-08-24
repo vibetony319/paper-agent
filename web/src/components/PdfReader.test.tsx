@@ -1,356 +1,166 @@
-import { useLayoutEffect, useState } from 'react';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const pdf = vi.hoisted(() => {
-  const renderTasks: Array<{ cancel: ReturnType<typeof vi.fn>; promise: Promise<void> }> = [];
-  const render = vi.fn(() => {
-    const task = { cancel: vi.fn(), promise: Promise.resolve() };
-    renderTasks.push(task);
-    return task;
-  });
+  const viewport = { width: 612, height: 792 };
+  const render = vi.fn(() => ({ cancel: vi.fn(), promise: Promise.resolve() }));
   const getPage = vi.fn(() => Promise.resolve({
-    getViewport: () => ({ width: 640, height: 880 }),
+    getViewport: vi.fn(() => viewport),
     render,
+    streamTextContent: vi.fn(() => ({ getReader: vi.fn() })),
   }));
   const destroy = vi.fn(() => Promise.resolve());
-  const getDocument = vi.fn(() => ({
-    destroy,
-    promise: Promise.resolve({ getPage }),
-  }));
+  const getDocument = vi.fn(() => ({ destroy, promise: Promise.resolve({ getPage }) }));
+  const TextLayer = vi.fn(function TextLayer() {
+    return { render: vi.fn(() => Promise.resolve()), cancel: vi.fn() };
+  });
 
-  return { destroy, getDocument, getPage, render, renderTasks };
+  return { TextLayer, destroy, getDocument, getPage, render };
 });
 
 vi.mock('pdfjs-dist', () => ({
   GlobalWorkerOptions: {},
   getDocument: pdf.getDocument,
+  TextLayer: pdf.TextLayer,
 }));
 
 import { PdfReader } from './PdfReader';
 
+const manyPages = Array.from({ length: 20 }, (_, index) => ({
+  id: `page-${index + 1}`,
+  number: index + 1,
+  width: 612,
+  height: 792,
+}));
+
+class IntersectionObserverStub {
+  static instances: IntersectionObserverStub[] = [];
+  readonly observe = vi.fn();
+  readonly unobserve = vi.fn();
+  readonly disconnect = vi.fn();
+
+  constructor(
+    readonly callback: IntersectionObserverCallback,
+    readonly options?: IntersectionObserverInit,
+  ) {
+    IntersectionObserverStub.instances.push(this);
+  }
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
-  pdf.renderTasks.splice(0);
+  IntersectionObserverStub.instances.splice(0);
+  vi.stubGlobal('IntersectionObserver', IntersectionObserverStub);
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext')
     .mockReturnValue({} as CanvasRenderingContext2D);
+  Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+    configurable: true,
+    value: vi.fn(),
+  });
 });
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
-it('keeps navigation within parsed pages and only shows the active evidence on its page', async () => {
+it('keeps an aspect ratio page shell until a page enters the overscan area', async () => {
+  render(
+    <PdfReader paperId="paper-a" pages={manyPages} activeSource={null} onSourceCleared={vi.fn()} />,
+  );
+
+  expect(screen.getByTestId('pdf-page-shell-20')).toHaveStyle({ aspectRatio: '612 / 792' });
+  await waitFor(() => expect(pdf.getDocument).toHaveBeenCalledOnce());
+  expect(pdf.getPage).not.toHaveBeenCalledWith(20);
+});
+
+it('creates one document loading task for all active pages of a paper', async () => {
+  render(
+    <PdfReader paperId="paper-a" pages={manyPages} activeSource={null} onSourceCleared={vi.fn()} />,
+  );
+
+  await waitFor(() => expect(pdf.getDocument).toHaveBeenCalledOnce());
+  const observer = IntersectionObserverStub.instances[0];
+  const pageTwo = screen.getByTestId('pdf-page-shell-2');
+  observer.callback([{ isIntersecting: true, target: pageTwo } as unknown as IntersectionObserverEntry], observer as never);
+
+  await waitFor(() => expect(pdf.getPage).toHaveBeenCalledWith(2));
+  expect(pdf.getDocument).toHaveBeenCalledOnce();
+  expect(observer.options).toMatchObject({ rootMargin: '1200px 0px' });
+});
+
+it('activates and scrolls an evidence target while retaining its overlay', async () => {
   render(
     <PdfReader
-      paperId="paper id"
-      pages={[
-        { id: 'page-1', number: 1, width: 612, height: 792 },
-        { id: 'page-2', number: 2, width: 612, height: 792 },
-      ]}
+      paperId="paper-a"
+      pages={manyPages}
+      activeSource={{
+        id: 'element-5',
+        kind: 'paragraph',
+        pageNumber: 5,
+        bbox: { x0: 0.1, y0: 0.2, x1: 0.8, y1: 0.3 },
+      }}
+      onSourceCleared={vi.fn()}
+    />,
+  );
+
+  await waitFor(() => expect(pdf.getPage).toHaveBeenCalledWith(5));
+  expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalledWith(
+    expect.objectContaining({ block: 'center' }),
+  );
+  expect(screen.getByTestId('source-overlay-5')).toHaveStyle({
+    left: '10%', top: '20%', width: '70%', height: '10%',
+  });
+});
+
+it('destroys a loading task when the selected paper changes', async () => {
+  const staleDestroy = vi.fn(() => Promise.resolve());
+  let resolveStaleDocument: ((document: { getPage: typeof pdf.getPage }) => void) | undefined;
+  pdf.getDocument.mockReturnValueOnce({
+    destroy: staleDestroy,
+    promise: new Promise((resolve) => { resolveStaleDocument = resolve; }),
+  });
+
+  const { rerender } = render(
+    <PdfReader paperId="paper-a" pages={manyPages} activeSource={null} onSourceCleared={vi.fn()} />,
+  );
+  await waitFor(() => expect(pdf.getDocument).toHaveBeenCalledOnce());
+
+  rerender(
+    <PdfReader paperId="paper-b" pages={manyPages} activeSource={null} onSourceCleared={vi.fn()} />,
+  );
+
+  expect(staleDestroy).toHaveBeenCalledOnce();
+  resolveStaleDocument?.({ getPage: pdf.getPage });
+  await waitFor(() => expect(pdf.getDocument).toHaveBeenCalledTimes(2));
+});
+
+it('does not load PDF.js when the paper has no parsed pages', () => {
+  render(<PdfReader paperId="paper-a" pages={[]} activeSource={null} onSourceCleared={vi.fn()} />);
+
+  expect(screen.getByText('这篇论文没有可用的页面。')).toBeVisible();
+  expect(pdf.getDocument).not.toHaveBeenCalled();
+  expect(screen.getByRole('link', { name: '打开原始 PDF' }))
+    .toHaveAttribute('href', '/api/papers/paper-a/source');
+});
+
+it('clears an active evidence target through the workspace callback', () => {
+  const onSourceCleared = vi.fn();
+  render(
+    <PdfReader
+      paperId="paper-a"
+      pages={manyPages}
       activeSource={{
         id: 'element-2',
         kind: 'paragraph',
         pageNumber: 2,
         bbox: { x0: 0.1, y0: 0.2, x1: 0.8, y1: 0.3 },
       }}
-      onSourceCleared={vi.fn()}
-    />,
-  );
-
-  const pageNumber = screen.getByLabelText('Page number');
-  expect(pageNumber).toHaveValue(2);
-  expect(pageNumber).toHaveAttribute('min', '1');
-  expect(pageNumber).toHaveAttribute('max', '2');
-
-  await waitFor(() => expect(pdf.getPage).toHaveBeenCalledWith(2));
-  expect(screen.getByTestId('source-overlay')).toHaveStyle({
-    left: '10%', top: '20%', width: '70%', height: '10%',
-  });
-
-  fireEvent.click(screen.getByRole('button', { name: 'Previous page' }));
-
-  await waitFor(() => expect(pdf.getPage).toHaveBeenCalledWith(1));
-  expect(screen.queryByTestId('source-overlay')).not.toBeInTheDocument();
-  expect(screen.getByRole('button', { name: 'Previous page' })).toBeDisabled();
-  expect(screen.getByRole('link', { name: 'Open original PDF' }))
-    .toHaveAttribute('href', '/api/papers/paper%20id/source');
-});
-
-it('positions normalized evidence in the rendered page coordinate space', async () => {
-  render(
-    <PdfReader
-      paperId="paper-a"
-      pages={[{ id: 'page-1', number: 1, width: 612, height: 792 }]}
-      activeSource={{
-        id: 'element-1',
-        kind: 'paragraph',
-        pageNumber: 1,
-        bbox: { x0: 0.1, y0: 0.2, x1: 0.8, y1: 0.3 },
-      }}
-      onSourceCleared={vi.fn()}
-    />,
-  );
-
-  await waitFor(() => expect(pdf.render).toHaveBeenCalledOnce());
-
-  const canvas = screen.getByRole('img', { name: 'Rendered PDF page 1' });
-  const overlay = screen.getByTestId('source-overlay');
-  expect(overlay.parentElement).toBe(canvas.parentElement);
-  expect(overlay.parentElement).not.toHaveClass('pdf-reader__page');
-});
-
-it('fits the displayed page within its pane while preserving a high-DPI backing store', async () => {
-  vi.spyOn(window, 'devicePixelRatio', 'get').mockReturnValue(2);
-
-  render(
-    <PdfReader
-      paperId="paper-a"
-      pages={[{ id: 'page-1', number: 1, width: 612, height: 792 }]}
-      activeSource={null}
-      onSourceCleared={vi.fn()}
-    />,
-  );
-
-  await waitFor(() => expect(pdf.render).toHaveBeenCalledOnce());
-
-  const canvas = screen.getByRole('img', { name: 'Rendered PDF page 1' });
-  expect(canvas).toHaveStyle({ width: '100%', height: 'auto' });
-  expect(canvas.parentElement).toHaveStyle({ width: '640px', maxWidth: '100%' });
-  expect(canvas).toHaveAttribute('width', '1280');
-  expect(canvas).toHaveAttribute('height', '1760');
-});
-
-it('shows a public-safe error when the canvas cannot render', async () => {
-  vi.mocked(HTMLCanvasElement.prototype.getContext).mockReturnValueOnce(null);
-
-  render(
-    <PdfReader
-      paperId="paper-a"
-      pages={[{ id: 'page-1', number: 1, width: 612, height: 792 }]}
-      activeSource={null}
-      onSourceCleared={vi.fn()}
-    />,
-  );
-
-  expect(await screen.findByRole('alert')).toHaveTextContent(
-    'Unable to render the original PDF.',
-  );
-  expect(screen.queryByText(/canvas context/i)).not.toBeInTheDocument();
-});
-
-it('clamps page input to the nearest parsed page', async () => {
-  render(
-    <PdfReader
-      paperId="paper-a"
-      pages={[
-        { id: 'page-2', number: 2, width: 612, height: 792 },
-        { id: 'page-5', number: 5, width: 612, height: 792 },
-        { id: 'page-9', number: 9, width: 612, height: 792 },
-      ]}
-      activeSource={null}
-      onSourceCleared={vi.fn()}
-    />,
-  );
-
-  const pageNumber = screen.getByLabelText('Page number');
-  fireEvent.change(pageNumber, { target: { value: '7' } });
-  expect(pageNumber).toHaveValue(5);
-
-  fireEvent.change(pageNumber, { target: { value: '99' } });
-  expect(pageNumber).toHaveValue(9);
-
-  fireEvent.change(pageNumber, { target: { value: '-4' } });
-  expect(pageNumber).toHaveValue(2);
-  await waitFor(() => expect(pdf.getPage).toHaveBeenLastCalledWith(2));
-});
-
-it('renders an empty state without starting PDF.js when no parsed pages exist', () => {
-  render(
-    <PdfReader
-      paperId="paper-a"
-      pages={[]}
-      activeSource={null}
-      onSourceCleared={vi.fn()}
-    />,
-  );
-
-  expect(screen.getByText('No parsed pages are available for this paper.')).toBeVisible();
-  expect(pdf.getDocument).not.toHaveBeenCalled();
-  expect(screen.getByRole('link', { name: 'Open original PDF' })).toBeVisible();
-});
-
-it('does not expose PDF.js failure details to readers', async () => {
-  pdf.getDocument.mockReturnValueOnce({
-    destroy: vi.fn(() => Promise.resolve()),
-    promise: Promise.reject(new Error('Token abc123 rejected by internal PDF endpoint')),
-  });
-
-  render(
-    <PdfReader
-      paperId="paper-a"
-      pages={[{ id: 'page-1', number: 1, width: 612, height: 792 }]}
-      activeSource={null}
-      onSourceCleared={vi.fn()}
-    />,
-  );
-
-  expect(await screen.findByRole('alert')).toHaveTextContent(
-    'Unable to render the original PDF.',
-  );
-  expect(screen.queryByText(/abc123|internal PDF endpoint/i)).not.toBeInTheDocument();
-});
-
-it('clears the active evidence through the workspace callback', async () => {
-  const onSourceCleared = vi.fn();
-  render(
-    <PdfReader
-      paperId="paper-a"
-      pages={[{ id: 'page-1', number: 1, width: 612, height: 792 }]}
-      activeSource={{
-        id: 'element-1',
-        kind: 'paragraph',
-        pageNumber: 1,
-        bbox: { x0: 0.1, y0: 0.2, x1: 0.8, y1: 0.3 },
-      }}
       onSourceCleared={onSourceCleared}
     />,
   );
 
-  await waitFor(() => expect(pdf.render).toHaveBeenCalledOnce());
-  fireEvent.click(screen.getByRole('button', { name: 'Clear evidence highlight' }));
+  fireEvent.click(screen.getByRole('button', { name: '清除证据定位' }));
   expect(onSourceCleared).toHaveBeenCalledOnce();
-});
-
-it('cancels an obsolete render so an earlier page cannot paint over the current page', async () => {
-  let resolveFirstRender: (() => void) | undefined;
-  const firstRender = {
-    cancel: vi.fn(),
-    promise: new Promise<void>((resolve) => {
-      resolveFirstRender = resolve;
-    }),
-  };
-  const secondRender = { cancel: vi.fn(), promise: Promise.resolve() };
-  pdf.render.mockReturnValueOnce(firstRender).mockReturnValueOnce(secondRender);
-
-  render(
-    <PdfReader
-      paperId="paper-a"
-      pages={[
-        { id: 'page-1', number: 1, width: 612, height: 792 },
-        { id: 'page-2', number: 2, width: 612, height: 792 },
-      ]}
-      activeSource={null}
-      onSourceCleared={vi.fn()}
-    />,
-  );
-
-  await waitFor(() => expect(pdf.render).toHaveBeenCalledTimes(1));
-  fireEvent.click(screen.getByRole('button', { name: 'Next page' }));
-  await waitFor(() => expect(pdf.render).toHaveBeenCalledTimes(2));
-
-  expect(firstRender.cancel).toHaveBeenCalledOnce();
-  expect(pdf.destroy).toHaveBeenCalledOnce();
-  resolveFirstRender?.();
-
-  await waitFor(() => expect(screen.getByText('Page 2 of 2')).toBeVisible());
-  expect(screen.getByRole('img', { name: 'Rendered PDF page 2' }))
-    .toHaveAttribute('width', '640');
-});
-
-it('does not render an obsolete page into a replacement canvas before effect cleanup', async () => {
-  type PdfPage = Awaited<ReturnType<typeof pdf.getPage>>;
-  type GetPage = () => Promise<PdfPage>;
-  type RenderPage = () => ReturnType<typeof pdf.render>;
-
-  let resolveStalePage: ((page: PdfPage) => void) | undefined;
-  const staleRender = vi.fn<RenderPage>(() => ({
-    cancel: vi.fn(),
-    promise: Promise.resolve(),
-  }));
-  const staleGetPage = vi.fn<GetPage>(() => new Promise<PdfPage>((resolve) => {
-    resolveStalePage = resolve;
-  }));
-  const staleTask: ReturnType<typeof pdf.getDocument> = {
-    destroy: vi.fn(() => Promise.resolve()),
-    promise: Promise.resolve({ getPage: staleGetPage }),
-  };
-  pdf.getDocument.mockReturnValueOnce(staleTask);
-
-  function ReplacementHarness() {
-    const [paperId, setPaperId] = useState('paper-a');
-
-    useLayoutEffect(() => {
-      if (paperId === 'paper-b') {
-        resolveStalePage?.({
-          getViewport: () => ({ width: 320, height: 440 }),
-          render: staleRender,
-        });
-      }
-    }, [paperId]);
-
-    return (
-      <>
-        <button type="button" onClick={() => setPaperId('paper-b')}>Replace paper</button>
-        <PdfReader
-          paperId={paperId}
-          pages={[{ id: 'page-1', number: 1, width: 612, height: 792 }]}
-          activeSource={null}
-          onSourceCleared={vi.fn()}
-        />
-      </>
-    );
-  }
-
-  render(<ReplacementHarness />);
-  await waitFor(() => expect(staleGetPage).toHaveBeenCalledWith(1));
-  const originalCanvas = screen.getByRole('img', { name: 'Rendered PDF page 1' });
-
-  screen.getByRole('button', { name: 'Replace paper' }).click();
-  await Promise.resolve();
-  const replacementCanvas = screen.getByRole('img', { name: 'Rendered PDF page 1' });
-  expect(replacementCanvas).not.toBe(originalCanvas);
-
-  await waitFor(() => expect(pdf.render).toHaveBeenCalledOnce());
-  expect(staleRender).not.toHaveBeenCalled();
-});
-
-it('destroys a superseded loading task before its stale document can render', async () => {
-  const staleGetPage = vi.fn<() => ReturnType<typeof pdf.getPage>>();
-  type StaleDocument = { getPage: typeof staleGetPage };
-  let resolveStaleDocument: ((document: StaleDocument) => void) | undefined;
-  const staleDestroy = vi.fn(() => Promise.resolve());
-  const staleTask = {
-    destroy: staleDestroy,
-    promise: new Promise<StaleDocument>((resolve) => {
-      resolveStaleDocument = resolve;
-    }),
-  };
-  pdf.getDocument.mockReturnValueOnce(staleTask);
-
-  const { rerender } = render(
-    <PdfReader
-      paperId="paper-a"
-      pages={[{ id: 'page-1', number: 1, width: 612, height: 792 }]}
-      activeSource={null}
-      onSourceCleared={vi.fn()}
-    />,
-  );
-
-  rerender(
-    <PdfReader
-      paperId="paper-b"
-      pages={[{ id: 'page-1', number: 1, width: 612, height: 792 }]}
-      activeSource={null}
-      onSourceCleared={vi.fn()}
-    />,
-  );
-
-  expect(staleDestroy).toHaveBeenCalledOnce();
-  resolveStaleDocument?.({ getPage: staleGetPage });
-
-  await waitFor(() => expect(pdf.getPage).toHaveBeenCalledWith(1));
-  expect(staleGetPage).not.toHaveBeenCalled();
-  expect(screen.getByRole('img', { name: 'Rendered PDF page 1' })).toBeVisible();
 });
