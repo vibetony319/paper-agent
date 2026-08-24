@@ -135,15 +135,17 @@ export function WorkspaceShell({
           <p>文档和知识图谱准备完成后，将打开阅读器与研究工具。</p>
         </section>
       ) : (
-        <>
-          {workspace.errorMessage !== null && (
-            <p className="workspace-shell__error" role="alert">{workspace.errorMessage}</p>
-          )}
-          {workspace.notesErrorMessage !== null && (
-            <p className="workspace-shell__error" role="alert">
-              {workspace.notesErrorMessage}
-            </p>
-          )}
+        <div className="workspace-shell__content" data-testid="workspace-content">
+          <div className="workspace-shell__errors">
+            {workspace.errorMessage !== null && (
+              <p className="workspace-shell__error" role="alert">{workspace.errorMessage}</p>
+            )}
+            {workspace.notesErrorMessage !== null && (
+              <p className="workspace-shell__error" role="alert">
+                {workspace.notesErrorMessage}
+              </p>
+            )}
+          </div>
           <ResizableSplit
             paper={(
               <div className="workspace-pane workspace-pane--reader">
@@ -228,7 +230,7 @@ export function WorkspaceShell({
               </div>
             )}
           />
-        </>
+        </div>
       )}
     </div>
   );

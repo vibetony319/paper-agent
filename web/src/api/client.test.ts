@@ -59,7 +59,7 @@ it('sends paper upload as FormData and preserves a safe API error', async () => 
   )));
 
   await expect(paperApi.upload(new File(['not-pdf'], 'paper.pdf')))
-    .rejects.toMatchObject({ status: 422, message: 'Invalid PDF upload.' });
+    .rejects.toMatchObject({ status: 422, message: '请求失败，请稍后重试。' });
 });
 
 it('forwards an AbortSignal to selected paper loads', async () => {
@@ -206,7 +206,7 @@ it('keeps a stable api error code and chinese detail', async () => {
   });
 });
 
-it('keeps a null code for FastAPI-style error bodies', async () => {
+it('keeps a stable code while replacing an English server detail with Chinese public copy', async () => {
   server.use(http.get('/api/papers/paper-a', () => HttpResponse.json(
     { detail: 'Paper resource not found.' },
     { status: 404 },
@@ -215,7 +215,7 @@ it('keeps a null code for FastAPI-style error bodies', async () => {
   await expect(paperApi.getPaper('paper-a')).rejects.toMatchObject({
     status: 404,
     code: null,
-    message: 'Paper resource not found.',
+    message: '请求失败，请稍后重试。',
   });
 });
 

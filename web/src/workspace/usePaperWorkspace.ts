@@ -13,6 +13,12 @@ function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
 }
 
+function publicWorkspaceError(error: unknown, fallback: string): string {
+  return error instanceof ApiError && /[\u3400-\u9fff]/.test(error.message)
+    ? error.message
+    : fallback;
+}
+
 export function usePaperWorkspace(
   activePaperId: string | null,
   loadRevision = 0,
@@ -37,7 +43,7 @@ export function usePaperWorkspace(
     paperId: string,
     loadRevision: number,
     error: unknown,
-    fallback = 'Unable to load the paper workspace.',
+    fallback = '论文阅读工作区暂时无法加载。',
   ) => {
     if (isAbortError(error)) {
       return;
@@ -46,9 +52,7 @@ export function usePaperWorkspace(
       type: 'request/failed',
       paperId,
       loadRevision,
-      message: error instanceof ApiError
-        ? error.message
-        : fallback,
+      message: publicWorkspaceError(error, fallback),
     });
   }, []);
 
@@ -84,7 +88,7 @@ export function usePaperWorkspace(
           paperId,
           requestLoadGeneration,
           error,
-          'Unable to refresh the paper status.',
+          '论文处理状态暂时无法刷新。',
         );
       }
     }
@@ -130,9 +134,7 @@ export function usePaperWorkspace(
           type: 'workspace/failed',
           paperId: activePaperId,
           loadRevision: loadGeneration,
-          message: error instanceof ApiError
-            ? error.message
-            : 'Unable to load the paper workspace.',
+          message: publicWorkspaceError(error, '论文阅读工作区暂时无法加载。'),
         });
       });
 
@@ -154,9 +156,7 @@ export function usePaperWorkspace(
           type: 'notes/failed',
           paperId: activePaperId,
           loadRevision: loadGeneration,
-          message: error instanceof ApiError
-            ? error.message
-            : 'Unable to load paper notes.',
+          message: publicWorkspaceError(error, '论文笔记暂时无法加载。'),
         });
       });
 
@@ -176,7 +176,7 @@ export function usePaperWorkspace(
           type: 'request/failed',
           paperId: activePaperId,
           loadRevision: loadGeneration,
-          message: error instanceof ApiError ? error.message : '无法加载论文高亮。',
+          message: publicWorkspaceError(error, '无法加载论文高亮。'),
         });
       });
 
@@ -213,7 +213,7 @@ export function usePaperWorkspace(
         paperId,
         requestLoadGeneration,
         error,
-        'Unable to build the core graph.',
+        '暂时无法构建核心图谱。',
       );
       throw error;
     }
@@ -254,7 +254,7 @@ export function usePaperWorkspace(
         paperId,
         requestLoadGeneration,
         error,
-        'Unable to build the deep graph.',
+        '暂时无法构建深度图谱。',
       );
       throw error;
     }
@@ -304,7 +304,7 @@ export function usePaperWorkspace(
         paperId,
         requestLoadRevision,
         error,
-        'Unable to receive an Agent response.',
+        '暂时无法获取助手回答。',
       );
       return null;
     }
@@ -355,7 +355,7 @@ export function usePaperWorkspace(
           type: 'notes/failed',
           paperId,
           loadRevision: requestLoadRevision,
-          message: error instanceof ApiError ? error.message : 'Unable to save this note.',
+          message: publicWorkspaceError(error, '笔记暂时无法保存。'),
         });
       }
       return null;
@@ -396,7 +396,7 @@ export function usePaperWorkspace(
     } catch (error) {
       return isAbortError(error) || signal.aborted
         ? { status: 'cancelled' as const, text }
-        : { status: 'failed' as const, text, message: error instanceof ApiError ? error.message : '解释请求失败，请重试。' };
+        : { status: 'failed' as const, text, message: publicWorkspaceError(error, '解释请求失败，请重试。') };
     }
   }, [state.activePaperId, state.loadRevision]);
 
@@ -468,7 +468,7 @@ export function usePaperWorkspace(
         type: 'request/failed',
         paperId,
         loadRevision: requestLoadRevision,
-        message: error instanceof ApiError ? `高亮保存失败：${error.message}` : '高亮保存失败，请稍后重试。',
+        message: `高亮保存失败：${publicWorkspaceError(error, '请稍后重试。')}`,
       });
       return null;
     }
@@ -491,7 +491,7 @@ export function usePaperWorkspace(
         type: 'request/failed',
         paperId,
         loadRevision: requestLoadRevision,
-        message: error instanceof ApiError ? `删除高亮失败：${error.message}` : '删除高亮失败，请稍后重试。',
+        message: `删除高亮失败：${publicWorkspaceError(error, '请稍后重试。')}`,
       });
       return false;
     }

@@ -17,7 +17,13 @@ import type {
   UpdateNoteInput,
 } from './types';
 
-const REQUEST_FAILED_MESSAGE = 'Request failed.';
+const REQUEST_FAILED_MESSAGE = '请求失败，请稍后重试。';
+
+function publicApiMessage(detail: unknown): string {
+  return typeof detail === 'string' && /[\u3400-\u9fff]/.test(detail)
+    ? detail
+    : REQUEST_FAILED_MESSAGE;
+}
 
 export class ApiError extends Error {
   readonly status: number;
@@ -38,7 +44,7 @@ export async function readApiError(response: Response): Promise<ApiError> {
     const body: unknown = await response.json();
     if (typeof body === 'object' && body !== null) {
       if ('detail' in body && typeof body.detail === 'string') {
-        message = body.detail;
+        message = publicApiMessage(body.detail);
       }
       if ('code' in body && typeof body.code === 'string') {
         code = body.code;

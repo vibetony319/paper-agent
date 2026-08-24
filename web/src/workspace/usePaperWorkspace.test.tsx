@@ -47,6 +47,13 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+it('shows a Chinese workspace fallback instead of raw transport or server errors', async () => {
+  vi.spyOn(paperApi, 'getDocument').mockRejectedValueOnce(new ApiError(503, 'Server temporarily unavailable.', 'UPSTREAM_DOWN'));
+  const { result } = renderHook(() => usePaperWorkspace('paper-a'));
+
+  await waitFor(() => expect(result.current.errorMessage).toBe('论文阅读工作区暂时无法加载。'));
+});
+
 it('returns and stores a core graph built for the active paper', async () => {
   const buildCoreGraph = vi.spyOn(paperApi, 'buildCoreGraph').mockResolvedValue(builtGraph);
   const { result } = renderHook(() => usePaperWorkspace('paper-a'));
@@ -312,7 +319,7 @@ it('reports and rethrows a deep graph API error', async () => {
   });
 
   expect(caught).toBe(apiError);
-  expect(result.current.errorMessage).toBe('Graph service is unavailable.');
+  expect(result.current.errorMessage).toBe('暂时无法构建深度图谱。');
   expect(result.current.graph).toBe(emptyGraph);
 });
 
@@ -326,7 +333,7 @@ it('mounts required document and graph state when notes fail independently', asy
   await waitFor(() => expect(result.current.document).not.toBeNull());
   expect(result.current.graph).toBe(emptyGraph);
   expect(result.current.errorMessage).toBeNull();
-  expect(result.current.notesErrorMessage).toBe('Notes are temporarily unavailable.');
+  expect(result.current.notesErrorMessage).toBe('论文笔记暂时无法加载。');
 });
 
 it('mounts required document and graph state while notes remain unresolved', async () => {

@@ -398,7 +398,7 @@ it('shows a public-safe paper library error', async () => {
   )));
   render(<App />);
 
-  expect(await screen.findByRole('alert')).toHaveTextContent('Paper library is unavailable.');
+  expect(await screen.findByRole('alert')).toHaveTextContent('请求失败，请稍后重试。');
   expect(screen.queryByText(/traceback|database/i)).not.toBeInTheDocument();
 });
 
@@ -416,7 +416,7 @@ it('keeps upload failures public-safe and leaves the current library usable', as
     type: 'application/pdf',
   }));
 
-  expect(await screen.findByRole('alert')).toHaveTextContent('Request failed.');
+  expect(await screen.findByRole('alert')).toHaveTextContent('请求失败，请稍后重试。');
   expect(screen.queryByText(/private|raw failure/i)).not.toBeInTheDocument();
   expect(screen.getByRole('button', { name: '打开 routing-paper.pdf' })).toBeEnabled();
   expect(screen.getByLabelText('上传 PDF')).toBeEnabled();
@@ -491,7 +491,7 @@ it('shows a safe workspace loading state and does not mount panes after a load e
   render(<App />);
   await user.click(await screen.findByRole('button', { name: '打开 routing-paper.pdf' }));
 
-  expect(await screen.findByRole('alert')).toHaveTextContent('Paper document is not ready.');
+  expect(await screen.findByRole('alert')).toHaveTextContent('请求失败，请稍后重试。');
   await waitFor(() => expect(screen.queryByLabelText('Paper reader')).not.toBeInTheDocument());
   expect(screen.queryByRole('tab', { name: '知识图谱' })).not.toBeInTheDocument();
 });
@@ -510,7 +510,7 @@ it('retries a transient document conflict from the workspace action', async () =
   render(<App />);
   const paperButton = await screen.findByRole('button', { name: '打开 routing-paper.pdf' });
   await user.click(paperButton);
-  expect(await screen.findByRole('alert')).toHaveTextContent('Paper document is not ready.');
+  expect(await screen.findByRole('alert')).toHaveTextContent('请求失败，请稍后重试。');
 
   await user.click(screen.getByRole('button', { name: '重试加载论文' }));
 
@@ -533,7 +533,7 @@ it('retries a transient graph failure from the blocking workspace action', async
   render(<App />);
   await user.click(await screen.findByRole('button', { name: '打开 routing-paper.pdf' }));
   expect(await screen.findByRole('alert')).toHaveTextContent(
-    'Paper graph is temporarily unavailable.',
+    '请求失败，请稍后重试。',
   );
 
   await user.click(screen.getByRole('button', { name: '重试加载论文' }));
@@ -558,7 +558,7 @@ it('keeps the research panes ready and reports a notes-only load failure', async
   expect(screen.getByRole('tab', { name: '知识图谱' })).toBeVisible();
   expect(screen.getByRole('complementary', { name: '研究工具' })).toBeVisible();
   expect(await screen.findByRole('alert')).toHaveTextContent(
-    'Paper notes are temporarily unavailable.',
+    '请求失败，请稍后重试。',
   );
 });
 
@@ -596,7 +596,7 @@ it('turns a workspace network failure into a public-safe error state', async () 
   await user.click(await screen.findByRole('button', { name: '打开 routing-paper.pdf' }));
 
   expect(await screen.findByRole('alert')).toHaveTextContent(
-    'Unable to load the paper workspace.',
+    '论文阅读工作区暂时无法加载。',
   );
   expect(screen.queryByLabelText('Paper reader')).not.toBeInTheDocument();
 });

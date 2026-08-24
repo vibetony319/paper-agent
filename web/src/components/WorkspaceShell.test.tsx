@@ -9,7 +9,7 @@ vi.mock('./PdfReader', () => ({
 }));
 
 vi.mock('./ResizableSplit', () => ({
-  ResizableSplit: ({ paper, tools }: { paper: React.ReactNode; tools: React.ReactNode }) => <div>{paper}{tools}</div>,
+  ResizableSplit: ({ paper, tools }: { paper: React.ReactNode; tools: React.ReactNode }) => <div data-testid="workspace-split">{paper}{tools}</div>,
 }));
 
 import type { AgentMessage, ModelProfile, Note, PaperSummary, TextAnchor } from '../api/types';
@@ -30,7 +30,7 @@ function workspaceFixture() {
   return {
     activePaperId: 'paper-a', loadRevision: 1,
     document: { paper: { id: 'paper-a', original_filename: 'paper.pdf', status: 'completed' as const }, pages: [], sections: [], elements: [], notes: [] },
-    graph: { nodes: [], edges: [] }, notes: [] as Note[], anchors: [] as TextAnchor[], highlights: [], selection: null, activeSource: null, messages: [] as AgentMessage[], exchanges: [] as Array<{ question: string; message: AgentMessage }>, errorMessage: null, notesErrorMessage: null,
+    graph: { nodes: [], edges: [] }, notes: [] as Note[], anchors: [] as TextAnchor[], highlights: [], selection: null, activeSource: null, messages: [] as AgentMessage[], exchanges: [] as Array<{ question: string; message: AgentMessage }>, errorMessage: null as string | null, notesErrorMessage: null as string | null,
     clearActiveSource: vi.fn(), setSelection: vi.fn(), clearSelection: vi.fn(), createHighlight: vi.fn(), deleteHighlight: vi.fn(), runSelectionAssist: vi.fn(), saveNote: vi.fn(),
     selectCitation: vi.fn(), selectGraphEvidenceElement: vi.fn(), selectAnchorSource: vi.fn(), updateNote: vi.fn(), deleteNote: vi.fn(),
     askAgent: vi.fn(), buildCoreGraph: vi.fn(), buildDeepGraph: vi.fn(),
@@ -44,6 +44,7 @@ it('attaches the current selection to the always-mounted composer without sendin
   const workspace = workspaceFixture();
   render(<WorkspaceShell paper={paper} workspace={workspace as never} onRetryPaperLoading={vi.fn()} onReturnToLibrary={vi.fn()} onOpenModelSettings={vi.fn()} onDeleteRequested={vi.fn()} modelProfiles={[profile]} selectedModelProfileId="qwen" onSelectedModelProfileIdChange={vi.fn()} />);
 
+  expect(screen.getByTestId('workspace-content').querySelector('.workspace-shell__errors')).toBeTruthy();
   await user.click(screen.getByRole('button', { name: '问助手' }));
   expect(workspace.askAgent).not.toHaveBeenCalled();
   expect(screen.getByLabelText('已附加选区')).toHaveTextContent('选区内容');
@@ -76,6 +77,20 @@ it('keeps the composer mounted while switching all three right-side tabs', async
     expect(screen.getByLabelText('向论文助手提问')).toBeInTheDocument();
   }
   expect(screen.getAllByText('当前模型')).toHaveLength(1);
+});
+
+it('keeps concurrent workspace and annotation errors inside the constrained split content', () => {
+  const workspace = workspaceFixture();
+  workspace.errorMessage = '文档加载失败。';
+  workspace.notesErrorMessage = '批注加载失败。';
+  render(<WorkspaceShell paper={paper} workspace={workspace as never} onRetryPaperLoading={vi.fn()} onReturnToLibrary={vi.fn()} onOpenModelSettings={vi.fn()} onDeleteRequested={vi.fn()} modelProfiles={[profile]} selectedModelProfileId="qwen" onSelectedModelProfileIdChange={vi.fn()} />);
+
+  const content = screen.getByTestId('workspace-content');
+  expect(content).toHaveClass('workspace-shell__content');
+  expect(content.querySelector('.workspace-shell__errors')).toBeTruthy();
+  expect(content).toContainElement(screen.getByText('文档加载失败。'));
+  expect(content).toContainElement(screen.getByText('批注加载失败。'));
+  expect(content).toContainElement(screen.getByTestId('workspace-split'));
 });
 
 it('shows submitted questions, immutable model badges, and routes paper and note sources separately', async () => {

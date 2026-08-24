@@ -42,6 +42,15 @@ it('switches paper and tools below 880px without unmounting either subtree', () 
   expect(screen.getByLabelText('论文状态')).toBeInTheDocument();
 });
 
+it('uses the compact paper/tools switch at exactly 880px', () => {
+  Object.defineProperty(window, 'innerWidth', { configurable: true, value: 880 });
+  render(<ResizableSplit paper={<div>论文内容</div>} tools={<div>工具内容</div>} />);
+
+  expect(screen.queryByRole('separator')).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '论文' })).toBeVisible();
+  expect(screen.getByRole('button', { name: '工具' })).toBeVisible();
+});
+
 it('releases pointer capture when resizing is cancelled or capture is lost', () => {
   render(<ResizableSplit paper={<div>论文内容</div>} tools={<div>工具内容</div>} />);
   const separator = screen.getByRole('separator', { name: '调整论文与工具宽度' });

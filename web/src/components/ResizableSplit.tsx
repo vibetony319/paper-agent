@@ -23,7 +23,7 @@ export interface ResizableSplitProps {
 
 export function ResizableSplit({ paper, tools }: ResizableSplitProps) {
   const [percentage, setPercentage] = useState(initialPercentage);
-  const [compact, setCompact] = useState(() => window.innerWidth < 880);
+  const [compact, setCompact] = useState(() => window.innerWidth <= 880);
   const [visiblePane, setVisiblePane] = useState<'paper' | 'tools'>('paper');
   const rootRef = useRef<HTMLDivElement>(null);
   const activePointerId = useRef<number | null>(null);
@@ -35,7 +35,7 @@ export function ResizableSplit({ paper, tools }: ResizableSplitProps) {
   };
 
   useEffect(() => {
-    const onResize = () => setCompact(window.innerWidth < 880);
+    const onResize = () => setCompact(window.innerWidth <= 880);
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
