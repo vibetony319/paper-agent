@@ -20,6 +20,8 @@ export const initialWorkspaceState: WorkspaceState = {
   highlights: [],
   anchors: [],
   highlightsMutationGeneration: 0,
+  notesMutationGeneration: 0,
+  anchorsMutationGeneration: 0,
   selection: null,
   activeSource: null,
   graphFocusNodeId: null,
@@ -40,7 +42,7 @@ export type WorkspaceAction =
     graph: PaperGraph;
   }
   | { type: 'workspace/failed'; paperId: string; loadRevision: number; message: string }
-  | { type: 'notes/loaded'; paperId: string; loadRevision: number; notes: Note[] }
+  | { type: 'notes/loaded'; paperId: string; loadRevision: number; mutationGeneration?: number; notes: Note[] }
   | {
     type: 'highlights/loaded';
     paperId: string;
@@ -48,8 +50,8 @@ export type WorkspaceAction =
     mutationGeneration: number;
     highlights: Highlight[];
   }
-  | { type: 'anchors/loaded'; paperId: string; loadRevision: number; anchors: TextAnchor[] }
-  | { type: 'anchor/created'; paperId: string; loadRevision: number; anchor: TextAnchor }
+  | { type: 'anchors/loaded'; paperId: string; loadRevision: number; mutationGeneration?: number; anchors: TextAnchor[] }
+  | { type: 'anchor/created'; paperId: string; loadRevision: number; mutationGeneration?: number; anchor: TextAnchor }
   | { type: 'notes/failed'; paperId: string; loadRevision: number; message: string }
   | { type: 'graph/loaded'; paperId: string; loadRevision: number; graph: PaperGraph }
   | { type: 'source/selected'; source: SourceTarget | null }
@@ -62,9 +64,9 @@ export type WorkspaceAction =
     mode: AgentMode;
     message: AgentMessage;
   }
-  | { type: 'notes/created'; paperId: string; loadRevision: number; note: Note }
-  | { type: 'notes/updated'; paperId: string; loadRevision: number; note: Note }
-  | { type: 'notes/deleted'; paperId: string; loadRevision: number; noteId: string }
+  | { type: 'notes/created'; paperId: string; loadRevision: number; mutationGeneration?: number; note: Note }
+  | { type: 'notes/updated'; paperId: string; loadRevision: number; mutationGeneration?: number; note: Note }
+  | { type: 'notes/deleted'; paperId: string; loadRevision: number; mutationGeneration?: number; noteId: string }
   | { type: 'selection/set'; draft: import('../api/types').TextAnchorDraft; toolbarRect: DOMRect }
   | { type: 'selection/clear' }
   | {
@@ -144,17 +146,17 @@ export function workspaceReducer(
         ? { ...state, notes: action.notes, notesErrorMessage: null }
         : state;
     case 'highlights/loaded':
-      return isCurrentLoad(state, action.paperId, action.loadRevision)
+      return isCurrentLoad(state, action.paperId, action.loadRevision) && (action.mutationGeneration === undefined || state.notesMutationGeneration === action.mutationGeneration)
         && state.highlightsMutationGeneration === action.mutationGeneration
         ? { ...state, highlights: action.highlights }
         : state;
     case 'anchors/loaded':
-      return isCurrentLoad(state, action.paperId, action.loadRevision)
+      return isCurrentLoad(state, action.paperId, action.loadRevision) && (action.mutationGeneration === undefined || state.anchorsMutationGeneration === action.mutationGeneration)
         ? { ...state, anchors: action.anchors }
         : state;
     case 'anchor/created':
       return isCurrentLoad(state, action.paperId, action.loadRevision)
-        ? { ...state, anchors: [...state.anchors.filter(({ id }) => id !== action.anchor.id), action.anchor] }
+        ? { ...state, anchors: [...state.anchors.filter(({ id }) => id !== action.anchor.id), action.anchor], anchorsMutationGeneration: action.mutationGeneration ?? state.anchorsMutationGeneration + 1 }
         : state;
     case 'notes/failed':
       return isCurrentLoad(state, action.paperId, action.loadRevision)
@@ -182,17 +184,18 @@ export function workspaceReducer(
       return isCurrentLoad(state, action.paperId, action.loadRevision)
         ? {
           ...state,
-          notes: [...state.notes, action.note],
+          notes: [...state.notes.filter(({ id }) => id !== action.note.id), action.note],
+          notesMutationGeneration: action.mutationGeneration ?? state.notesMutationGeneration + 1,
           notesErrorMessage: null,
         }
         : state;
     case 'notes/updated':
       return isCurrentLoad(state, action.paperId, action.loadRevision)
-        ? { ...state, notes: state.notes.map((note) => note.id === action.note.id ? action.note : note) }
+        ? { ...state, notes: state.notes.map((note) => note.id === action.note.id ? action.note : note), notesMutationGeneration: action.mutationGeneration ?? state.notesMutationGeneration + 1 }
         : state;
     case 'notes/deleted':
       return isCurrentLoad(state, action.paperId, action.loadRevision)
-        ? { ...state, notes: state.notes.filter((note) => note.id !== action.noteId) }
+        ? { ...state, notes: state.notes.filter((note) => note.id !== action.noteId), notesMutationGeneration: action.mutationGeneration ?? state.notesMutationGeneration + 1 }
         : state;
     case 'selection/set':
       return { ...state, selection: { draft: action.draft, toolbarRect: action.toolbarRect } };

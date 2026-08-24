@@ -26,6 +26,8 @@ export type WorkspaceState = {
   highlights: Highlight[];
   anchors: TextAnchor[];
   highlightsMutationGeneration: number;
+  notesMutationGeneration: number;
+  anchorsMutationGeneration: number;
   selection: { draft: TextAnchorDraft; toolbarRect: DOMRect } | null;
   activeSource: SourceTarget | null;
   graphFocusNodeId: string | null;

@@ -25,6 +25,9 @@ export function usePaperWorkspace(
   const currentWorkspaceRevision = useRef(loadRevision);
   const currentLoadGeneration = useRef(state.loadRevision);
   const highlightsMutationGeneration = useRef(0);
+  const notesMutationGeneration = useRef(0);
+  const anchorsMutationGeneration = useRef(0);
+  const workspaceLifetimeController = useRef(new AbortController());
 
   currentPaperId.current = activePaperId;
   currentWorkspaceRevision.current = loadRevision;
@@ -91,6 +94,10 @@ export function usePaperWorkspace(
     const loadGeneration = nextLoadGeneration.current++;
     const controller = new AbortController();
     highlightsMutationGeneration.current = 0;
+    notesMutationGeneration.current = 0;
+    anchorsMutationGeneration.current = 0;
+    workspaceLifetimeController.current.abort();
+    workspaceLifetimeController.current = new AbortController();
     const annotationsMutationGeneration = highlightsMutationGeneration.current;
     dispatch({ type: 'paper/opened', paperId: activePaperId, loadRevision: loadGeneration });
 
@@ -128,13 +135,14 @@ export function usePaperWorkspace(
         });
       });
 
+    const notesLoadMutationGeneration = notesMutationGeneration.current;
     void paperApi.getNotes(activePaperId, { signal: controller.signal })
       .then((notes) => {
         if (controller.signal.aborted) {
           return;
         }
         dispatch({
-          type: 'notes/loaded', paperId: activePaperId, loadRevision: loadGeneration, notes,
+          type: 'notes/loaded', paperId: activePaperId, loadRevision: loadGeneration, mutationGeneration: notesLoadMutationGeneration, notes,
         });
       })
       .catch((error: unknown) => {
@@ -151,6 +159,7 @@ export function usePaperWorkspace(
         });
       });
 
+    const anchorsLoadMutationGeneration = anchorsMutationGeneration.current;
     void paperApi.getAnnotations(activePaperId, { signal: controller.signal })
       .then(({ highlights, anchors = [] }) => {
         if (controller.signal.aborted) return;
@@ -158,7 +167,7 @@ export function usePaperWorkspace(
           type: 'highlights/loaded', paperId: activePaperId, loadRevision: loadGeneration, highlights,
           mutationGeneration: annotationsMutationGeneration,
         });
-        dispatch({ type: 'anchors/loaded', paperId: activePaperId, loadRevision: loadGeneration, anchors });
+        dispatch({ type: 'anchors/loaded', paperId: activePaperId, loadRevision: loadGeneration, mutationGeneration: anchorsLoadMutationGeneration, anchors });
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted || isAbortError(error)) return;
@@ -305,13 +314,18 @@ export function usePaperWorkspace(
         element_id: elementId,
         page_number: pageNumber,
         ...(anchor === undefined ? {} : { anchor, request_id: crypto.randomUUID() }),
-      });
+      }, { signal: workspaceLifetimeController.current.signal });
+      const noteMutationGeneration = notesMutationGeneration.current + 1;
+      notesMutationGeneration.current = noteMutationGeneration;
       dispatch({
-        type: 'notes/created', paperId, loadRevision: requestLoadRevision, note,
+        type: 'notes/created', paperId, loadRevision: requestLoadRevision, mutationGeneration: noteMutationGeneration, note,
       });
       if (anchor !== undefined && note.anchor_ids?.[0] !== undefined) {
+        const anchorMutationGeneration = anchorsMutationGeneration.current + 1;
+        anchorsMutationGeneration.current = anchorMutationGeneration;
         dispatch({
           type: 'anchor/created', paperId, loadRevision: requestLoadRevision,
+          mutationGeneration: anchorMutationGeneration,
           anchor: { ...anchor, id: note.anchor_ids[0], element_id: anchor.element_id ?? null },
         });
       }
@@ -347,7 +361,14 @@ export function usePaperWorkspace(
       }, signal)) {
         if (event.event === 'delta') { text += event.data.text; onDelta?.(event.data.text); }
         if (event.event === 'completed') {
-          dispatch({ type: 'notes/created', paperId, loadRevision: requestLoadRevision, note: event.data.note });
+          const noteMutationGeneration = notesMutationGeneration.current + 1;
+          notesMutationGeneration.current = noteMutationGeneration;
+          dispatch({ type: 'notes/created', paperId, loadRevision: requestLoadRevision, mutationGeneration: noteMutationGeneration, note: event.data.note });
+          if (event.data.note.anchor_ids?.[0] !== undefined) {
+            const anchorMutationGeneration = anchorsMutationGeneration.current + 1;
+            anchorsMutationGeneration.current = anchorMutationGeneration;
+            dispatch({ type: 'anchor/created', paperId, loadRevision: requestLoadRevision, mutationGeneration: anchorMutationGeneration, anchor: { ...draft, id: event.data.note.anchor_ids[0], element_id: draft.element_id ?? null } });
+          }
           return { status: 'completed' as const, text: event.data.note.body };
         }
         if (event.event === 'error') return { status: 'failed' as const, text, message: event.data.detail };
@@ -378,15 +399,16 @@ export function usePaperWorkspace(
     if (state.activePaperId === null) return null;
     const paperId = state.activePaperId; const revision = state.loadRevision;
     try {
-      const note = await paperApi.updateNote(paperId, noteId, { body, expected_updated_at: expectedUpdatedAt });
-      dispatch({ type: 'notes/updated', paperId, loadRevision: revision, note }); return note;
+      const note = await paperApi.updateNote(paperId, noteId, { body, expected_updated_at: expectedUpdatedAt }, { signal: workspaceLifetimeController.current.signal });
+      const mutationGeneration = notesMutationGeneration.current + 1; notesMutationGeneration.current = mutationGeneration;
+      dispatch({ type: 'notes/updated', paperId, loadRevision: revision, mutationGeneration, note }); return note;
     } catch (error) { throw error; }
   }, [state.activePaperId, state.loadRevision]);
 
   const deleteNote = useCallback(async (noteId: string) => {
     if (state.activePaperId === null) return false;
     const paperId = state.activePaperId; const revision = state.loadRevision;
-    try { await paperApi.deleteNote(paperId, noteId); dispatch({ type: 'notes/deleted', paperId, loadRevision: revision, noteId }); return true; }
+    try { await paperApi.deleteNote(paperId, noteId, { signal: workspaceLifetimeController.current.signal }); const mutationGeneration = notesMutationGeneration.current + 1; notesMutationGeneration.current = mutationGeneration; dispatch({ type: 'notes/deleted', paperId, loadRevision: revision, mutationGeneration, noteId }); return true; }
     catch { return false; }
   }, [state.activePaperId, state.loadRevision]);
 

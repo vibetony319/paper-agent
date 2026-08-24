@@ -13,7 +13,7 @@ type PdfPageViewProps = {
   active: boolean;
   overlays: SourceTarget[];
   highlights?: Highlight[];
-  onHighlightNote?: (highlight: Highlight) => void;
+  onHighlightNote?: (highlight: Highlight, rect: DOMRect) => void;
   onHighlightDeleted?: (highlightId: string) => void;
 };
 

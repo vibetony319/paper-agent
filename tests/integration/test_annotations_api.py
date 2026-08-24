@@ -199,3 +199,18 @@ def test_delete_highlight_keeps_anchored_note(
     remaining = client.get(f"/api/papers/{paper_id}/annotations").json()
     assert remaining["highlights"] == []
     assert remaining["notes"][0]["anchor_ids"] == note["anchor_ids"]
+
+
+def test_annotation_bundle_never_leaks_anchors_from_another_paper(
+    client: TestClient, sample_pdf: Path
+) -> None:
+    paper_a = _upload(client, sample_pdf)["id"]
+    paper_b = _upload(client, sample_pdf)["id"]
+    client.post(f"/api/papers/{paper_a}/notes", json={
+        "body": "A", "anchor": _highlight_payload()["quote"] and {
+            "quote": "only paper A", "page_number": 1,
+            "rects": [{"order": 0, "x0": 0.1, "y0": 0.2, "x1": 0.8, "y1": 0.25}],
+        },
+    })
+
+    assert client.get(f"/api/papers/{paper_b}/annotations").json()["anchors"] == []

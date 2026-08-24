@@ -72,6 +72,7 @@ export function PdfReader({
   const [visiblePages, setVisiblePages] = useState<Set<number>>(() => new Set(pageNumbers.slice(0, 1)));
   const [assistAction, setAssistAction] = useState<SelectionAssistAction | null>(null);
   const [manualNoteOpen, setManualNoteOpen] = useState(false);
+  const [manualNoteTarget, setManualNoteTarget] = useState<{ draft: TextAnchorDraft; rect: DOMRect } | null>(null);
   const pageShells = useRef(new Map<number, HTMLDivElement>());
   const readerRef = useRef<HTMLElement>(null);
 
@@ -238,13 +239,13 @@ export function PdfReader({
                     active
                     overlays={overlays}
                     highlights={pageHighlights}
-                    onHighlightNote={selectionActions?.note === undefined ? undefined : (highlight) => {
-                      selectionActions.note?.({
+                    onHighlightNote={onCreateSelectionNote === undefined ? undefined : (highlight, rect) => {
+                      setManualNoteTarget({ rect, draft: {
                         quote: highlight.anchor.quote,
                         page_number: highlight.anchor.page_number,
                         rects: highlight.anchor.rects,
                         ...(highlight.anchor.element_id === null ? {} : { element_id: highlight.anchor.element_id }),
-                      });
+                      } });
                     }}
                     onHighlightDeleted={(highlightId) => onDeleteHighlight?.(highlightId)}
                   />
@@ -283,6 +284,7 @@ export function PdfReader({
         draft={selection.draft} toolbarRect={selection.toolbarRect}
         onSave={onCreateSelectionNote} onDismiss={() => setManualNoteOpen(false)}
       /> : null}
+      {manualNoteTarget !== null && onCreateSelectionNote !== undefined ? <ManualNotePopover draft={manualNoteTarget.draft} toolbarRect={manualNoteTarget.rect} onSave={onCreateSelectionNote} onDismiss={() => setManualNoteTarget(null)} /> : null}
     </section>
   );
 }

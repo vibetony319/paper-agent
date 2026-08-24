@@ -144,25 +144,25 @@ export const paperApi = {
       jsonRequest('DELETE'),
     ),
 
-  createNote: (paperId: string, input: CreateNoteInput) =>
+  createNote: (paperId: string, input: CreateNoteInput, init?: Pick<RequestInit, 'signal'>) =>
     request<Note>(
       `/api/papers/${encodeURIComponent(paperId)}/notes`,
-      jsonRequest('POST', input),
+      { ...jsonRequest('POST', input), ...init },
     ),
 
   getNotes: (paperId: string, init?: Pick<RequestInit, 'signal'>) =>
     request<Note[]>(`/api/papers/${encodeURIComponent(paperId)}/notes`, init),
 
-  updateNote: (paperId: string, noteId: string, input: UpdateNoteInput) =>
+  updateNote: (paperId: string, noteId: string, input: UpdateNoteInput, init?: Pick<RequestInit, 'signal'>) =>
     request<Note>(
       `/api/papers/${encodeURIComponent(paperId)}/notes/${encodeURIComponent(noteId)}`,
-      jsonRequest('PATCH', input),
+      { ...jsonRequest('PATCH', input), ...init },
     ),
 
-  deleteNote: (paperId: string, noteId: string) =>
+  deleteNote: (paperId: string, noteId: string, init?: Pick<RequestInit, 'signal'>) =>
     request<void>(
       `/api/papers/${encodeURIComponent(paperId)}/notes/${encodeURIComponent(noteId)}`,
-      jsonRequest('DELETE'),
+      { ...jsonRequest('DELETE'), ...init },
     ),
 
   askAgent: (paperId: string, input: AskAgentInput) =>

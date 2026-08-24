@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 import type { SelectionAssistAction, TextAnchorDraft } from '../api/types';
 
@@ -46,8 +46,8 @@ export function InlineAssistantPopover({
     });
   }, [toolbarRect]);
 
-  const start = async () => {
-    if (modelProfileId === null || state === 'streaming') return;
+  const start = useCallback(async () => {
+    if (modelProfileId === null || controller.current !== null) return;
     requestId.current ??= crypto.randomUUID();
     const nextController = new AbortController();
     controller.current = nextController;
@@ -63,7 +63,14 @@ export function InlineAssistantPopover({
     setText(result.text);
     setState(result.status);
     setMessage(result.status === 'failed' ? result.message ?? `${title}失败，请重试。` : null);
-  };
+  }, [action, draft, modelProfileId, runSelectionAssist, title]);
+
+  useEffect(() => {
+    if (modelProfileId === null) return undefined;
+    // The timeout keeps StrictMode's development-only setup/cleanup cycle from starting a live request.
+    const timer = window.setTimeout(() => { void start(); }, 0);
+    return () => { window.clearTimeout(timer); controller.current?.abort(); };
+  }, [action, draft, modelProfileId, start]);
 
   const cancel = () => controller.current?.abort();
   const copy = async () => { if (text) await navigator.clipboard?.writeText(text); };
@@ -72,7 +79,6 @@ export function InlineAssistantPopover({
     <section ref={popoverRef} className="inline-assistant-popover" style={position} aria-label={`${title}选区`}>
       <header><strong>{title}</strong><button type="button" aria-label="关闭" onClick={() => { if (state === 'streaming') cancel(); onDismiss(); }}>关闭</button></header>
       {modelProfileId === null ? <p role="status">请先选择可用模型后再{title}。</p> : null}
-      {state === 'idle' && modelProfileId !== null ? <button type="button" onClick={() => { void start(); }}>开始{title}</button> : null}
       {state === 'streaming' ? <button type="button" onClick={cancel}>取消</button> : null}
       {text ? <><p className="inline-assistant-popover__text">{text}</p><button type="button" onClick={() => { void copy(); }}>复制</button></> : null}
       {state === 'completed' ? <p role="status">已存入笔记</p> : null}

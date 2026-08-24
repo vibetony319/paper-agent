@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { ApiError } from '../api/client';
-import type { DocumentElement, Note, TextAnchor } from '../api/types';
+import type { DocumentElement, Note, TextAnchor, TextAnchorDraft } from '../api/types';
 import { hasValidSourceLocation, toAnchorSourceTarget } from '../workspace/sourceTarget';
 import type { SourceTarget } from '../workspace/types';
 
@@ -11,7 +11,7 @@ export interface NotesPanelProps {
   notes: Note[];
   anchors?: TextAnchor[];
   documentElements: DocumentElement[];
-  saveNote: (body: string, elementId?: string, pageNumber?: number) => Promise<Note | null>;
+  saveNote: (body: string, elementId?: string, pageNumber?: number, anchor?: TextAnchorDraft) => Promise<Note | null>;
   onSelectSource: (elementId: string) => void;
   onSelectAnchor?: (source: SourceTarget) => void;
   updateNote?: (noteId: string, body: string, expectedUpdatedAt?: string | null) => Promise<Note | null>;
@@ -43,7 +43,10 @@ export function NotesPanel({ paperId, activeSource, notes, anchors = [], documen
   const submit = async (event: React.FormEvent) => {
     event.preventDefault(); if (!draft.trim() || pending || paperId === null) return;
     const version = ++requestVersion.current;
-    setPending(true); setError(null); const note = await saveNote(draft.trim(), activeSource?.id, activeSource?.pageNumber);
+    const sourceAnchor = activeSource?.kind === 'text_anchor' ? anchorsById.get(activeSource.id) : undefined;
+    setPending(true); setError(null); const note = sourceAnchor === undefined
+      ? await saveNote(draft.trim(), activeSource?.id, activeSource?.pageNumber)
+      : await saveNote(draft.trim(), undefined, activeSource?.pageNumber, { quote: sourceAnchor.quote, page_number: sourceAnchor.page_number, rects: sourceAnchor.rects, ...(sourceAnchor.element_id === null ? {} : { element_id: sourceAnchor.element_id }) });
     if (version !== requestVersion.current) return;
     setPending(false);
     if (!note) { setError('笔记保存失败，请稍后重试。'); return; }
