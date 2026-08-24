@@ -87,6 +87,7 @@ export function App() {
               onChange={modelProfiles.selectProfile}
             />
           )}
+          selectedModelProfileId={modelProfiles.selectedProfileId}
         />
       ) : null}
       <ModelSettingsDialog

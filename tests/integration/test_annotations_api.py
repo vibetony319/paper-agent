@@ -141,6 +141,18 @@ def test_notes_crud_and_annotation_bundle(
     bundle = client.get(f"/api/papers/{paper_id}/annotations")
     assert bundle.status_code == 200
     assert [item["id"] for item in bundle.json()["notes"]] == [note["id"]]
+    # The anchor map is the durable source for notes which do not have a highlight.
+    assert bundle.json()["anchors"] == [
+        {
+            "id": note["anchor_ids"][0],
+            "quote": "selected text",
+            "page_number": 1,
+            "element_id": None,
+            "rects": [
+                {"order": 0, "x0": 0.1, "y0": 0.2, "x1": 0.8, "y1": 0.25}
+            ],
+        }
+    ]
 
     deleted = client.delete(f"/api/papers/{paper_id}/notes/{note['id']}")
     assert deleted.status_code == 204

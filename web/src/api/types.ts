@@ -76,6 +76,7 @@ export interface CreateHighlightInput extends TextAnchorDraft {
 export interface AnnotationBundle {
   highlights: Highlight[];
   notes: Note[];
+  anchors?: TextAnchor[];
 }
 
 export type SelectionAssistAction = 'explain' | 'translate';
@@ -231,6 +232,8 @@ export interface CreateNoteInput {
   body: string;
   element_id?: string;
   page_number?: number;
+  anchor?: TextAnchorDraft;
+  request_id?: string;
 }
 
 export interface UpdateNoteInput {

@@ -4,6 +4,7 @@ import type {
   BoundingBox,
   Highlight,
   Note,
+  TextAnchor,
   PaperDocument,
   PaperGraph,
   TextAnchorDraft,
@@ -23,6 +24,7 @@ export type WorkspaceState = {
   graph: PaperGraph | null;
   notes: Note[];
   highlights: Highlight[];
+  anchors: TextAnchor[];
   highlightsMutationGeneration: number;
   selection: { draft: TextAnchorDraft; toolbarRect: DOMRect } | null;
   activeSource: SourceTarget | null;

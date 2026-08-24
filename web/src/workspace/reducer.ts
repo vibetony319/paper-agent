@@ -4,6 +4,7 @@ import type {
   DocumentElement,
   Highlight,
   Note,
+  TextAnchor,
   PaperDocument,
   PaperGraph,
 } from '../api/types';
@@ -17,6 +18,7 @@ export const initialWorkspaceState: WorkspaceState = {
   graph: null,
   notes: [],
   highlights: [],
+  anchors: [],
   highlightsMutationGeneration: 0,
   selection: null,
   activeSource: null,
@@ -46,6 +48,8 @@ export type WorkspaceAction =
     mutationGeneration: number;
     highlights: Highlight[];
   }
+  | { type: 'anchors/loaded'; paperId: string; loadRevision: number; anchors: TextAnchor[] }
+  | { type: 'anchor/created'; paperId: string; loadRevision: number; anchor: TextAnchor }
   | { type: 'notes/failed'; paperId: string; loadRevision: number; message: string }
   | { type: 'graph/loaded'; paperId: string; loadRevision: number; graph: PaperGraph }
   | { type: 'source/selected'; source: SourceTarget | null }
@@ -59,6 +63,8 @@ export type WorkspaceAction =
     message: AgentMessage;
   }
   | { type: 'notes/created'; paperId: string; loadRevision: number; note: Note }
+  | { type: 'notes/updated'; paperId: string; loadRevision: number; note: Note }
+  | { type: 'notes/deleted'; paperId: string; loadRevision: number; noteId: string }
   | { type: 'selection/set'; draft: import('../api/types').TextAnchorDraft; toolbarRect: DOMRect }
   | { type: 'selection/clear' }
   | {
@@ -142,6 +148,14 @@ export function workspaceReducer(
         && state.highlightsMutationGeneration === action.mutationGeneration
         ? { ...state, highlights: action.highlights }
         : state;
+    case 'anchors/loaded':
+      return isCurrentLoad(state, action.paperId, action.loadRevision)
+        ? { ...state, anchors: action.anchors }
+        : state;
+    case 'anchor/created':
+      return isCurrentLoad(state, action.paperId, action.loadRevision)
+        ? { ...state, anchors: [...state.anchors.filter(({ id }) => id !== action.anchor.id), action.anchor] }
+        : state;
     case 'notes/failed':
       return isCurrentLoad(state, action.paperId, action.loadRevision)
         ? { ...state, notesErrorMessage: action.message }
@@ -171,6 +185,14 @@ export function workspaceReducer(
           notes: [...state.notes, action.note],
           notesErrorMessage: null,
         }
+        : state;
+    case 'notes/updated':
+      return isCurrentLoad(state, action.paperId, action.loadRevision)
+        ? { ...state, notes: state.notes.map((note) => note.id === action.note.id ? action.note : note) }
+        : state;
+    case 'notes/deleted':
+      return isCurrentLoad(state, action.paperId, action.loadRevision)
+        ? { ...state, notes: state.notes.filter((note) => note.id !== action.noteId) }
         : state;
     case 'selection/set':
       return { ...state, selection: { draft: action.draft, toolbarRect: action.toolbarRect } };

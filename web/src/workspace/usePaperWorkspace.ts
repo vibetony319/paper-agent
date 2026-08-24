@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react';
 
 import { ApiError, paperApi } from '../api/client';
-import type { AgentMode, Citation, PaperSummary, TextAnchorDraft } from '../api/types';
+import { streamSelectionAssist } from '../api/sse';
+import type { AgentMode, Citation, PaperSummary, SelectionAssistAction, TextAnchorDraft } from '../api/types';
 import {
   initialWorkspaceState,
   toSourceTarget,
@@ -151,12 +152,13 @@ export function usePaperWorkspace(
       });
 
     void paperApi.getAnnotations(activePaperId, { signal: controller.signal })
-      .then(({ highlights }) => {
+      .then(({ highlights, anchors = [] }) => {
         if (controller.signal.aborted) return;
         dispatch({
           type: 'highlights/loaded', paperId: activePaperId, loadRevision: loadGeneration, highlights,
           mutationGeneration: annotationsMutationGeneration,
         });
+        dispatch({ type: 'anchors/loaded', paperId: activePaperId, loadRevision: loadGeneration, anchors });
       })
       .catch((error: unknown) => {
         if (controller.signal.aborted || isAbortError(error)) return;
@@ -290,6 +292,7 @@ export function usePaperWorkspace(
     body: string,
     elementId = state.activeSource?.id,
     pageNumber = state.activeSource?.pageNumber,
+    anchor?: TextAnchorDraft,
   ) => {
     if (state.activePaperId === null) {
       return null;
@@ -301,10 +304,17 @@ export function usePaperWorkspace(
         body,
         element_id: elementId,
         page_number: pageNumber,
+        ...(anchor === undefined ? {} : { anchor, request_id: crypto.randomUUID() }),
       });
       dispatch({
         type: 'notes/created', paperId, loadRevision: requestLoadRevision, note,
       });
+      if (anchor !== undefined && note.anchor_ids?.[0] !== undefined) {
+        dispatch({
+          type: 'anchor/created', paperId, loadRevision: requestLoadRevision,
+          anchor: { ...anchor, id: note.anchor_ids[0], element_id: anchor.element_id ?? null },
+        });
+      }
       return note;
     } catch (error) {
       if (!isAbortError(error)) {
@@ -319,6 +329,37 @@ export function usePaperWorkspace(
     }
   }, [state.activePaperId, state.activeSource, state.loadRevision]);
 
+  const runSelectionAssist = useCallback(async (
+    action: SelectionAssistAction,
+    draft: TextAnchorDraft,
+    modelProfileId: string,
+    requestId: string,
+    signal: AbortSignal,
+    onDelta?: (text: string) => void,
+  ) => {
+    if (state.activePaperId === null) return { status: 'failed' as const, text: '当前论文不可用。' };
+    const paperId = state.activePaperId;
+    const requestLoadRevision = state.loadRevision;
+    let text = '';
+    try {
+      for await (const event of streamSelectionAssist(paperId, {
+        ...draft, action, model_profile_id: modelProfileId, request_id: requestId,
+      }, signal)) {
+        if (event.event === 'delta') { text += event.data.text; onDelta?.(event.data.text); }
+        if (event.event === 'completed') {
+          dispatch({ type: 'notes/created', paperId, loadRevision: requestLoadRevision, note: event.data.note });
+          return { status: 'completed' as const, text: event.data.note.body };
+        }
+        if (event.event === 'error') return { status: 'failed' as const, text, message: event.data.detail };
+      }
+      return { status: 'failed' as const, text, message: '解释请求未完成。' };
+    } catch (error) {
+      return isAbortError(error) || signal.aborted
+        ? { status: 'cancelled' as const, text }
+        : { status: 'failed' as const, text, message: error instanceof ApiError ? error.message : '解释请求失败，请重试。' };
+    }
+  }, [state.activePaperId, state.loadRevision]);
+
   const selectCitation = useCallback((citation: Citation) => {
     const element = state.document?.elements.find(({ id }) => id === citation.id);
     dispatch({ type: 'source/selected', source: element === undefined ? null : toSourceTarget(element) });
@@ -328,6 +369,26 @@ export function usePaperWorkspace(
     const element = state.document?.elements.find(({ id }) => id === elementId);
     dispatch({ type: 'source/selected', source: element === undefined ? null : toSourceTarget(element) });
   }, [state.document]);
+
+  const selectAnchorSource = useCallback((source: import('./types').SourceTarget) => {
+    dispatch({ type: 'source/selected', source });
+  }, []);
+
+  const updateNote = useCallback(async (noteId: string, body: string, expectedUpdatedAt?: string | null) => {
+    if (state.activePaperId === null) return null;
+    const paperId = state.activePaperId; const revision = state.loadRevision;
+    try {
+      const note = await paperApi.updateNote(paperId, noteId, { body, expected_updated_at: expectedUpdatedAt });
+      dispatch({ type: 'notes/updated', paperId, loadRevision: revision, note }); return note;
+    } catch (error) { throw error; }
+  }, [state.activePaperId, state.loadRevision]);
+
+  const deleteNote = useCallback(async (noteId: string) => {
+    if (state.activePaperId === null) return false;
+    const paperId = state.activePaperId; const revision = state.loadRevision;
+    try { await paperApi.deleteNote(paperId, noteId); dispatch({ type: 'notes/deleted', paperId, loadRevision: revision, noteId }); return true; }
+    catch { return false; }
+  }, [state.activePaperId, state.loadRevision]);
 
   const clearActiveSource = useCallback(() => {
     dispatch({ type: 'source/selected', source: null });
@@ -403,11 +464,15 @@ export function usePaperWorkspace(
     saveNote,
     selectCitation,
     selectGraphEvidenceElement,
+    selectAnchorSource,
+    updateNote,
+    deleteNote,
     clearActiveSource,
     setGraphFocus,
     setSelection,
     clearSelection,
     createHighlight,
     deleteHighlight,
+    runSelectionAssist,
   };
 }

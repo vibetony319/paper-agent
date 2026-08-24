@@ -20,6 +20,7 @@ from paper_agent.schemas import (
     NoteResponse,
     NoteUpdateRequest,
     SelectionAssistRequest,
+    TextAnchorResponse,
 )
 from paper_agent.services.model_profiles import ModelProfileNotFoundError
 from paper_agent.services.paper_operations import PaperDeletingError
@@ -118,6 +119,10 @@ def get_annotations(paper_id: str, request: Request) -> AnnotationBundleResponse
             ],
             notes=[
                 NoteResponse.from_note(note) for note in service.get_notes(paper_id)
+            ],
+            anchors=[
+                TextAnchorResponse.from_anchor(anchor)
+                for anchor in service.list_anchors(paper_id)
             ],
         )
 

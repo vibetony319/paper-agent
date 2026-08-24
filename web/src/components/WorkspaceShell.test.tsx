@@ -211,9 +211,9 @@ it('creates a note attached to the active source target and de-duplicates its au
     />,
   );
 
-  expect(screen.getByText('Attached to page 3 paragraph.')).toBeVisible();
-  await user.type(screen.getByLabelText('New note'), savedNote.body);
-  await user.click(screen.getByRole('button', { name: 'Save note' }));
+  expect(screen.getByText('当前定位：第 3 页')).toBeVisible();
+  await user.type(screen.getByLabelText('新建笔记'), savedNote.body);
+  await user.click(screen.getByRole('button', { name: '保存笔记' }));
 
   await waitFor(() => expect(saveNote)
     .toHaveBeenCalledWith(savedNote.body, sourceTarget.id, sourceTarget.pageNumber));
@@ -247,13 +247,13 @@ it('retains an unbound note draft and shows a safe alert when save returns null'
     />,
   );
 
-  expect(screen.getByText('No source selected. This note will be unbound.')).toBeVisible();
-  await user.type(screen.getByLabelText('New note'), 'A free-standing observation.');
-  await user.click(screen.getByRole('button', { name: 'Save note' }));
+  expect(screen.getByText('未选择证据位置')).toBeVisible();
+  await user.type(screen.getByLabelText('新建笔记'), 'A free-standing observation.');
+  await user.click(screen.getByRole('button', { name: '保存笔记' }));
   await waitFor(() => expect(saveNote)
     .toHaveBeenCalledWith('A free-standing observation.', undefined, undefined));
-  expect(await screen.findByRole('alert')).toHaveTextContent('Unable to save this note.');
-  expect(screen.getByLabelText('New note')).toHaveValue('A free-standing observation.');
+  expect(await screen.findByRole('alert')).toHaveTextContent('笔记保存失败，请稍后重试。');
+  expect(screen.getByLabelText('新建笔记')).toHaveValue('A free-standing observation.');
   expect(screen.queryByRole('article')).not.toBeInTheDocument();
 });
 
@@ -281,10 +281,9 @@ it('only enables jumps for notes with a valid element location', async () => {
     />,
   );
 
-  await user.click(screen.getByRole('button', { name: 'Jump to page 3 paragraph' }));
+  await user.click(screen.getByRole('button', { name: '定位到第 3 页 paragraph' }));
   expect(onSelectSource).toHaveBeenCalledWith('element-3');
-  expect(screen.getByRole('button', { name: 'Source location unavailable' })).toBeDisabled();
-  expect(screen.queryByRole('button', { name: 'Jump to source' })).not.toBeInTheDocument();
+  expect(screen.getAllByRole('button', { name: '原文位置不可用' })[0]).toBeDisabled();
 });
 
 it('ignores a null note result that resolves after the active paper changes', async () => {
@@ -305,8 +304,8 @@ it('ignores a null note result that resolves after the active paper changes', as
     />,
   );
 
-  await user.type(screen.getByLabelText('New note'), 'Old paper note.');
-  await user.click(screen.getByRole('button', { name: 'Save note' }));
+  await user.type(screen.getByLabelText('新建笔记'), 'Old paper note.');
+  await user.click(screen.getByRole('button', { name: '保存笔记' }));
   expect(saveNote).toHaveBeenCalledWith('Old paper note.', sourceTarget.id, sourceTarget.pageNumber);
   rerender(
     <NotesPanel
@@ -324,7 +323,7 @@ it('ignores a null note result that resolves after the active paper changes', as
   });
 
   expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-  expect(screen.getByLabelText('New note')).toHaveValue('');
+  expect(screen.getByLabelText('新建笔记')).toHaveValue('');
   expect(screen.queryByRole('article')).not.toBeInTheDocument();
 });
 
@@ -349,10 +348,10 @@ it('keeps both panel drafts mounted while switching accessible tabs', async () =
   expect(screen.getByRole('tab', { name: 'Notes' })).toHaveAttribute('aria-selected', 'false');
   await user.type(screen.getByLabelText('Ask about this paper'), 'Keep this draft.');
   await user.click(screen.getByRole('tab', { name: 'Notes' }));
-  await user.type(screen.getByLabelText('New note'), 'Keep this note.');
+  await user.type(screen.getByLabelText('新建笔记'), 'Keep this note.');
   await user.click(screen.getByRole('tab', { name: 'Agent' }));
 
   expect(screen.getByLabelText('Ask about this paper')).toHaveValue('Keep this draft.');
   await user.click(screen.getByRole('tab', { name: 'Notes' }));
-  expect(screen.getByLabelText('New note')).toHaveValue('Keep this note.');
+  expect(screen.getByLabelText('新建笔记')).toHaveValue('Keep this note.');
 });

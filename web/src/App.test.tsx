@@ -452,7 +452,7 @@ it('routes graph evidence, Agent citations, and note sources through one workspa
   expect(screen.getByTestId('source-overlay')).toBeVisible();
 
   await user.click(screen.getByRole('tab', { name: 'Notes' }));
-  await user.click(await screen.findByRole('button', { name: 'Jump to page 2 paragraph' }));
+  await user.click(await screen.findByRole('button', { name: '定位到第 2 页 paragraph' }));
   expect(screen.getByText('Reader page 2')).toBeVisible();
   expect(screen.getByTestId('source-overlay')).toBeVisible();
 });

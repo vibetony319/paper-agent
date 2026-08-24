@@ -80,6 +80,22 @@ it('loads highlights independently from the existing notes request', async () =>
   expect(paperApi.getAnnotations).toHaveBeenCalledWith('paper-a', expect.objectContaining({ signal: expect.any(AbortSignal) }));
 });
 
+it('keeps the annotation bundle anchor map for durable note source positioning', async () => {
+  vi.spyOn(paperApi, 'getAnnotations').mockResolvedValue({
+    highlights: [],
+    notes: [],
+    anchors: [{
+      id: 'note-anchor', quote: '持久原文', page_number: 2, element_id: null,
+      rects: [{ order: 0, x0: 0.1, y0: 0.2, x1: 0.6, y1: 0.3 }],
+    }],
+  });
+  const { result } = renderHook(() => usePaperWorkspace('paper-a'));
+
+  await waitFor(() => expect(result.current.anchors).toEqual([
+    expect.objectContaining({ id: 'note-anchor', quote: '持久原文' }),
+  ]));
+});
+
 it('does not let a stale annotation load replace a highlight created after the load started', async () => {
   const pendingAnnotations = deferred<{ highlights: Highlight[]; notes: Note[] }>();
   const createdHighlight: Highlight = {

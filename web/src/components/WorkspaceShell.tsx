@@ -17,6 +17,7 @@ export interface WorkspaceShellProps {
   onOpenModelSettings: () => void;
   onDeleteRequested: (paper: PaperSummary) => void;
   modelSelector: ReactNode;
+  selectedModelProfileId: string | null;
 }
 
 export function WorkspaceShell({
@@ -27,6 +28,7 @@ export function WorkspaceShell({
   onOpenModelSettings,
   onDeleteRequested,
   modelSelector,
+  selectedModelProfileId,
 }: WorkspaceShellProps) {
   const [paperActionsOpen, setPaperActionsOpen] = useState(false);
   const paperActionsButtonRef = useRef<HTMLButtonElement>(null);
@@ -141,6 +143,11 @@ export function WorkspaceShell({
                 onSelectionClear={workspace.clearSelection}
                 onCreateHighlight={() => { void workspace.createHighlight(); }}
                 onDeleteHighlight={(highlightId) => { void workspace.deleteHighlight(highlightId); }}
+                selectedModelProfileId={selectedModelProfileId}
+                runSelectionAssist={workspace.runSelectionAssist}
+                onCreateSelectionNote={(body, draft) => workspace.saveNote(
+                  body, undefined, undefined, draft,
+                )}
               />
             </div>
             <section className="workspace-pane workspace-pane--graph" aria-label="Paper graph">
@@ -164,9 +171,13 @@ export function WorkspaceShell({
                 notes={{
                   activeSource: workspace.activeSource,
                   notes: workspace.notes,
+                  anchors: workspace.anchors,
                   documentElements: document.elements,
                   saveNote: workspace.saveNote,
                   onSelectSource: workspace.selectGraphEvidenceElement,
+                  onSelectAnchor: workspace.selectAnchorSource,
+                  updateNote: workspace.updateNote,
+                  deleteNote: workspace.deleteNote,
                 }}
               />
             </div>

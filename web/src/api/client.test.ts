@@ -245,6 +245,21 @@ it('creates a highlight from a text anchor draft', async () => {
   expect(receivedBody).toEqual(input);
 });
 
+it('creates a manual note with its durable anchor and idempotency request id', async () => {
+  const note = noteFixture();
+  let receivedBody: unknown;
+  server.use(http.post('/api/papers/paper-a/notes', async ({ request }) => {
+    receivedBody = await request.json();
+    return HttpResponse.json(note);
+  }));
+  const input = {
+    body: '手写锚定笔记', request_id: 'manual-note-a',
+    anchor: { quote: '原文', page_number: 2, rects: [{ order: 0, x0: 0.1, y0: 0.2, x1: 0.6, y1: 0.3 }] },
+  };
+  await expect(paperApi.createNote('paper-a', input)).resolves.toEqual(note);
+  expect(receivedBody).toEqual(input);
+});
+
 it('deletes a highlight and resolves undefined on 204', async () => {
   server.use(http.delete(
     '/api/papers/paper-a/highlights/highlight-a',

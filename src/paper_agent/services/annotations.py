@@ -56,6 +56,9 @@ class AnnotationService:
     def list_highlights(self, paper_id: str) -> tuple[Highlight, ...]:
         return self.repository.list_highlights(paper_id)
 
+    def list_anchors(self, paper_id: str):
+        return self.repository.list_anchors(paper_id)
+
     def delete_highlight(self, paper_id: str, highlight_id: str) -> bool:
         return self.repository.delete_highlight(paper_id, highlight_id)
 

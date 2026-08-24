@@ -679,6 +679,7 @@ class NoteResponse(BaseModel):
 class AnnotationBundleResponse(BaseModel):
     highlights: list[HighlightResponse]
     notes: list[NoteResponse]
+    anchors: list[TextAnchorResponse]
 
 
 class PaperDocumentResponse(BaseModel):

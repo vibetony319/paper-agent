@@ -8,6 +8,9 @@ import type { SourceTarget, WorkspaceState } from '../workspace/types';
 import { PdfPageView } from './PdfPageView';
 import { selectionToAnchorDraft } from './pdfSelection';
 import { SelectionToolbar, type SelectionToolbarAction } from './SelectionToolbar';
+import { InlineAssistantPopover } from './InlineAssistantPopover';
+import { ManualNotePopover } from './ManualNotePopover';
+import type { SelectionAssistAction } from '../api/types';
 
 type PdfReaderProps = {
   paperId: string;
@@ -22,6 +25,9 @@ type PdfReaderProps = {
   onCreateHighlight?: () => void;
   onDeleteHighlight?: (highlightId: string) => void;
   selectionActions?: Partial<Record<Exclude<SelectionToolbarAction, 'highlight'>, (draft: TextAnchorDraft) => void>>;
+  selectedModelProfileId?: string | null;
+  runSelectionAssist?: React.ComponentProps<typeof InlineAssistantPopover>['runSelectionAssist'];
+  onCreateSelectionNote?: (body: string, draft: TextAnchorDraft) => Promise<unknown>;
 };
 
 type ReaderStatus = 'loading' | 'ready' | 'error';
@@ -53,6 +59,9 @@ export function PdfReader({
   onCreateHighlight,
   onDeleteHighlight,
   selectionActions,
+  selectedModelProfileId = null,
+  runSelectionAssist,
+  onCreateSelectionNote,
 }: PdfReaderProps) {
   const orderedPages = useMemo(() => sortedPages(pages), [pages]);
   const pageNumbers = useMemo(() => orderedPages.map((page) => page.number), [orderedPages]);
@@ -61,6 +70,8 @@ export function PdfReader({
   const [status, setStatus] = useState<ReaderStatus>('loading');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [visiblePages, setVisiblePages] = useState<Set<number>>(() => new Set(pageNumbers.slice(0, 1)));
+  const [assistAction, setAssistAction] = useState<SelectionAssistAction | null>(null);
+  const [manualNoteOpen, setManualNoteOpen] = useState(false);
   const pageShells = useRef(new Map<number, HTMLDivElement>());
   const readerRef = useRef<HTMLElement>(null);
 
@@ -250,15 +261,12 @@ export function PdfReader({
           toolbarRect={selection.toolbarRect}
           onDismiss={clearTemporarySelection}
           actions={{
-            explain: selectionActions?.explain === undefined
-              ? undefined
-              : () => selectionActions.explain?.(selection.draft),
-            translate: selectionActions?.translate === undefined
-              ? undefined
-              : () => selectionActions.translate?.(selection.draft),
-            note: selectionActions?.note === undefined
-              ? undefined
-              : () => selectionActions.note?.(selection.draft),
+            explain: runSelectionAssist === undefined || selectedModelProfileId === null
+              ? undefined : () => setAssistAction('explain'),
+            translate: runSelectionAssist === undefined || selectedModelProfileId === null
+              ? undefined : () => setAssistAction('translate'),
+            note: onCreateSelectionNote === undefined
+              ? undefined : () => setManualNoteOpen(true),
             ask: selectionActions?.ask === undefined
               ? undefined
               : () => selectionActions.ask?.(selection.draft),
@@ -266,6 +274,15 @@ export function PdfReader({
           }}
         />
       ) : null}
+      {selection !== null && assistAction !== null && runSelectionAssist !== undefined ? <InlineAssistantPopover
+        action={assistAction} draft={selection.draft} toolbarRect={selection.toolbarRect}
+        modelProfileId={selectedModelProfileId} runSelectionAssist={runSelectionAssist}
+        onDismiss={() => setAssistAction(null)}
+      /> : null}
+      {selection !== null && manualNoteOpen && onCreateSelectionNote !== undefined ? <ManualNotePopover
+        draft={selection.draft} toolbarRect={selection.toolbarRect}
+        onSave={onCreateSelectionNote} onDismiss={() => setManualNoteOpen(false)}
+      /> : null}
     </section>
   );
 }
