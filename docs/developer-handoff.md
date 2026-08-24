@@ -1,17 +1,17 @@
 # paper-agent 开发交接
 
-更新时间：2026-08-24 23:27（Asia/Shanghai）
+更新时间：2026-08-24 23:59（Asia/Shanghai）
 
 ## 1. 当前结论
 
-项目正在按“论文阅读工作区升级”总计划推进。Plan 1–3 已全部完成，Plan 4 前端工作区已完成七个任务。
+项目已完成“论文阅读工作区升级”的 Plan 1–4；Plan 5 尚未开始。
 
 - 当前分支：`codex/reader-workspace-v2`
-- 最新功能提交：`0ab07a0 feat: use one model across the reading workspace`。
+- 最新功能提交：`b349b8f feat: polish the chinese paper reading workspace`。
 - Plan 1“多模型档案与调用追溯”：Task 1–7 全部完成并提交。
 - Plan 2“批注、解释翻译与笔记记忆”：Task 1–7 全部完成并提交。
 - Plan 3“论文及关联数据安全删除”：Task 1–6 全部完成并提交（含文档 `docs/data-model.md`）。
-- Plan 4“中文论文阅读工作区前端”：Task 1–7 已完成并提交。Task 7 将阅读区改为可调整的双栏，小屏为保留状态的论文/工具切换；右侧固定为论文助手、知识图谱、笔记三 tab，聊天框固定在其下。聊天、图谱构建及既有选区辅助统一使用聊天框当前模型，响应和图谱构建均可显示持久模型快照。
+- Plan 4“中文论文阅读工作区前端”：Task 1–8 已完成并提交。Task 7 将阅读区改为可调整的双栏，小屏为保留状态的论文/工具切换；右侧固定为论文助手、知识图谱、笔记三 tab，聊天框固定在其下。Task 8 经全量前端测试和生产构建验证，完成暖灰/白纸/靛蓝/黄色批注视觉收敛、中文化、焦点与缩减动态、880px 边界一致性、右侧 tab 键盘模式、分隔条取消清理、笔记最新优先排序及 PDF 前端采集文档。聊天、图谱构建及既有选区辅助统一使用聊天框当前模型，响应和图谱构建均可显示持久模型快照。
 - Plan 5“开发者文档与整体验收”尚未开始。
 
 接手规则：当前所有工作均已提交，工作树干净；仍不要 reset、checkout、clean 或覆盖工作区。`AGENTS.md` 是环境文件，禁止暂存。
@@ -25,7 +25,7 @@
 3. [模型档案计划](superpowers/plans/2026-08-21-model-profiles-provenance.md)（已全部完成）
 4. [批注与笔记记忆计划](superpowers/plans/2026-08-21-annotations-note-memory.md)（已全部完成）
 5. [论文删除计划](superpowers/plans/2026-08-21-paper-deletion.md)（已全部完成）
-6. [前端工作区计划](superpowers/plans/2026-08-21-reader-workspace-frontend.md)（当前执行中，Task 3 起）
+6. [前端工作区计划](superpowers/plans/2026-08-21-reader-workspace-frontend.md)（Task 1–8 已完成）
 7. [贡献与开发指南](../CONTRIBUTING.md)
 8. [模型服务文档](model-services.md)、[PDF 批注契约](pdf-annotations.md)、[笔记记忆](note-memory.md)、[数据模型与删除恢复](data-model.md)
 9. 本文档
@@ -62,10 +62,11 @@
 | Plan 4 Task 5 浏览器选区、高亮与覆盖层 | `ad09c0a feat: select and highlight paper text` | 已提交 |
 | Plan 4 Task 6 解释、翻译与锚定笔记 | `100c231 feat: explain selections into anchored notes` | 已提交 |
 | Plan 4 Task 7 统一当前模型、右侧工作台与可调整双栏 | `0ab07a0 feat: use one model across the reading workspace` | 已提交 |
+| Plan 4 Task 8 视觉系统、中文化与可访问性预检 | `b349b8f feat: polish the chinese paper reading workspace` | 已提交并验证 |
 
 ## 4. 当前未提交内容
 
-Task 7 的生产代码、测试和最小结构样式已提交。仅三个未跟踪文件：`AGENTS.md`（环境提供，禁止暂存）、`CONTRIBUTING.md`、`docs/README.md`（指南与导航，历史上一直未跟踪，保持原样，是否纳入版本库留待 Plan 5 决定）。`.superpowers/sdd/` 下的任务报告是本地执行记录，不纳入提交。
+Plan 4 的生产代码、测试和文档均已提交。仅三个未跟踪文件：`AGENTS.md`（环境提供，禁止暂存）、`CONTRIBUTING.md`、`docs/README.md`（指南与导航，历史上一直未跟踪，保持原样，是否纳入版本库留待 Plan 5 决定）。`.superpowers/sdd/` 下的任务报告是本地执行记录，不纳入提交。
 
 ## 5. 关键裁决与偏离
 
@@ -111,18 +112,18 @@ npx tsc --noEmit --project tsconfig.app.json
 - Plan 4 Task 5：聚焦测试 `npm test -- src/components/pdfSelection.test.ts src/components/SelectionToolbar.test.tsx src/components/AnnotationOverlay.test.tsx src/components/PdfReader.test.tsx src/workspace` 为 `52 passed`（6 个测试文件）；完整前端套件 `npm test` 为 `160 passed`（19 个测试文件）；`npm run build` 通过。构建输出仅有 Vite 对 PDF.js 主包大于 500 kB 的提示，没有构建或类型错误。
 - Plan 4 Task 6：后端 `tests/integration/test_annotations_api.py` 为 `6 passed`；聚焦前端 `npm test -- src/components/InlineAssistantPopover.test.tsx src/components/NotesPanel.test.tsx src/workspace` 为 `45 passed`（4 个测试文件）；完整前端套件为 `168 passed`（21 个测试文件）；`npm run build` 通过。构建保留既有 PDF.js 大于 500 kB 提示。
 - Plan 4 Task 7：聚焦前端 `npm test -- src/api/client.test.ts src/components/ChatComposer.test.tsx src/components/ResizableSplit.test.tsx src/components/WorkspaceShell.test.tsx src/components/GraphPanel.test.tsx src/workspace` 为 `85 passed`（7 个测试文件）；完整前端套件 `npm test` 为 `175 passed`（23 个测试文件）；`npm run build` 通过。构建保留既有 PDF.js 大于 500 kB 提示。
+- Plan 4 Task 8：完整前端套件 `npm test` 为 `188 passed`（24 个测试文件）；`npm run build` 通过。构建保留既有 PDF.js 大于 500 kB 提示；`git diff --check` 无空白错误。
 
 ## 7. 准确的接手步骤
 
 1. 确认位于 `codex/reader-workspace-v2`，并核对第 4 节所列的三个未跟踪环境/指南文件保持原样。
-2. 从 Plan 4 Task 8 继续：完成视觉系统、中文化、可访问性预检与完整前端验证。不要回退 Task 6 的 anchors 合同，或将生成笔记写入主聊天历史。
-3. Task 8 编辑 CSS 前重读 `$design-taste-frontend`（`C:/Users/Admin/.codex/skills/taste-skill/SKILL.md`）并按其 preflight 记录检查；设计参数固定 `DESIGN_VARIANCE=4`、`MOTION_INTENSITY=3`、`VISUAL_DENSITY=7`。
+2. 进入 Plan 5 前先保留 Plan 4 的 anchors 合同，不将生成笔记写入主聊天历史。
+3. Plan 5 的浏览器验收应覆盖桌面与 880px 以下的阅读器、选区工具栏和固定聊天框；不需要重做 Task 8 的视觉 token 审计。
 4. 每个任务严格按计划的测试命令验证后再提交，提交信息以计划为准。
 5. Plan 4 完成后进入 Plan 5。
 
 ## 8. 下一阶段清单
 
-- Plan 4 Task 8：视觉系统、中文化、可访问性预检、完整前端验证与生产构建。
 - Plan 5：中文 README、架构/ADR、Playwright 桌面与移动端、最终发布证据。
 
 ## 9. 不可破坏的约束
