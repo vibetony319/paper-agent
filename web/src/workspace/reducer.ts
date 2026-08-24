@@ -17,6 +17,7 @@ export const initialWorkspaceState: WorkspaceState = {
   graph: null,
   notes: [],
   highlights: [],
+  highlightsMutationGeneration: 0,
   selection: null,
   activeSource: null,
   graphFocusNodeId: null,
@@ -38,7 +39,13 @@ export type WorkspaceAction =
   }
   | { type: 'workspace/failed'; paperId: string; loadRevision: number; message: string }
   | { type: 'notes/loaded'; paperId: string; loadRevision: number; notes: Note[] }
-  | { type: 'highlights/loaded'; paperId: string; loadRevision: number; highlights: Highlight[] }
+  | {
+    type: 'highlights/loaded';
+    paperId: string;
+    loadRevision: number;
+    mutationGeneration: number;
+    highlights: Highlight[];
+  }
   | { type: 'notes/failed'; paperId: string; loadRevision: number; message: string }
   | { type: 'graph/loaded'; paperId: string; loadRevision: number; graph: PaperGraph }
   | { type: 'source/selected'; source: SourceTarget | null }
@@ -54,8 +61,20 @@ export type WorkspaceAction =
   | { type: 'notes/created'; paperId: string; loadRevision: number; note: Note }
   | { type: 'selection/set'; draft: import('../api/types').TextAnchorDraft; toolbarRect: DOMRect }
   | { type: 'selection/clear' }
-  | { type: 'highlight/created'; paperId: string; loadRevision: number; highlight: Highlight }
-  | { type: 'highlight/deleted'; paperId: string; loadRevision: number; highlightId: string }
+  | {
+    type: 'highlight/created';
+    paperId: string;
+    loadRevision: number;
+    mutationGeneration: number;
+    highlight: Highlight;
+  }
+  | {
+    type: 'highlight/deleted';
+    paperId: string;
+    loadRevision: number;
+    mutationGeneration: number;
+    highlightId: string;
+  }
   | { type: 'request/failed'; paperId: string; loadRevision: number; message: string };
 
 export function toSourceTarget(element: DocumentElement): SourceTarget | null {
@@ -120,6 +139,7 @@ export function workspaceReducer(
         : state;
     case 'highlights/loaded':
       return isCurrentLoad(state, action.paperId, action.loadRevision)
+        && state.highlightsMutationGeneration === action.mutationGeneration
         ? { ...state, highlights: action.highlights }
         : state;
     case 'notes/failed':
@@ -158,11 +178,21 @@ export function workspaceReducer(
       return state.selection === null ? state : { ...state, selection: null };
     case 'highlight/created':
       return isCurrentLoad(state, action.paperId, action.loadRevision)
-        ? { ...state, highlights: [...state.highlights, action.highlight], selection: null, errorMessage: null }
+        ? {
+          ...state,
+          highlights: [...state.highlights, action.highlight],
+          highlightsMutationGeneration: action.mutationGeneration,
+          selection: null,
+          errorMessage: null,
+        }
         : state;
     case 'highlight/deleted':
       return isCurrentLoad(state, action.paperId, action.loadRevision)
-        ? { ...state, highlights: state.highlights.filter(({ id }) => id !== action.highlightId) }
+        ? {
+          ...state,
+          highlights: state.highlights.filter(({ id }) => id !== action.highlightId),
+          highlightsMutationGeneration: action.mutationGeneration,
+        }
         : state;
     case 'request/failed':
       return isCurrentLoad(state, action.paperId, action.loadRevision)

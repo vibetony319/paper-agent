@@ -80,6 +80,64 @@ it('loads highlights independently from the existing notes request', async () =>
   expect(paperApi.getAnnotations).toHaveBeenCalledWith('paper-a', expect.objectContaining({ signal: expect.any(AbortSignal) }));
 });
 
+it('does not let a stale annotation load replace a highlight created after the load started', async () => {
+  const pendingAnnotations = deferred<{ highlights: Highlight[]; notes: Note[] }>();
+  const createdHighlight: Highlight = {
+    id: 'created-highlight', color: 'yellow',
+    anchor: {
+      id: 'created-anchor', quote: '新高亮', page_number: 1, element_id: null,
+      rects: [{ order: 0, x0: 0.1, y0: 0.2, x1: 0.4, y1: 0.3 }],
+    },
+  };
+  vi.mocked(paperApi.getAnnotations).mockReturnValue(pendingAnnotations.promise);
+  vi.spyOn(paperApi, 'createHighlight').mockResolvedValue(createdHighlight);
+  vi.stubGlobal('crypto', { randomUUID: () => 'create-request' });
+  const { result } = renderHook(() => usePaperWorkspace('paper-a'));
+  await waitFor(() => expect(paperApi.getAnnotations).toHaveBeenCalledOnce());
+
+  act(() => result.current.setSelection({
+    quote: '新高亮', page_number: 1,
+    rects: [{ order: 0, x0: 0.1, y0: 0.2, x1: 0.4, y1: 0.3 }],
+  }, { left: 20, top: 30, width: 40, height: 10 } as DOMRect));
+  await act(async () => { await result.current.createHighlight(); });
+  await act(async () => {
+    pendingAnnotations.resolve({ highlights: [], notes: [] });
+    await Promise.resolve();
+  });
+
+  expect(result.current.highlights).toEqual([createdHighlight]);
+});
+
+it('does not let a stale annotation load reintroduce a deleted highlight', async () => {
+  const pendingAnnotations = deferred<{ highlights: Highlight[]; notes: Note[] }>();
+  const highlight: Highlight = {
+    id: 'deleted-highlight', color: 'yellow',
+    anchor: {
+      id: 'deleted-anchor', quote: '待删除高亮', page_number: 1, element_id: null,
+      rects: [{ order: 0, x0: 0.1, y0: 0.2, x1: 0.4, y1: 0.3 }],
+    },
+  };
+  vi.mocked(paperApi.getAnnotations).mockReturnValue(pendingAnnotations.promise);
+  vi.spyOn(paperApi, 'createHighlight').mockResolvedValue(highlight);
+  vi.spyOn(paperApi, 'deleteHighlight').mockResolvedValue(undefined);
+  vi.stubGlobal('crypto', { randomUUID: () => 'create-request' });
+  const { result } = renderHook(() => usePaperWorkspace('paper-a'));
+  await waitFor(() => expect(paperApi.getAnnotations).toHaveBeenCalledOnce());
+
+  act(() => result.current.setSelection({
+    quote: '待删除高亮', page_number: 1,
+    rects: [{ order: 0, x0: 0.1, y0: 0.2, x1: 0.4, y1: 0.3 }],
+  }, { left: 20, top: 30, width: 40, height: 10 } as DOMRect));
+  await act(async () => { await result.current.createHighlight(); });
+  await act(async () => { await result.current.deleteHighlight(highlight.id); });
+  await act(async () => {
+    pendingAnnotations.resolve({ highlights: [highlight], notes: [] });
+    await Promise.resolve();
+  });
+
+  expect(result.current.highlights).toEqual([]);
+});
+
 it('persists a yellow highlight with a fresh request id and clears the selection on success', async () => {
   const highlight: Highlight = {
     id: 'highlight-a', color: 'yellow',

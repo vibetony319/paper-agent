@@ -21,7 +21,7 @@ type PdfReaderProps = {
   onSelectionClear?: () => void;
   onCreateHighlight?: () => void;
   onDeleteHighlight?: (highlightId: string) => void;
-  onSelectionAction?: (action: Exclude<SelectionToolbarAction, 'highlight'>, draft: TextAnchorDraft) => void;
+  selectionActions?: Partial<Record<Exclude<SelectionToolbarAction, 'highlight'>, (draft: TextAnchorDraft) => void>>;
 };
 
 type ReaderStatus = 'loading' | 'ready' | 'error';
@@ -52,7 +52,7 @@ export function PdfReader({
   onSelectionClear,
   onCreateHighlight,
   onDeleteHighlight,
-  onSelectionAction,
+  selectionActions,
 }: PdfReaderProps) {
   const orderedPages = useMemo(() => sortedPages(pages), [pages]);
   const pageNumbers = useMemo(() => orderedPages.map((page) => page.number), [orderedPages]);
@@ -65,10 +65,13 @@ export function PdfReader({
   const readerRef = useRef<HTMLElement>(null);
 
   const clearTemporarySelection = useCallback(() => {
+    const selectedPage = selection === null
+      ? null
+      : readerRef.current?.querySelector<HTMLElement>(`[data-pdf-page="${selection.draft.page_number}"]`);
     window.getSelection()?.removeAllRanges();
     onSelectionClear?.();
-    readerRef.current?.focus();
-  }, [onSelectionClear]);
+    selectedPage?.focus();
+  }, [onSelectionClear, selection]);
 
   const captureSelection = useCallback(() => {
     const reader = readerRef.current;
@@ -224,12 +227,14 @@ export function PdfReader({
                     active
                     overlays={overlays}
                     highlights={pageHighlights}
-                    onHighlightNote={(highlight) => onSelectionAction?.('note', {
-                      quote: highlight.anchor.quote,
-                      page_number: highlight.anchor.page_number,
-                      rects: highlight.anchor.rects,
-                      ...(highlight.anchor.element_id === null ? {} : { element_id: highlight.anchor.element_id }),
-                    })}
+                    onHighlightNote={selectionActions?.note === undefined ? undefined : (highlight) => {
+                      selectionActions.note?.({
+                        quote: highlight.anchor.quote,
+                        page_number: highlight.anchor.page_number,
+                        rects: highlight.anchor.rects,
+                        ...(highlight.anchor.element_id === null ? {} : { element_id: highlight.anchor.element_id }),
+                      });
+                    }}
                     onHighlightDeleted={(highlightId) => onDeleteHighlight?.(highlightId)}
                   />
                 ) : null}
@@ -244,9 +249,20 @@ export function PdfReader({
           draft={selection.draft}
           toolbarRect={selection.toolbarRect}
           onDismiss={clearTemporarySelection}
-          onAction={(action) => {
-            if (action === 'highlight') onCreateHighlight?.();
-            else onSelectionAction?.(action, selection.draft);
+          actions={{
+            explain: selectionActions?.explain === undefined
+              ? undefined
+              : () => selectionActions.explain?.(selection.draft),
+            translate: selectionActions?.translate === undefined
+              ? undefined
+              : () => selectionActions.translate?.(selection.draft),
+            note: selectionActions?.note === undefined
+              ? undefined
+              : () => selectionActions.note?.(selection.draft),
+            ask: selectionActions?.ask === undefined
+              ? undefined
+              : () => selectionActions.ask?.(selection.draft),
+            highlight: onCreateHighlight,
           }}
         />
       ) : null}

@@ -5,7 +5,7 @@ import { normalizedBoxStyle } from './pdfGeometry';
 
 type AnnotationOverlayProps = {
   highlights: Highlight[];
-  onAddNote: (highlight: Highlight) => void;
+  onAddNote?: (highlight: Highlight) => void;
   onDeleteHighlight: (highlightId: string) => void;
 };
 
@@ -28,7 +28,15 @@ export function AnnotationOverlay({ highlights, onAddNote, onDeleteHighlight }: 
           ))}
           {menuHighlightId === highlight.id ? (
             <div className="annotation-overlay__menu" role="menu">
-              <button type="button" role="menuitem" onClick={() => onAddNote(highlight)}>记笔记</button>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={onAddNote === undefined}
+                title={onAddNote === undefined ? '暂不可用' : undefined}
+                onClick={() => onAddNote?.(highlight)}
+              >
+                记笔记
+              </button>
               <button type="button" role="menuitem" onClick={() => onDeleteHighlight(highlight.id)}>删除高亮</button>
             </div>
           ) : null}

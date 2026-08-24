@@ -105,6 +105,7 @@ it('adds a persisted highlight and clears only the temporary selection', () => {
     type: 'highlight/created',
     paperId: 'paper-a',
     loadRevision: 0,
+    mutationGeneration: 1,
     highlight: {
       id: 'highlight-a', color: 'yellow',
       anchor: { id: 'anchor-a', element_id: null, ...selection.draft },

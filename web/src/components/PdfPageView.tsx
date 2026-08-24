@@ -126,7 +126,7 @@ export function PdfPageView({
   }, [active, containerWidth, document, page.number]);
 
   return (
-    <div className="pdf-page-view" data-pdf-page={page.number}>
+    <div className="pdf-page-view" data-pdf-page={page.number} tabIndex={-1}>
       <div ref={surfaceRef} className="pdf-page-view__surface">
         <canvas ref={canvasRef} role="img" aria-label={`PDF 第 ${page.number} 页`} />
         <div ref={textLayerRef} className="pdf-page-view__text-layer" data-testid={`pdf-text-layer-${page.number}`} />

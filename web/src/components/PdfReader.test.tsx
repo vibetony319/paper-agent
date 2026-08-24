@@ -203,3 +203,34 @@ it('converts a pointer selection from the PDF text layer into an anchor draft', 
     rects: [{ order: 0, x0: 0.1, y0: 0.1, x1: 0.6, y1: 0.125 }],
   }, expect.objectContaining({ left: 160, top: 280 }));
 });
+
+it('returns focus to the selected PDF page when Escape clears a temporary selection', async () => {
+  const clearSelection = vi.fn();
+  const removeAllRanges = vi.fn();
+  vi.spyOn(window, 'getSelection').mockReturnValue({ removeAllRanges } as unknown as Selection);
+  render(
+    <PdfReader
+      paperId="paper-a"
+      pages={[manyPages[1]]}
+      activeSource={null}
+      onSourceCleared={vi.fn()}
+      selection={{
+        draft: {
+          quote: '第二页选区', page_number: 2,
+          rects: [{ order: 0, x0: 0.1, y0: 0.2, x1: 0.4, y1: 0.3 }],
+        },
+        toolbarRect: { left: 20, top: 30, width: 40, height: 10 } as DOMRect,
+      }}
+      onSelectionClear={clearSelection}
+    />,
+  );
+
+  const page = await screen.findByTestId('pdf-text-layer-2').then((layer) => layer.closest('[data-pdf-page]'));
+  const reader = screen.getByLabelText('论文阅读器');
+  reader.focus();
+  fireEvent.keyDown(reader, { key: 'Escape' });
+
+  expect(removeAllRanges).toHaveBeenCalledOnce();
+  expect(clearSelection).toHaveBeenCalledOnce();
+  expect(document.activeElement).toBe(page);
+});

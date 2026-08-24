@@ -23,6 +23,7 @@ export function usePaperWorkspace(
   const currentPaperId = useRef(activePaperId);
   const currentWorkspaceRevision = useRef(loadRevision);
   const currentLoadGeneration = useRef(state.loadRevision);
+  const highlightsMutationGeneration = useRef(0);
 
   currentPaperId.current = activePaperId;
   currentWorkspaceRevision.current = loadRevision;
@@ -88,6 +89,8 @@ export function usePaperWorkspace(
   useEffect(() => {
     const loadGeneration = nextLoadGeneration.current++;
     const controller = new AbortController();
+    highlightsMutationGeneration.current = 0;
+    const annotationsMutationGeneration = highlightsMutationGeneration.current;
     dispatch({ type: 'paper/opened', paperId: activePaperId, loadRevision: loadGeneration });
 
     if (activePaperId === null) {
@@ -152,6 +155,7 @@ export function usePaperWorkspace(
         if (controller.signal.aborted) return;
         dispatch({
           type: 'highlights/loaded', paperId: activePaperId, loadRevision: loadGeneration, highlights,
+          mutationGeneration: annotationsMutationGeneration,
         });
       })
       .catch((error: unknown) => {
@@ -351,7 +355,11 @@ export function usePaperWorkspace(
         color: 'yellow',
         request_id: crypto.randomUUID(),
       });
-      dispatch({ type: 'highlight/created', paperId, loadRevision: requestLoadRevision, highlight });
+      const mutationGeneration = highlightsMutationGeneration.current + 1;
+      highlightsMutationGeneration.current = mutationGeneration;
+      dispatch({
+        type: 'highlight/created', paperId, loadRevision: requestLoadRevision, mutationGeneration, highlight,
+      });
       return highlight;
     } catch (error) {
       dispatch({
@@ -370,7 +378,11 @@ export function usePaperWorkspace(
     const requestLoadRevision = state.loadRevision;
     try {
       await paperApi.deleteHighlight(paperId, highlightId);
-      dispatch({ type: 'highlight/deleted', paperId, loadRevision: requestLoadRevision, highlightId });
+      const mutationGeneration = highlightsMutationGeneration.current + 1;
+      highlightsMutationGeneration.current = mutationGeneration;
+      dispatch({
+        type: 'highlight/deleted', paperId, loadRevision: requestLoadRevision, mutationGeneration, highlightId,
+      });
       return true;
     } catch (error) {
       dispatch({

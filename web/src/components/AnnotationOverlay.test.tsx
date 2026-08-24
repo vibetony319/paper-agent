@@ -1,7 +1,9 @@
-import { fireEvent, render, screen } from '@testing-library/react';
-import { expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, expect, it, vi } from 'vitest';
 
 import { AnnotationOverlay } from './AnnotationOverlay';
+
+afterEach(cleanup);
 
 const highlight = {
   id: 'highlight-a',
@@ -33,4 +35,13 @@ it('opens the required highlight menu and routes its actions', () => {
     .toEqual(['记笔记', '删除高亮']);
   fireEvent.click(screen.getByRole('menuitem', { name: '删除高亮' }));
   expect(onDeleteHighlight).toHaveBeenCalledWith('highlight-a');
+});
+
+it('marks an unwired highlight note action unavailable while retaining deletion', () => {
+  render(<AnnotationOverlay highlights={[highlight]} onDeleteHighlight={vi.fn()} />);
+
+  fireEvent.click(screen.getByRole('button', { name: '高亮：论文片段' }));
+  expect(screen.getByRole('menuitem', { name: '记笔记' })).toBeDisabled();
+  expect(screen.getByRole('menuitem', { name: '记笔记' })).toHaveAttribute('title', '暂不可用');
+  expect(screen.getByRole('menuitem', { name: '删除高亮' })).toBeEnabled();
 });

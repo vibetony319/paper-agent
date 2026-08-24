@@ -3,15 +3,16 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import type { TextAnchorDraft } from '../api/types';
 
 export type SelectionToolbarAction = 'explain' | 'translate' | 'note' | 'ask' | 'highlight';
+export type SelectionToolbarHandlers = Partial<Record<SelectionToolbarAction, () => void>>;
 
 type SelectionToolbarProps = {
   draft: TextAnchorDraft;
   toolbarRect: DOMRect;
-  onAction: (action: SelectionToolbarAction) => void;
+  actions?: SelectionToolbarHandlers;
   onDismiss: () => void;
 };
 
-const actions: Array<{ action: SelectionToolbarAction; label: string }> = [
+const toolbarActions: Array<{ action: SelectionToolbarAction; label: string }> = [
   { action: 'explain', label: '解释' },
   { action: 'translate', label: '翻译' },
   { action: 'note', label: '记笔记' },
@@ -19,7 +20,7 @@ const actions: Array<{ action: SelectionToolbarAction; label: string }> = [
   { action: 'highlight', label: '高亮' },
 ];
 
-export function SelectionToolbar({ draft, toolbarRect, onAction, onDismiss }: SelectionToolbarProps) {
+export function SelectionToolbar({ draft, toolbarRect, actions = {}, onDismiss }: SelectionToolbarProps) {
   const toolbarRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ left: 12, top: 12 });
 
@@ -54,9 +55,20 @@ export function SelectionToolbar({ draft, toolbarRect, onAction, onDismiss }: Se
         }
       }}
     >
-      {actions.map(({ action, label }) => (
-        <button key={action} type="button" onClick={() => onAction(action)}>{label}</button>
-      ))}
+      {toolbarActions.map(({ action, label }) => {
+        const handler = actions[action];
+        return (
+          <button
+            key={action}
+            type="button"
+            disabled={handler === undefined}
+            title={handler === undefined ? '暂不可用' : undefined}
+            onClick={() => handler?.()}
+          >
+            {label}
+          </button>
+        );
+      })}
     </div>
   );
 }

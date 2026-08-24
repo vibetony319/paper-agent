@@ -23,6 +23,7 @@ export type WorkspaceState = {
   graph: PaperGraph | null;
   notes: Note[];
   highlights: Highlight[];
+  highlightsMutationGeneration: number;
   selection: { draft: TextAnchorDraft; toolbarRect: DOMRect } | null;
   activeSource: SourceTarget | null;
   graphFocusNodeId: string | null;
