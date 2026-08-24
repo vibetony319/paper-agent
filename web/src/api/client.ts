@@ -19,10 +19,10 @@ import type {
 
 const REQUEST_FAILED_MESSAGE = '请求失败，请稍后重试。';
 
-function publicApiMessage(detail: unknown): string {
+export function publicApiMessage(detail: unknown, fallback = REQUEST_FAILED_MESSAGE): string {
   return typeof detail === 'string' && /[\u3400-\u9fff]/.test(detail)
     ? detail
-    : REQUEST_FAILED_MESSAGE;
+    : fallback;
 }
 
 export class ApiError extends Error {

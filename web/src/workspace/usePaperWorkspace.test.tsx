@@ -2,10 +2,16 @@ import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 import { ApiError, paperApi } from '../api/client';
-import type { AgentMessage, Highlight, Note, PaperDocument, PaperGraph } from '../api/types';
+import { streamSelectionAssist } from '../api/sse';
+import type { AgentMessage, Highlight, Note, PaperDocument, PaperGraph, SelectionAssistEvent, TextAnchorDraft } from '../api/types';
 import { usePaperWorkspace } from './usePaperWorkspace';
 
+vi.mock('../api/sse', () => ({ streamSelectionAssist: vi.fn() }));
+
 const emptyGraph: PaperGraph = { nodes: [], edges: [] };
+const selectionDraft: TextAnchorDraft = {
+  quote: '选中的原文', page_number: 1, rects: [{ order: 0, x0: 0.1, y0: 0.2, x1: 0.5, y1: 0.3 }],
+};
 const builtGraph: PaperGraph = {
   nodes: [{
     id: 'built', node_type: 'claim', name: 'Built graph', summary: 'Workspace result.',
@@ -52,6 +58,36 @@ it('shows a Chinese workspace fallback instead of raw transport or server errors
   const { result } = renderHook(() => usePaperWorkspace('paper-a'));
 
   await waitFor(() => expect(result.current.errorMessage).toBe('论文阅读工作区暂时无法加载。'));
+});
+
+it('replaces an English SSE error detail with a Chinese public fallback', async () => {
+  vi.mocked(streamSelectionAssist).mockImplementation(async function* (): AsyncGenerator<SelectionAssistEvent> {
+    yield { event: 'error', data: { code: 'UPSTREAM_TIMEOUT', detail: 'Upstream timeout: internal node 10.0.0.7' } };
+  });
+  const { result } = renderHook(() => usePaperWorkspace('paper-a'));
+  await waitFor(() => expect(result.current.document).not.toBeNull());
+
+  let response: Awaited<ReturnType<typeof result.current.runSelectionAssist>> | undefined;
+  await act(async () => {
+    response = await result.current.runSelectionAssist('explain', selectionDraft, 'qwen', 'request-a', new AbortController().signal);
+  });
+
+  expect(response).toEqual({ status: 'failed', text: '', message: '解释请求失败，请重试。' });
+});
+
+it('keeps a Chinese SSE error detail for the user', async () => {
+  vi.mocked(streamSelectionAssist).mockImplementation(async function* (): AsyncGenerator<SelectionAssistEvent> {
+    yield { event: 'error', data: { code: 'MODEL_BUSY', detail: '模型服务繁忙，请稍后重试。' } };
+  });
+  const { result } = renderHook(() => usePaperWorkspace('paper-a'));
+  await waitFor(() => expect(result.current.document).not.toBeNull());
+
+  let response: Awaited<ReturnType<typeof result.current.runSelectionAssist>> | undefined;
+  await act(async () => {
+    response = await result.current.runSelectionAssist('translate', selectionDraft, 'qwen', 'request-b', new AbortController().signal);
+  });
+
+  expect(response).toEqual({ status: 'failed', text: '', message: '模型服务繁忙，请稍后重试。' });
 });
 
 it('returns and stores a core graph built for the active paper', async () => {

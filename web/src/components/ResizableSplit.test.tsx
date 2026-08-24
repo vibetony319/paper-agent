@@ -51,6 +51,17 @@ it('uses the compact paper/tools switch at exactly 880px', () => {
   expect(screen.getByRole('button', { name: '工具' })).toBeVisible();
 });
 
+it('uses the compact switch after a resize reaches exactly 880px', () => {
+  render(<ResizableSplit paper={<div>论文内容</div>} tools={<div>工具内容</div>} />);
+  expect(screen.getByRole('separator', { name: '调整论文与工具宽度' })).toBeVisible();
+
+  Object.defineProperty(window, 'innerWidth', { configurable: true, value: 880 });
+  fireEvent(window, new Event('resize'));
+
+  expect(screen.queryByRole('separator')).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '论文' })).toBeVisible();
+});
+
 it('releases pointer capture when resizing is cancelled or capture is lost', () => {
   render(<ResizableSplit paper={<div>论文内容</div>} tools={<div>工具内容</div>} />);
   const separator = screen.getByRole('separator', { name: '调整论文与工具宽度' });
