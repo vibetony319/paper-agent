@@ -1,17 +1,17 @@
 # paper-agent 开发交接
 
-更新时间：2026-08-24 21:37（Asia/Shanghai）
+更新时间：2026-08-24 21:59（Asia/Shanghai）
 
 ## 1. 当前结论
 
-项目正在按“论文阅读工作区升级”总计划推进。Plan 1–3 已全部完成，Plan 4 前端工作区已完成三个任务。
+项目正在按“论文阅读工作区升级”总计划推进。Plan 1–3 已全部完成，Plan 4 前端工作区已完成四个任务。
 
 - 当前分支：`codex/reader-workspace-v2`
-- 当前 HEAD：Task 3 提交后更新为 `feat: focus the chinese paper library and deletion flow`。
+- 当前 HEAD：Task 4 代码提交 `a9b88ae feat: render selectable continuous pdf pages`。
 - Plan 1“多模型档案与调用追溯”：Task 1–7 全部完成并提交。
 - Plan 2“批注、解释翻译与笔记记忆”：Task 1–7 全部完成并提交。
 - Plan 3“论文及关联数据安全删除”：Task 1–6 全部完成并提交（含文档 `docs/data-model.md`）。
-- Plan 4“中文论文阅读工作区前端”：Task 1（API 契约与 SSE）、Task 2（模型档案、选择器与设置弹窗）和 Task 3（论文库与删除确认）完成并提交。Task 3 提供论文库/阅读器的聚焦视图、中文顶栏、从顶栏和论文条目进入的永久删除确认，以及删除后返回并刷新论文库。
+- Plan 4“中文论文阅读工作区前端”：Task 1–4 已完成并提交。Task 4 将阅读器改为单文档加载的连续虚拟页面，使用 1200px overscan、同 viewport 的 Canvas/TextLayer、高 DPI backing store、无文字回退和证据页强制定位。
 - Plan 5“开发者文档与整体验收”尚未开始。
 
 接手规则：当前所有工作均已提交，工作树干净；仍不要 reset、checkout、clean 或覆盖工作区。`AGENTS.md` 是环境文件，禁止暂存。
@@ -58,6 +58,7 @@
 | Plan 4 Task 1 前端 API 契约与 SSE | `1446697` | 已提交 |
 | Plan 4 Task 2 模型档案与选择器 | `6b5d7eb` | 已提交 |
 | Plan 4 Task 3 论文库与永久删除体验 | `feat: focus the chinese paper library and deletion flow` | 已提交 |
+| Plan 4 Task 4 连续 PDF、虚拟化与 TextLayer | `a9b88ae feat: render selectable continuous pdf pages` | 已提交 |
 
 ## 4. 当前未提交内容
 
@@ -97,18 +98,18 @@ npx tsc --noEmit --project tsconfig.app.json
 - 前端 Plan 4 Task 1 之后：`110 passed`（11 个测试文件）；lockfile 修复后 `npm ci --ignore-scripts` 全新安装 exit 0。
 - 前端 Plan 4 Task 2 之后：`138 passed`（14 个测试文件），`tsc --noEmit` 通过。
 - Plan 4 Task 3：聚焦测试 `npm test -- src/App.test.tsx src/components/ConfirmDeleteDialog.test.tsx` 为 `25 passed`（2 个测试文件）；完整前端套件 `npm test` 为 `147 passed`（15 个测试文件）；`npm run build` 通过。构建输出仅有 Vite 对 PDF.js 主包大于 500 kB 的提示，没有构建或类型错误。
+- Plan 4 Task 4：聚焦测试 `npm test -- src/pdfjs.test.ts src/components/PdfPageView.test.tsx src/components/PdfReader.test.tsx` 为 `13 passed`（3 个测试文件）；完整前端套件 `npm test` 为 `149 passed`（16 个测试文件）；`npm run build` 通过。构建输出仅有 Vite 对 PDF.js 主包大于 500 kB 的提示，没有构建或类型错误。
 
 ## 7. 准确的接手步骤
 
 1. 确认位于 `codex/reader-workspace-v2`，并核对第 4 节所列的三个未跟踪环境/指南文件保持原样。
-2. 从 Plan 4 Task 4 继续：连续 PDF 页面、虚拟化和 TextLayer，计划文件 `docs/superpowers/plans/2026-08-21-reader-workspace-frontend.md`（Task 4）。
-3. 依次执行 Task 4–8。Task 8 编辑 CSS 前重读 `$design-taste-frontend`（`C:/Users/Admin/.codex/skills/taste-skill/SKILL.md`）并按其 preflight 记录检查；设计参数固定 `DESIGN_VARIANCE=4`、`MOTION_INTENSITY=3`、`VISUAL_DENSITY=7`。
+2. 从 Plan 4 Task 5 继续：浏览器选区转锚点、选区工具栏与高亮持久化，计划文件 `docs/superpowers/plans/2026-08-21-reader-workspace-frontend.md`（Task 5）。
+3. 依次执行 Task 5–8。Task 8 编辑 CSS 前重读 `$design-taste-frontend`（`C:/Users/Admin/.codex/skills/taste-skill/SKILL.md`）并按其 preflight 记录检查；设计参数固定 `DESIGN_VARIANCE=4`、`MOTION_INTENSITY=3`、`VISUAL_DENSITY=7`。
 4. 每个任务严格按计划的测试命令验证后再提交，提交信息以计划为准。
 5. Plan 4 完成后进入 Plan 5。
 
 ## 8. 下一阶段清单
 
-- Plan 4 Task 4：连续 PDF 页面、虚拟化、TextLayer 同 viewport 渲染。
 - Plan 4 Task 5：浏览器选区转锚点、选区工具栏、高亮持久化与覆盖层。
 - Plan 4 Task 6：解释/翻译流式浮层、自动笔记、笔记筛选与锚定。
 - Plan 4 Task 7：右侧工作台三 tab、固定聊天框统一当前模型、可调整双栏与小屏切换。
