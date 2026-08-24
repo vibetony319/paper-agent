@@ -91,6 +91,29 @@ it('clears paper-specific workspace data when a different paper opens', () => {
   });
 });
 
+it('rejects a stale notes load after a local note mutation', () => {
+  const state = { ...initialWorkspaceState, activePaperId: 'paper-a', loadRevision: 3, notesMutationGeneration: 1, notes: [{ id: 'local', body: '本地结果', element_id: null, page_number: null }] };
+  const next = workspaceReducer(state, { type: 'notes/loaded', paperId: 'paper-a', loadRevision: 3, mutationGeneration: 0, notes: [] });
+  expect(next.notes).toEqual(state.notes);
+});
+
+it.each(['notes/created', 'notes/updated', 'notes/deleted'] as const)('keeps local notes when a delayed load follows %s', (type) => {
+  const initial = { ...initialWorkspaceState, activePaperId: 'paper-a', loadRevision: 3, notes: [{ id: 'note-a', body: '初始', element_id: null, page_number: null }] };
+  const action = type === 'notes/deleted'
+    ? { type, paperId: 'paper-a', loadRevision: 3, noteId: 'note-a' }
+    : { type, paperId: 'paper-a', loadRevision: 3, note: { id: 'note-a', body: '本地更新', element_id: null, page_number: null } };
+  const afterMutation = workspaceReducer(initial, action);
+  const afterLoad = workspaceReducer(afterMutation, { type: 'notes/loaded', paperId: 'paper-a', loadRevision: 3, mutationGeneration: 0, notes: [{ id: 'stale', body: '过期', element_id: null, page_number: null }] });
+  expect(afterLoad.notes).toEqual(afterMutation.notes);
+});
+
+it('loads highlights independently of note mutation generation', () => {
+  const state = { ...initialWorkspaceState, activePaperId: 'paper-a', loadRevision: 3, notesMutationGeneration: 4, highlightsMutationGeneration: 0 };
+  const highlights = [{ id: 'highlight-a', color: 'yellow' as const, anchor: { id: 'anchor-a', quote: '原文', page_number: 1, element_id: null, rects: [{ order: 0, x0: 0.1, y0: 0.2, x1: 0.4, y1: 0.3 }] } }];
+  const next = workspaceReducer(state, { type: 'highlights/loaded', paperId: 'paper-a', loadRevision: 3, mutationGeneration: 0, highlights });
+  expect(next.highlights).toEqual(highlights);
+});
+
 it('adds a persisted highlight and clears only the temporary selection', () => {
   const selection = {
     draft: {

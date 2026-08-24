@@ -143,10 +143,11 @@ export function workspaceReducer(
         : state;
     case 'notes/loaded':
       return isCurrentLoad(state, action.paperId, action.loadRevision)
+        && (action.mutationGeneration === undefined || state.notesMutationGeneration === action.mutationGeneration)
         ? { ...state, notes: action.notes, notesErrorMessage: null }
         : state;
     case 'highlights/loaded':
-      return isCurrentLoad(state, action.paperId, action.loadRevision) && (action.mutationGeneration === undefined || state.notesMutationGeneration === action.mutationGeneration)
+      return isCurrentLoad(state, action.paperId, action.loadRevision)
         && state.highlightsMutationGeneration === action.mutationGeneration
         ? { ...state, highlights: action.highlights }
         : state;

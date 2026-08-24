@@ -97,7 +97,8 @@ export function usePaperWorkspace(
     notesMutationGeneration.current = 0;
     anchorsMutationGeneration.current = 0;
     workspaceLifetimeController.current.abort();
-    workspaceLifetimeController.current = new AbortController();
+    const lifetimeController = new AbortController();
+    workspaceLifetimeController.current = lifetimeController;
     const annotationsMutationGeneration = highlightsMutationGeneration.current;
     dispatch({ type: 'paper/opened', paperId: activePaperId, loadRevision: loadGeneration });
 
@@ -179,7 +180,10 @@ export function usePaperWorkspace(
         });
       });
 
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      lifetimeController.abort();
+    };
   }, [activePaperId, loadRevision]);
 
   const buildCoreGraph = useCallback(async () => {
