@@ -204,6 +204,25 @@ it('converts a pointer selection from the PDF text layer into an anchor draft', 
   }, expect.objectContaining({ left: 160, top: 280 }));
 });
 
+it('captures a keyboard selection through selectionchange', async () => {
+  const onSelectionSet = vi.fn();
+  render(<PdfReader paperId="paper-a" pages={[manyPages[0]]} activeSource={null} onSourceCleared={vi.fn()} onSelectionSet={onSelectionSet} />);
+
+  const textLayer = await screen.findByTestId('pdf-text-layer-1');
+  const text = document.createTextNode('键盘选择文字');
+  textLayer.append(text);
+  const surface = textLayer.closest('.pdf-page-view__surface') as HTMLElement;
+  Object.defineProperty(surface, 'getBoundingClientRect', { configurable: true, value: () => ({ left: 100, top: 200, right: 700, bottom: 1000, width: 600, height: 800 }) });
+  vi.spyOn(window, 'getSelection').mockReturnValue({
+    anchorNode: text, focusNode: text, rangeCount: 1,
+    getRangeAt: () => ({ getClientRects: () => [{ left: 160, top: 280, right: 460, bottom: 300, width: 300, height: 20 }] }),
+    toString: () => '键盘选择文字',
+  } as unknown as Selection);
+
+  document.dispatchEvent(new Event('selectionchange'));
+  expect(onSelectionSet).toHaveBeenCalledWith(expect.objectContaining({ quote: '键盘选择文字', page_number: 1 }), expect.anything());
+});
+
 it('returns focus to the selected PDF page when Escape clears a temporary selection', async () => {
   const clearSelection = vi.fn();
   const removeAllRanges = vi.fn();

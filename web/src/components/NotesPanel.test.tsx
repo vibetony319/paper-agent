@@ -100,3 +100,29 @@ it('does not show a stale paper A save failure after switching to paper B', asyn
   expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   expect(screen.getByLabelText('新建笔记')).toHaveValue('');
 });
+
+it('shows notes newest first and keeps their original order when timestamps match or are absent', () => {
+  render(
+    <NotesPanel
+      paperId="paper-a"
+      activeSource={null}
+      notes={[
+        { id: 'same-first', body: '同一时间第一条', element_id: null, page_number: 1, created_at: '2026-08-21T10:00:00Z' },
+        { id: 'older', body: '较早笔记', element_id: null, page_number: 1, created_at: '2026-08-20T10:00:00Z' },
+        { id: 'same-second', body: '同一时间第二条', element_id: null, page_number: 1, created_at: '2026-08-21T10:00:00Z' },
+        { id: 'unknown', body: '无时间笔记', element_id: null, page_number: 1 },
+      ]}
+      anchors={[]}
+      documentElements={[]}
+      saveNote={vi.fn()}
+      onSelectSource={vi.fn()}
+    />,
+  );
+
+  expect(screen.getAllByRole('article').map((note) => note.textContent)).toEqual([
+    expect.stringContaining('同一时间第一条'),
+    expect.stringContaining('同一时间第二条'),
+    expect.stringContaining('较早笔记'),
+    expect.stringContaining('无时间笔记'),
+  ]);
+});

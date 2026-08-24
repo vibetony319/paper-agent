@@ -38,7 +38,17 @@ export function NotesPanel({ paperId, activeSource, notes, anchors = [], documen
   const anchorsById = useMemo(() => new Map(anchors.map((item) => [item.id, item])), [anchors]);
   const visible = useMemo(() => {
     const merged = new Map(notes.map((note) => [note.id, note])); localNotes.forEach((note) => merged.set(note.id, note));
-    return [...merged.values()].filter((note) => filter === 'all' || (note.note_type ?? 'manual') === filter);
+    return [...merged.values()]
+      .map((note, index) => ({ note, index, createdAt: Date.parse(note.created_at ?? '') }))
+      .filter(({ note }) => filter === 'all' || (note.note_type ?? 'manual') === filter)
+      .sort((left, right) => {
+        const leftHasTimestamp = Number.isFinite(left.createdAt);
+        const rightHasTimestamp = Number.isFinite(right.createdAt);
+        if (leftHasTimestamp && rightHasTimestamp && left.createdAt !== right.createdAt) return right.createdAt - left.createdAt;
+        if (leftHasTimestamp !== rightHasTimestamp) return leftHasTimestamp ? -1 : 1;
+        return left.index - right.index;
+      })
+      .map(({ note }) => note);
   }, [filter, localNotes, notes]);
   const submit = async (event: React.FormEvent) => {
     event.preventDefault(); if (!draft.trim() || pending || paperId === null) return;

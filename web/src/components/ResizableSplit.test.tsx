@@ -41,3 +41,20 @@ it('switches paper and tools below 880px without unmounting either subtree', () 
   expect(screen.getByLabelText('工具状态')).toHaveValue('保留');
   expect(screen.getByLabelText('论文状态')).toBeInTheDocument();
 });
+
+it('releases pointer capture when resizing is cancelled or capture is lost', () => {
+  render(<ResizableSplit paper={<div>论文内容</div>} tools={<div>工具内容</div>} />);
+  const separator = screen.getByRole('separator', { name: '调整论文与工具宽度' });
+  const split = screen.getByTestId('resizable-split');
+  Object.defineProperty(split, 'getBoundingClientRect', { value: () => ({ left: 0, width: 1000 }) });
+
+  fireEvent.pointerDown(separator, { pointerId: 1, clientX: 620 });
+  fireEvent.pointerCancel(separator, { pointerId: 1 });
+  fireEvent.pointerMove(separator, { pointerId: 1, clientX: 700 });
+  expect(split).toHaveStyle({ '--reader-split': '62%' });
+
+  fireEvent.pointerDown(separator, { pointerId: 2, clientX: 620 });
+  fireEvent.lostPointerCapture(separator, { pointerId: 2 });
+  fireEvent.pointerMove(separator, { pointerId: 2, clientX: 700 });
+  expect(split).toHaveStyle({ '--reader-split': '62%' });
+});

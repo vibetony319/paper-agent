@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 
 import { AgentPanel, type AgentPanelProps } from './AgentPanel';
 import { ChatComposer, type ChatComposerProps } from './ChatComposer';
@@ -18,6 +18,7 @@ type PanelTab = 'agent' | 'graph' | 'notes';
 export function RightPanel({ paperId, agent, graph, notes, composer }: RightPanelProps) {
   const [selectedTab, setSelectedTab] = useState<PanelTab>('agent');
   const tabId = useId();
+  const tabRefs = useRef<Record<PanelTab, HTMLButtonElement | null>>({ agent: null, graph: null, notes: null });
   useEffect(() => { setSelectedTab('agent'); }, [paperId]);
   const tabs: Array<[PanelTab, string]> = [['agent', '论文助手'], ['graph', '知识图谱'], ['notes', '笔记']];
 
@@ -27,7 +28,28 @@ export function RightPanel({ paperId, agent, graph, notes, composer }: RightPane
         {tabs.map(([tab, label]) => {
           const tabControlId = `${tabId}-${tab}-tab`;
           const panelId = `${tabId}-${tab}-panel`;
-          return <button key={tab} id={tabControlId} type="button" role="tab" aria-selected={selectedTab === tab} aria-controls={panelId} onClick={() => setSelectedTab(tab)}>{label}</button>;
+          return <button
+            key={tab}
+            ref={(element) => { tabRefs.current[tab] = element; }}
+            id={tabControlId}
+            type="button"
+            role="tab"
+            tabIndex={selectedTab === tab ? 0 : -1}
+            aria-selected={selectedTab === tab}
+            aria-controls={panelId}
+            onClick={() => setSelectedTab(tab)}
+            onKeyDown={(event) => {
+              const index = tabs.findIndex(([value]) => value === tab);
+              const nextIndex = event.key === 'ArrowRight' ? (index + 1) % tabs.length
+                : event.key === 'ArrowLeft' ? (index + tabs.length - 1) % tabs.length
+                  : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : null;
+              if (nextIndex === null) return;
+              event.preventDefault();
+              const nextTab = tabs[nextIndex][0];
+              setSelectedTab(nextTab);
+              tabRefs.current[nextTab]?.focus();
+            }}
+          >{label}</button>;
         })}
       </div>
       <div className="right-panel__content">

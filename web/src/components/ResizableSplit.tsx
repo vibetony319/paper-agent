@@ -47,6 +47,13 @@ export function ResizableSplit({ paper, tools }: ResizableSplitProps) {
     updatePercentage(((event.clientX - bounds.left) / bounds.width) * 100);
   };
 
+  const releasePointer = (event: React.PointerEvent<HTMLButtonElement>) => {
+    if (activePointerId.current === event.pointerId) {
+      activePointerId.current = null;
+      event.currentTarget.releasePointerCapture?.(event.pointerId);
+    }
+  };
+
   return (
     <div
       ref={rootRef}
@@ -76,9 +83,9 @@ export function ResizableSplit({ paper, tools }: ResizableSplitProps) {
             event.currentTarget.setPointerCapture?.(event.pointerId);
           }}
           onPointerMove={movePointer}
-          onPointerUp={(event) => {
-            if (activePointerId.current === event.pointerId) activePointerId.current = null;
-          }}
+          onPointerUp={releasePointer}
+          onPointerCancel={releasePointer}
+          onLostPointerCapture={releasePointer}
           onKeyDown={(event) => {
             if (event.key === 'ArrowLeft') { event.preventDefault(); updatePercentage(percentage - 2); }
             if (event.key === 'ArrowRight') { event.preventDefault(); updatePercentage(percentage + 2); }

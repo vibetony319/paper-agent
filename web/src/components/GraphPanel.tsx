@@ -122,7 +122,7 @@ export function GraphPanel({
           && currentRootIdentity.current === layoutRootIdentity
           && currentViewIdentity.current === layoutViewIdentity
         ) {
-          setErrorMessage('Unable to arrange the graph.');
+          setErrorMessage('暂时无法整理图谱。');
         }
       });
   }, [visibleGraphState]);
@@ -170,7 +170,7 @@ export function GraphPanel({
           return;
         }
         setPendingAction(null);
-        setErrorMessage(publicErrorMessage(error, 'Unable to load the focused graph.'));
+        setErrorMessage(publicErrorMessage(error, '暂时无法加载聚焦图谱。'));
       });
   };
 
@@ -220,7 +220,7 @@ export function GraphPanel({
         setPendingAction(null);
         setErrorMessage(publicErrorMessage(
           error,
-          kind === 'core' ? 'Unable to build the core graph.' : 'Unable to build the deep graph.',
+          kind === 'core' ? '暂时无法构建核心图谱。' : '暂时无法构建深度图谱。',
         ));
       });
   };
@@ -287,7 +287,7 @@ export function GraphPanel({
             <p className="graph-panel__eyebrow">{selectedNode.node_type}</p>
             <h3>{selectedNode.name}</h3>
             <p>{selectedNode.summary}</p>
-            <div className="graph-panel__evidence" aria-label="Node evidence">
+            <div className="graph-panel__evidence" aria-label="节点证据">
               {selectedNode.evidence_element_ids.length === 0 ? (
                 <p>此节点暂无关联证据。</p>
               ) : selectedNode.evidence_element_ids.map((elementId, index) => {

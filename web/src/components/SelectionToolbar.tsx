@@ -25,20 +25,25 @@ export function SelectionToolbar({ draft, toolbarRect, actions = {}, onDismiss }
   const [position, setPosition] = useState({ left: 12, top: 12 });
 
   useLayoutEffect(() => {
-    const toolbar = toolbarRef.current;
-    if (toolbar === null) return;
-    const bounds = toolbar.getBoundingClientRect();
-    const width = bounds.width;
-    const height = bounds.height;
-    const left = Math.min(
-      Math.max(12, toolbarRect.left + toolbarRect.width / 2 - width / 2),
-      Math.max(12, window.innerWidth - width - 12),
-    );
-    const top = Math.min(
-      Math.max(12, toolbarRect.top - height - 8),
-      Math.max(12, window.innerHeight - height - 12),
-    );
-    setPosition({ left, top });
+    const reposition = () => {
+      const toolbar = toolbarRef.current;
+      if (toolbar === null) return;
+      const bounds = toolbar.getBoundingClientRect();
+      const width = bounds.width;
+      const height = bounds.height;
+      const left = Math.min(
+        Math.max(12, toolbarRect.left + toolbarRect.width / 2 - width / 2),
+        Math.max(12, window.innerWidth - width - 12),
+      );
+      const top = Math.min(
+        Math.max(12, toolbarRect.top - height - 8),
+        Math.max(12, window.innerHeight - height - 12),
+      );
+      setPosition({ left, top });
+    };
+    reposition();
+    window.addEventListener('resize', reposition);
+    return () => window.removeEventListener('resize', reposition);
   }, [toolbarRect]);
 
   return (

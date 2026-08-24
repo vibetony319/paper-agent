@@ -176,7 +176,7 @@ it('keeps the last valid graph visible when a focused graph request fails safely
 
   fireEvent.click(await screen.findByRole('button', { name: 'Token router' }));
 
-  expect(await screen.findByRole('alert')).toHaveTextContent('Unable to load the focused graph.');
+  expect(await screen.findByRole('alert')).toHaveTextContent('暂时无法加载聚焦图谱。');
   expect(screen.getByTestId('graph-canvas')).toHaveTextContent('Token router');
   expect(screen.queryByText(/secret diagnostic/i)).not.toBeInTheDocument();
 });

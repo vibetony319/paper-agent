@@ -12,6 +12,17 @@
 
 原文去重哈希为 `sha256(normalize("NFKC", " ".join(quote.split())).casefold())`，用于同一论文内复用已有锚点。
 
+## 前端采集与展示
+
+- 一个阅读器只创建一个 PDF.js 文档加载任务。连续页面共用该任务；每页的 Canvas 与 TextLayer 从同一个 viewport 生成，Canvas 仅提高 backing store 的 DPI，不改变文字层的几何坐标。
+- 页面壳使用 `IntersectionObserver` 挂载，`rootMargin` 为 `1200px 0px`；可视页前后页作为轻量预取。未进入范围的页面保留正确长宽比的占位壳，不产生单独的 PDF 加载任务。
+- 前端只接受同一页、可复制 TextLayer 内的选择。pointer、键盘选择触发的 `selectionchange` 都会转为原文、页码和多矩形锚点；矩形会相对同页 surface 归一化并裁剪到 `[0, 1]`。跨页、空白或脱离 TextLayer 的选择被拒绝并显示中文提示，不写入服务端。
+- 选区工具栏固定在视口内，会在选区、窗口尺寸和可用空间变化时重新夹紧位置；解释、翻译、手写笔记与高亮均复用同一份归一化锚点。缩放或阅读区宽度改变后，Canvas、TextLayer、证据层和高亮层以新的共享 viewport 重新恢复位置。
+- 蓝靛色证据定位层与黄色批注高亮层相互独立：证据定位是当前会话的临时阅读辅助，高亮和笔记才是持久批注。高亮重新挂载时按保存的归一化矩形恢复，不依赖旧的浏览器像素坐标。
+- `GET /api/papers/{paper_id}/annotations` 响应除 `highlights`、`notes` 外，还可加性返回 `anchors`；前端用它恢复没有独立高亮的手写/生成笔记的摘录与定位。
+
+限制：扫描件、图片中的文字、损坏的 TextLayer 和不可复制 PDF 不能在浏览器中制作文本锚点；目前不提供 OCR 或跨页选区合并。用户仍可从原始 PDF 链接查看此类页面。
+
 ## 幂等键
 
 高亮和笔记请求可带 `request_id`。相同论文和请求标识重复提交时返回已保存对象；如果原文、坐标或正文与首次请求不一致，返回 `409 idempotency_conflict`，不会静默复用。选区辅助的幂等状态单独记录在 `selection_assist_requests`。
@@ -32,7 +43,7 @@
 GET /api/papers/{paper_id}/annotations
 ```
 
-响应包含 `highlights` 和 `notes`，每条批注带原文、页码和矩形，不包含本地文件路径。
+响应包含 `highlights` 和 `notes`，并可加性包含 `anchors`；每条批注带原文、页码和矩形，不包含本地文件路径。
 
 ### 创建高亮
 
