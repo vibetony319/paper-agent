@@ -125,7 +125,8 @@ it('keeps the api error code for failed selection assist requests', async () => 
     .rejects.toMatchObject({
       status: 503,
       code: 'MODEL_CONNECTION_FAILED',
-      message: '模型服务连接失败。',
+      detail: '模型服务连接失败。',
+      message: '请求失败，请稍后重试。',
     });
 });
 

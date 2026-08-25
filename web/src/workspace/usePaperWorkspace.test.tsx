@@ -62,7 +62,7 @@ it('shows a Chinese workspace fallback instead of raw transport or server errors
 
 it('replaces an English SSE error detail with a Chinese public fallback', async () => {
   vi.mocked(streamSelectionAssist).mockImplementation(async function* (): AsyncGenerator<SelectionAssistEvent> {
-    yield { event: 'error', data: { code: 'UPSTREAM_TIMEOUT', detail: 'Upstream timeout: internal node 10.0.0.7' } };
+    yield { event: 'error', data: { code: 'UPSTREAM_TIMEOUT', detail: '内部错误：Upstream timeout at 10.0.0.7' } };
   });
   const { result } = renderHook(() => usePaperWorkspace('paper-a'));
   await waitFor(() => expect(result.current.document).not.toBeNull());
@@ -75,7 +75,7 @@ it('replaces an English SSE error detail with a Chinese public fallback', async 
   expect(response).toEqual({ status: 'failed', text: '', message: '解释请求失败，请重试。' });
 });
 
-it('keeps a Chinese SSE error detail for the user', async () => {
+it('never exposes a Chinese SSE error detail and uses the translate fallback', async () => {
   vi.mocked(streamSelectionAssist).mockImplementation(async function* (): AsyncGenerator<SelectionAssistEvent> {
     yield { event: 'error', data: { code: 'MODEL_BUSY', detail: '模型服务繁忙，请稍后重试。' } };
   });
@@ -87,7 +87,7 @@ it('keeps a Chinese SSE error detail for the user', async () => {
     response = await result.current.runSelectionAssist('translate', selectionDraft, 'qwen', 'request-b', new AbortController().signal);
   });
 
-  expect(response).toEqual({ status: 'failed', text: '', message: '模型服务繁忙，请稍后重试。' });
+  expect(response).toEqual({ status: 'failed', text: '', message: '翻译请求失败，请重试。' });
 });
 
 it('returns and stores a core graph built for the active paper', async () => {
@@ -253,7 +253,7 @@ it('persists a yellow highlight with a fresh request id and clears the selection
   expect(result.current.selection).toBeNull();
 });
 
-it('keeps the selection and exposes a Chinese error when highlight persistence fails', async () => {
+it('keeps the selection and uses a local error when highlight persistence fails', async () => {
   vi.spyOn(paperApi, 'createHighlight').mockRejectedValue(new ApiError(503, '服务不可用。'));
   vi.stubGlobal('crypto', { randomUUID: () => 'request-highlight-a' });
   const { result } = renderHook(() => usePaperWorkspace('paper-a'));
@@ -266,7 +266,7 @@ it('keeps the selection and exposes a Chinese error when highlight persistence f
   await act(async () => { await result.current.createHighlight(); });
 
   expect(result.current.selection?.draft.quote).toBe('选中的文字');
-  expect(result.current.errorMessage).toBe('高亮保存失败：服务不可用。');
+  expect(result.current.errorMessage).toBe('高亮保存失败：请稍后重试。');
 });
 
 it('starts a new Agent conversation when the second request changes answer scope', async () => {

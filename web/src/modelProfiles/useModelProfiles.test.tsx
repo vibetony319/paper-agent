@@ -137,7 +137,7 @@ it('reports a chinese error when the profile list fails to load', async () => {
   const { result } = renderHook(() => useModelProfiles('paper-a'));
 
   await waitFor(() => expect(result.current.loading).toBe(false));
-  expect(result.current.error).toBe('模型档案服务不可用。');
+  expect(result.current.error).toBe('模型列表加载失败。');
   expect(result.current.selectedProfileId).toBeNull();
 });
 

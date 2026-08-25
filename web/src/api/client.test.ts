@@ -193,7 +193,7 @@ it('tests a model profile with the If-Match revision', async () => {
   expect(receivedRevision).toBe('3');
 });
 
-it('keeps a stable api error code and chinese detail', async () => {
+it('keeps server diagnostics internally but never exposes a Chinese detail as the public message', async () => {
   server.use(http.delete('/api/papers/paper-a', () => HttpResponse.json(
     { code: 'PAPER_BUSY', detail: '论文正在处理中。' },
     { status: 409 },
@@ -202,7 +202,8 @@ it('keeps a stable api error code and chinese detail', async () => {
   await expect(paperApi.deletePaper('paper-a', 'paper-a')).rejects.toMatchObject({
     status: 409,
     code: 'PAPER_BUSY',
-    message: '论文正在处理中。',
+    detail: '论文正在处理中。',
+    message: '请求失败，请稍后重试。',
   });
 });
 
@@ -215,6 +216,7 @@ it('keeps a stable code while replacing an English server detail with Chinese pu
   await expect(paperApi.getPaper('paper-a')).rejects.toMatchObject({
     status: 404,
     code: null,
+    detail: 'Paper resource not found.',
     message: '请求失败，请稍后重试。',
   });
 });

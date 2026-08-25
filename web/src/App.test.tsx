@@ -261,7 +261,7 @@ it('opens permanent deletion from a library paper and keeps the reader after a b
   const user = userEvent.setup();
   useReadyWorkspaceHandlers();
   server.use(http.delete('/api/papers/paper-a', () => HttpResponse.json(
-    { code: 'PAPER_BUSY', detail: '论文正在处理中，请稍后重试。' },
+    { code: 'PAPER_BUSY', detail: '内部错误：Paper is busy at 10.0.0.7' },
     { status: 409 },
   )));
 
@@ -491,7 +491,7 @@ it('shows a safe workspace loading state and does not mount panes after a load e
   render(<App />);
   await user.click(await screen.findByRole('button', { name: '打开 routing-paper.pdf' }));
 
-  expect(await screen.findByRole('alert')).toHaveTextContent('请求失败，请稍后重试。');
+  expect(await screen.findByRole('alert')).toHaveTextContent('论文阅读工作区暂时无法加载。');
   await waitFor(() => expect(screen.queryByLabelText('Paper reader')).not.toBeInTheDocument());
   expect(screen.queryByRole('tab', { name: '知识图谱' })).not.toBeInTheDocument();
 });
@@ -510,7 +510,7 @@ it('retries a transient document conflict from the workspace action', async () =
   render(<App />);
   const paperButton = await screen.findByRole('button', { name: '打开 routing-paper.pdf' });
   await user.click(paperButton);
-  expect(await screen.findByRole('alert')).toHaveTextContent('请求失败，请稍后重试。');
+  expect(await screen.findByRole('alert')).toHaveTextContent('论文阅读工作区暂时无法加载。');
 
   await user.click(screen.getByRole('button', { name: '重试加载论文' }));
 
@@ -533,7 +533,7 @@ it('retries a transient graph failure from the blocking workspace action', async
   render(<App />);
   await user.click(await screen.findByRole('button', { name: '打开 routing-paper.pdf' }));
   expect(await screen.findByRole('alert')).toHaveTextContent(
-    '请求失败，请稍后重试。',
+    '论文阅读工作区暂时无法加载。',
   );
 
   await user.click(screen.getByRole('button', { name: '重试加载论文' }));
@@ -558,7 +558,7 @@ it('keeps the research panes ready and reports a notes-only load failure', async
   expect(screen.getByRole('tab', { name: '知识图谱' })).toBeVisible();
   expect(screen.getByRole('complementary', { name: '研究工具' })).toBeVisible();
   expect(await screen.findByRole('alert')).toHaveTextContent(
-    '请求失败，请稍后重试。',
+    '论文笔记暂时无法加载。',
   );
 });
 

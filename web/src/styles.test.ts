@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const styles = readFileSync(resolve(process.cwd(), 'src/styles.css'), 'utf8');
+const normalizedStyles = styles.replace(/\s+/g, ' ');
 
 it('keeps focus and active colours on the canonical semantic tokens', () => {
   expect(styles).toMatch(/select:focus-visible,\s*\r?\n?a:focus-visible\s*\{[\s\S]*outline:\s*2px solid var\(--accent\)/);
@@ -14,4 +15,5 @@ it('keeps the workspace error row and split panes constrained inside the viewpor
   expect(styles).toMatch(/\.workspace-shell__errors\s*\{[^}]*display:\s*grid/);
   expect(styles).toMatch(/\.resizable-split\s*\{[^}]*min-height:\s*0/);
   expect(styles).toMatch(/\.resizable-split__paper\s*,\s*\.resizable-split__tools\s*\{[^}]*min-height:\s*0/);
+  expect(normalizedStyles).toMatch(/\.resizable-split\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*var\(--reader-split,\s*62%\)\)\s*0\.72rem\s*minmax\(0,\s*1fr\)/);
 });

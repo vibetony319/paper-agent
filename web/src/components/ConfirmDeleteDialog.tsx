@@ -10,6 +10,14 @@ export interface ConfirmDeleteDialogProps {
 }
 
 const DELETE_FAILED_MESSAGE = '删除失败，请重试。';
+const PAPER_BUSY_MESSAGE = '论文正在处理中，请稍后重试。';
+
+function deletionErrorMessage(error: unknown): string {
+  if (error instanceof ApiError && error.code === 'PAPER_BUSY') {
+    return PAPER_BUSY_MESSAGE;
+  }
+  return DELETE_FAILED_MESSAGE;
+}
 
 export function ConfirmDeleteDialog({ paper, onCancel, onDeleted }: ConfirmDeleteDialogProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -54,7 +62,7 @@ export function ConfirmDeleteDialog({ paper, onCancel, onDeleted }: ConfirmDelet
       await paperApi.deletePaper(paper.id, paper.id);
       onDeleted(paper.id);
     } catch (error) {
-      setErrorMessage(error instanceof ApiError ? error.message : DELETE_FAILED_MESSAGE);
+      setErrorMessage(deletionErrorMessage(error));
       setDeleting(false);
     }
   };

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react';
 
-import { ApiError, paperApi, publicApiMessage } from '../api/client';
+import { paperApi, publicApiMessage } from '../api/client';
 import { streamSelectionAssist } from '../api/sse';
 import type { AgentMode, Citation, PaperSummary, SelectionAssistAction, TextAnchorDraft } from '../api/types';
 import {
@@ -13,8 +13,12 @@ function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
 }
 
-function publicWorkspaceError(error: unknown, fallback: string): string {
-  return error instanceof ApiError ? publicApiMessage(error.message, fallback) : fallback;
+function publicWorkspaceError(_error: unknown, fallback: string): string {
+  return publicApiMessage(fallback);
+}
+
+function selectionAssistFailureMessage(action: SelectionAssistAction): string {
+  return action === 'translate' ? '翻译请求失败，请重试。' : '解释请求失败，请重试。';
 }
 
 export function usePaperWorkspace(
@@ -388,13 +392,13 @@ export function usePaperWorkspace(
           }
           return { status: 'completed' as const, text: event.data.note.body };
         }
-        if (event.event === 'error') return { status: 'failed' as const, text, message: publicApiMessage(event.data.detail, '解释请求失败，请重试。') };
+        if (event.event === 'error') return { status: 'failed' as const, text, message: publicApiMessage(selectionAssistFailureMessage(action)) };
       }
       return { status: 'failed' as const, text, message: '解释请求未完成。' };
     } catch (error) {
       return isAbortError(error) || signal.aborted
         ? { status: 'cancelled' as const, text }
-        : { status: 'failed' as const, text, message: publicWorkspaceError(error, '解释请求失败，请重试。') };
+        : { status: 'failed' as const, text, message: publicWorkspaceError(error, selectionAssistFailureMessage(action)) };
     }
   }, [state.activePaperId, state.loadRevision]);
 

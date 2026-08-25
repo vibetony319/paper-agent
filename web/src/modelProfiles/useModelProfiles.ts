@@ -93,12 +93,12 @@ export function useModelProfiles(paperId: string | null): ModelProfilesState {
         return;
       }
       setProfiles(list);
-    } catch (cause) {
+    } catch {
       if (sequence !== loadSequence.current) {
         return;
       }
       setProfiles([]);
-      setError(cause instanceof ApiError ? cause.message : LIST_LOAD_FAILED_MESSAGE);
+      setError(LIST_LOAD_FAILED_MESSAGE);
     } finally {
       if (sequence === loadSequence.current) {
         setLoading(false);

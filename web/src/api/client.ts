@@ -19,32 +19,32 @@ import type {
 
 const REQUEST_FAILED_MESSAGE = '请求失败，请稍后重试。';
 
-export function publicApiMessage(detail: unknown, fallback = REQUEST_FAILED_MESSAGE): string {
-  return typeof detail === 'string' && /[\u3400-\u9fff]/.test(detail)
-    ? detail
-    : fallback;
+export function publicApiMessage(fallback = REQUEST_FAILED_MESSAGE): string {
+  return fallback;
 }
 
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string | null;
+  readonly detail: string | null;
 
-  constructor(status: number, message: string, code: string | null = null) {
+  constructor(status: number, message: string, code: string | null = null, detail: string | null = null) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
+    this.detail = detail;
   }
 }
 
 export async function readApiError(response: Response): Promise<ApiError> {
-  let message = REQUEST_FAILED_MESSAGE;
+  let detail: string | null = null;
   let code: string | null = null;
   try {
     const body: unknown = await response.json();
     if (typeof body === 'object' && body !== null) {
       if ('detail' in body && typeof body.detail === 'string') {
-        message = publicApiMessage(body.detail);
+        detail = body.detail;
       }
       if ('code' in body && typeof body.code === 'string') {
         code = body.code;
@@ -53,7 +53,7 @@ export async function readApiError(response: Response): Promise<ApiError> {
   } catch {
     // Preserve the safe fallback for invalid or empty error bodies.
   }
-  return new ApiError(response.status, message, code);
+  return new ApiError(response.status, publicApiMessage(), code, detail);
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {

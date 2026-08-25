@@ -88,7 +88,7 @@ it('keeps the dialog open with the chinese error after a busy conflict', async (
   const user = userEvent.setup();
   const onDeleted = vi.fn();
   server.use(http.delete('/api/papers/paper-a', () => HttpResponse.json(
-    { code: 'PAPER_BUSY', detail: '论文正在处理中，请稍后重试。' },
+    { code: 'PAPER_BUSY', detail: '内部错误：Paper is busy at 10.0.0.7' },
     { status: 409 },
   )));
 
