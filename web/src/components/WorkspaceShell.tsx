@@ -70,12 +70,12 @@ export function WorkspaceShell({
   return (
     <div className="workspace-shell">
       <header className="workspace-topbar">
-        <button type="button" onClick={onReturnToLibrary}>返回论文库</button>
-        <div>
+        <button className="workspace-topbar__back" type="button" onClick={onReturnToLibrary}>返回论文库</button>
+        <div className="workspace-topbar__title">
           <h1>{paper.original_filename}</h1>
         </div>
         <p className="workspace-topbar__summary">处理状态：{paperStageSummary(paper)}</p>
-        <button type="button" onClick={onOpenModelSettings}>模型设置</button>
+        <button className="workspace-topbar__model" type="button" onClick={onOpenModelSettings}>模型设置</button>
         <div className="workspace-topbar__paper-actions">
           <button
             ref={paperActionsButtonRef}

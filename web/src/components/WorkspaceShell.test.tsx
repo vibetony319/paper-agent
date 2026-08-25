@@ -39,6 +39,15 @@ function workspaceFixture() {
 
 afterEach(cleanup);
 
+it('exposes stable topbar regions for the compact mobile layout', () => {
+  const workspace = workspaceFixture();
+  render(<WorkspaceShell paper={paper} workspace={workspace as never} onRetryPaperLoading={vi.fn()} onReturnToLibrary={vi.fn()} onOpenModelSettings={vi.fn()} onDeleteRequested={vi.fn()} modelProfiles={[profile]} selectedModelProfileId="qwen" onSelectedModelProfileIdChange={vi.fn()} />);
+
+  expect(screen.getByRole('button', { name: '返回论文库' })).toHaveClass('workspace-topbar__back');
+  expect(screen.getByRole('heading', { name: 'paper.pdf', level: 1 }).parentElement).toHaveClass('workspace-topbar__title');
+  expect(screen.getByRole('button', { name: '模型设置' })).toHaveClass('workspace-topbar__model');
+});
+
 it('attaches the current selection to the always-mounted composer without sending and focuses it', async () => {
   const user = userEvent.setup();
   const workspace = workspaceFixture();

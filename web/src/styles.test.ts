@@ -17,3 +17,14 @@ it('keeps the workspace error row and split panes constrained inside the viewpor
   expect(styles).toMatch(/\.resizable-split__paper\s*,\s*\.resizable-split__tools\s*\{[^}]*min-height:\s*0/);
   expect(normalizedStyles).toMatch(/\.resizable-split\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*var\(--reader-split,\s*62%\)\)\s*0\.72rem\s*minmax\(0,\s*1fr\)/);
 });
+
+it('lays out model settings as a readable responsive form instead of inline browser defaults', () => {
+  expect(normalizedStyles).toMatch(/\.model-settings\s*\{[^}]*width:\s*min\(42rem,\s*calc\(100vw\s*-\s*2rem\)\)[^}]*max-height:/);
+  expect(normalizedStyles).toMatch(/\.model-settings__field\s*\{[^}]*display:\s*grid[^}]*gap:/);
+  expect(normalizedStyles).toMatch(/\.model-settings__field\s+input\s*\{[^}]*box-sizing:\s*border-box[^}]*width:\s*100%/);
+  expect(normalizedStyles).toMatch(/\.model-settings__form-actions\s*\{[^}]*display:\s*flex/);
+});
+
+it('keeps the compact workspace topbar in three short mobile rows', () => {
+  expect(normalizedStyles).toMatch(/@media\s*\(max-width:\s*43\.75rem\)[\s\S]*\.workspace-topbar\s*\{[^}]*display:\s*grid[^}]*grid-template-areas:\s*['\"]back model actions['\"]\s*['\"]title title title['\"]\s*['\"]summary summary summary['\"]/);
+});
