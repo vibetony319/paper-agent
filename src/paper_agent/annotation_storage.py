@@ -358,6 +358,33 @@ class PaperAnnotationRepository:
                 )
             )
 
+    def restart_failed_selection_assist(
+        self,
+        paper_id: str,
+        *,
+        request_id: str,
+        action: str,
+        model_profile_id: str,
+        model_snapshot: ModelSnapshot,
+    ) -> bool:
+        with self.engine.begin() as connection:
+            result = connection.execute(
+                update(selection_assist_requests)
+                .where(selection_assist_requests.c.paper_id == paper_id)
+                .where(selection_assist_requests.c.request_id == request_id)
+                .where(selection_assist_requests.c.status == "failed")
+                .values(
+                    action=action,
+                    status="running",
+                    anchor_id=None,
+                    note_id=None,
+                    model_profile_id=model_profile_id,
+                    model_snapshot_json=_serialize_model_snapshot(model_snapshot),
+                    updated_at=_serialize_time(datetime.now(UTC)),
+                )
+            )
+        return result.rowcount == 1
+
     def complete_selection_assist(
         self,
         paper_id: str,

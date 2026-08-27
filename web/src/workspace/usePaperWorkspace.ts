@@ -394,7 +394,11 @@ export function usePaperWorkspace(
         }
         if (event.event === 'error') return { status: 'failed' as const, text, message: publicApiMessage(selectionAssistFailureMessage(action)) };
       }
-      return { status: 'failed' as const, text, message: '解释请求未完成。' };
+      return {
+        status: 'failed' as const,
+        text,
+        message: action === 'translate' ? '翻译请求未完成。' : '解释请求未完成。',
+      };
     } catch (error) {
       return isAbortError(error) || signal.aborted
         ? { status: 'cancelled' as const, text }

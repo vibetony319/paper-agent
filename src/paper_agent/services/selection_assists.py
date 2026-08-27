@@ -69,14 +69,35 @@ class SelectionAssistService:
                 },
             )
             return
-
-        self.repository.create_selection_assist_running(
-            paper_id,
-            request_id=request_id,
-            action=action.value,
-            model_profile_id=model_snapshot.profile_id,
-            model_snapshot=model_snapshot,
-        )
+        if existing is not None and existing["status"] == "failed":
+            restarted = self.repository.restart_failed_selection_assist(
+                paper_id,
+                request_id=request_id,
+                action=action.value,
+                model_profile_id=model_snapshot.profile_id,
+                model_snapshot=model_snapshot,
+            )
+            if not restarted:
+                current = self.repository.get_selection_assist(paper_id, request_id)
+                if current is not None and current["status"] == "completed":
+                    yield from self._replay_completed(paper_id, current)
+                    return
+                yield SelectionAssistEvent(
+                    "error",
+                    {
+                        "code": "assist_running",
+                        "detail": "该选区请求正在处理中。",
+                    },
+                )
+                return
+        elif existing is None:
+            self.repository.create_selection_assist_running(
+                paper_id,
+                request_id=request_id,
+                action=action.value,
+                model_profile_id=model_snapshot.profile_id,
+                model_snapshot=model_snapshot,
+            )
         yield SelectionAssistEvent("started", {"request_id": request_id})
 
         messages = [

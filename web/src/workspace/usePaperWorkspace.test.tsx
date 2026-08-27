@@ -90,6 +90,21 @@ it('never exposes a Chinese SSE error detail and uses the translate fallback', a
   expect(response).toEqual({ status: 'failed', text: '', message: '翻译请求失败，请重试。' });
 });
 
+it('reports an unfinished translate stream as a translate-specific failure', async () => {
+  vi.mocked(streamSelectionAssist).mockImplementation(async function* (): AsyncGenerator<SelectionAssistEvent> {
+    yield { event: 'started', data: { request_id: 'request-incomplete' } };
+  });
+  const { result } = renderHook(() => usePaperWorkspace('paper-a'));
+  await waitFor(() => expect(result.current.document).not.toBeNull());
+
+  let response: Awaited<ReturnType<typeof result.current.runSelectionAssist>> | undefined;
+  await act(async () => {
+    response = await result.current.runSelectionAssist('translate', selectionDraft, 'qwen', 'request-incomplete', new AbortController().signal);
+  });
+
+  expect(response).toEqual({ status: 'failed', text: '', message: '翻译请求未完成。' });
+});
+
 it('returns and stores a core graph built for the active paper', async () => {
   const buildCoreGraph = vi.spyOn(paperApi, 'buildCoreGraph').mockResolvedValue(builtGraph);
   const { result } = renderHook(() => usePaperWorkspace('paper-a'));

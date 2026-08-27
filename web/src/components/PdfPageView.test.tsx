@@ -2,9 +2,9 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const pdf = vi.hoisted(() => {
-  const viewport = { width: 612, height: 792 };
+  const viewport = { width: 612, height: 792, scale: 1, userUnit: 2 };
   const render = vi.fn(() => ({ cancel: vi.fn(), promise: Promise.resolve() }));
-  const getViewport = vi.fn<(args: { scale: number }) => { width: number; height: number }>(() => viewport);
+  const getViewport = vi.fn<(args: { scale: number }) => typeof viewport>(() => viewport);
   const streamTextContent = vi.fn(() => ({ getReader: vi.fn() }));
   const getPage = vi.fn(() => Promise.resolve({
     getViewport,
@@ -75,6 +75,30 @@ it('renders canvas and text layer from the same viewport', async () => {
   expect(pdf.textLayerRender).toHaveBeenCalledOnce();
 });
 
+it('keeps a non-empty TextLayer selectable with its viewport scale contract', async () => {
+  pdf.TextLayer.mockImplementationOnce(function TextLayer() {
+    return {
+      textContentItemsStr: ['可选择文字'],
+      render: pdf.textLayerRender,
+      cancel: pdf.textLayerCancel,
+    };
+  });
+  const narrowViewport = { width: 306, height: 396, scale: 0.5, userUnit: 2 };
+  pdf.getViewport.mockImplementation(({ scale }) => scale === 0.5 ? narrowViewport : pdf.viewport);
+  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(function clientWidth(this: HTMLElement) {
+    if (this.classList.contains('pdf-reader__page-shell')) return 306;
+    return 0;
+  });
+
+  render(<div className="pdf-reader__page-shell"><PdfPageView document={document as never} page={page} active overlays={[]} /></div>);
+
+  const textLayer = await screen.findByTestId('pdf-text-layer-1');
+  await waitFor(() => expect(pdf.textLayerRender).toHaveBeenCalledOnce());
+  expect(textLayer).toHaveStyle('--total-scale-factor: 1');
+  expect(textLayer).toHaveStyle('--scale-round-x: 1px; --scale-round-y: 1px');
+  expect(screen.queryByText('该页无法选择文字')).not.toBeInTheDocument();
+});
+
 it('uses a high-DPI backing store while retaining the viewport-sized surface', async () => {
   vi.spyOn(window, 'devicePixelRatio', 'get').mockReturnValue(2);
   render(<PdfPageView document={document as never} page={page} active overlays={[]} />);
@@ -113,7 +137,7 @@ it('recreates the shared viewport after its container narrows', async () => {
 });
 
 it('uses the page shell width instead of a self-sized surface for its viewport', async () => {
-  const narrowViewport = { width: 306, height: 396 };
+  const narrowViewport = { width: 306, height: 396, scale: 0.5, userUnit: 2 };
   pdf.getViewport.mockImplementation(({ scale }) => scale === 0.5 ? narrowViewport : pdf.viewport);
   vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(function clientWidth(this: HTMLElement) {
     if (this.classList.contains('pdf-reader__page-shell')) return 306;

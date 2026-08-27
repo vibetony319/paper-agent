@@ -87,6 +87,12 @@ export function PdfPageView({
         textContainer.replaceChildren();
         textContainer.style.width = `${viewport.width}px`;
         textContainer.style.height = `${viewport.height}px`;
+        textContainer.style.setProperty(
+          '--total-scale-factor',
+          String(viewport.scale * viewport.userUnit),
+        );
+        textContainer.style.setProperty('--scale-round-x', '1px');
+        textContainer.style.setProperty('--scale-round-y', '1px');
 
         renderTask = pdfPage.render({
           canvas,

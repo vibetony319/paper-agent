@@ -37,14 +37,30 @@ export function InlineAssistantPopover({
   const [position, setPosition] = useState({ left: toolbarRect.left, top: selectionBottom + 8 });
   const title = action === 'explain' ? '解释' : '翻译';
 
-  useLayoutEffect(() => {
+  const updatePosition = useCallback(() => {
     const bounds = popoverRef.current?.getBoundingClientRect();
     const width = bounds?.width ?? 320;
-    setPosition({
-      left: Math.min(Math.max(12, toolbarRect.left), Math.max(12, window.innerWidth - width - 12)),
-      top: Math.max(12, (toolbarRect.bottom || toolbarRect.top + toolbarRect.height) + 8),
+    const height = bounds?.height ?? 0;
+    const left = Math.min(Math.max(12, toolbarRect.left), Math.max(12, window.innerWidth - width - 12));
+    const top = Math.min(Math.max(12, selectionBottom + 8), Math.max(12, window.innerHeight - height - 12));
+    setPosition((current) => {
+      if (current.left === left && current.top === top) return current;
+      return { left, top };
     });
-  }, [toolbarRect]);
+  }, [selectionBottom, toolbarRect.left]);
+
+  useLayoutEffect(() => {
+    updatePosition();
+    const resizeObserver = typeof ResizeObserver === 'undefined'
+      ? undefined
+      : new ResizeObserver(updatePosition);
+    if (popoverRef.current !== null) resizeObserver?.observe(popoverRef.current);
+    window.addEventListener('resize', updatePosition);
+    return () => {
+      resizeObserver?.disconnect();
+      window.removeEventListener('resize', updatePosition);
+    };
+  }, [updatePosition]);
 
   const start = useCallback(async () => {
     if (modelProfileId === null || controller.current !== null) return;
@@ -78,12 +94,14 @@ export function InlineAssistantPopover({
   return (
     <section ref={popoverRef} className="inline-assistant-popover" style={position} aria-label={`${title}选区`}>
       <header><strong>{title}</strong><button type="button" aria-label="关闭" onClick={() => { if (state === 'streaming') cancel(); onDismiss(); }}>关闭</button></header>
-      {modelProfileId === null ? <p role="status">请先选择可用模型后再{title}。</p> : null}
-      {state === 'streaming' ? <button type="button" onClick={cancel}>取消</button> : null}
-      {text ? <><p className="inline-assistant-popover__text">{text}</p><button type="button" onClick={() => { void copy(); }}>复制</button></> : null}
-      {state === 'completed' ? <p role="status">已存入笔记</p> : null}
-      {state === 'cancelled' ? <p role="status">已取消，已保留当前内容。</p> : null}
-      {state === 'failed' ? <><p role="alert">{message}</p><button type="button" onClick={() => { void start(); }}>重试</button></> : null}
+      <div className="inline-assistant-popover__body">
+        {modelProfileId === null ? <p role="status">请先选择可用模型后再{title}。</p> : null}
+        {state === 'streaming' ? <button type="button" onClick={cancel}>取消</button> : null}
+        {text ? <><p className="inline-assistant-popover__text">{text}</p><button type="button" onClick={() => { void copy(); }}>复制</button></> : null}
+        {state === 'completed' ? <p role="status">已存入笔记</p> : null}
+        {state === 'cancelled' ? <p role="status">已取消，已保留当前内容。</p> : null}
+        {state === 'failed' ? <><p role="alert">{message}</p><button type="button" onClick={() => { void start(); }}>重试</button></> : null}
+      </div>
     </section>
   );
 }

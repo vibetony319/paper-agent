@@ -19,7 +19,6 @@ type PdfReaderProps = {
   onSourceCleared: () => void;
   highlights?: Highlight[];
   selection?: WorkspaceState['selection'];
-  selectionErrorMessage?: string | null;
   onSelectionSet?: (draft: TextAnchorDraft, toolbarRect: DOMRect) => void;
   onSelectionClear?: () => void;
   onCreateHighlight?: () => void;
@@ -53,7 +52,6 @@ export function PdfReader({
   onSourceCleared,
   highlights = [],
   selection = null,
-  selectionErrorMessage = null,
   onSelectionSet,
   onSelectionClear,
   onCreateHighlight,
@@ -255,7 +253,6 @@ export function PdfReader({
           })}
         </div>
       )}
-      {selectionErrorMessage !== null ? <p className="pdf-reader__error" role="alert">{selectionErrorMessage}</p> : null}
       {selection !== null ? (
         <SelectionToolbar
           draft={selection.draft}

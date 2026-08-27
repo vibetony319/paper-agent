@@ -3,8 +3,11 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, expect, it, vi } from 'vitest';
 
 vi.mock('./PdfReader', () => ({
-  PdfReader: ({ selectionActions }: { selectionActions?: { ask?: (draft: { quote: string; page_number: number; rects: [] }) => void } }) => (
-    <button type="button" onClick={() => selectionActions?.ask?.({ quote: '选区内容', page_number: 2, rects: [] })}>问助手</button>
+  PdfReader: ({ selectionActions, selectionErrorMessage }: { selectionActions?: { ask?: (draft: { quote: string; page_number: number; rects: [] }) => void }; selectionErrorMessage?: string | null }) => (
+    <>
+      <button type="button" onClick={() => selectionActions?.ask?.({ quote: '选区内容', page_number: 2, rects: [] })}>问助手</button>
+      {selectionErrorMessage === undefined || selectionErrorMessage === null ? null : <p role="alert">{selectionErrorMessage}</p>}
+    </>
   ),
 }));
 
@@ -100,6 +103,15 @@ it('keeps concurrent workspace and annotation errors inside the constrained spli
   expect(content).toContainElement(screen.getByText('文档加载失败。'));
   expect(content).toContainElement(screen.getByText('批注加载失败。'));
   expect(content).toContainElement(screen.getByTestId('workspace-split'));
+});
+
+it('renders one workspace failure only in the workspace error shell', () => {
+  const workspace = workspaceFixture();
+  workspace.errorMessage = '文档加载失败。';
+  render(<WorkspaceShell paper={paper} workspace={workspace as never} onRetryPaperLoading={vi.fn()} onReturnToLibrary={vi.fn()} onOpenModelSettings={vi.fn()} onDeleteRequested={vi.fn()} modelProfiles={[profile]} selectedModelProfileId="qwen" onSelectedModelProfileIdChange={vi.fn()} />);
+
+  expect(screen.getAllByRole('alert')).toHaveLength(1);
+  expect(screen.getByRole('alert')).toHaveTextContent('文档加载失败。');
 });
 
 it('shows submitted questions, immutable model badges, and routes paper and note sources separately', async () => {

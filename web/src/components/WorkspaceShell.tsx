@@ -156,7 +156,6 @@ export function WorkspaceShell({
                 onSourceCleared={workspace.clearActiveSource}
                 highlights={workspace.highlights}
                 selection={workspace.selection}
-                selectionErrorMessage={workspace.errorMessage}
                 onSelectionSet={workspace.setSelection}
                 onSelectionClear={workspace.clearSelection}
                 onCreateHighlight={() => { void workspace.createHighlight(); }}

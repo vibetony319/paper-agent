@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from paper_agent.annotation_storage import PaperAnnotationRepository
@@ -174,6 +176,39 @@ def test_provider_failure_emits_safe_error_event(
     assert repository.get_notes(prepared_paper.id) == ()
 
 
+def test_failed_selection_assist_retries_with_the_same_request_id_once(
+    repository: PaperAnnotationRepository, prepared_paper: Paper
+) -> None:
+    service = SelectionAssistService(repository)
+
+    first_attempt = _events(
+        service,
+        prepared_paper.id,
+        SelectionAssistAction.explain,
+        FakeChatClient([], fail=True),
+        "assist-retry-after-failure",
+    )
+    assert first_attempt[-1].event == "error"
+    assert repository.get_selection_assist(
+        prepared_paper.id, "assist-retry-after-failure"
+    )["status"] == "failed"
+
+    retry = _events(
+        service,
+        prepared_paper.id,
+        SelectionAssistAction.explain,
+        FakeChatClient(["重试完成。"]),
+        "assist-retry-after-failure",
+    )
+
+    assert [event.event for event in retry] == ["started", "delta", "completed"]
+    request = repository.get_selection_assist(
+        prepared_paper.id, "assist-retry-after-failure"
+    )
+    assert request["status"] == "completed"
+    assert len(repository.get_notes(prepared_paper.id)) == 1
+
+
 def test_completed_duplicate_replays_without_calling_the_model(
     repository: PaperAnnotationRepository, prepared_paper: Paper
 ) -> None:
@@ -222,3 +257,46 @@ def test_running_duplicate_conflicts(
 
     assert [event.event for event in events] == ["error"]
     assert events[0].payload["code"] == "assist_running"
+
+
+def test_restart_failed_selection_assist_only_claims_a_failed_row(
+    repository: PaperAnnotationRepository, prepared_paper: Paper
+) -> None:
+    repository.create_selection_assist_running(
+        prepared_paper.id,
+        request_id="assist-retry",
+        action="explain",
+        model_profile_id="11111111-1111-4111-8111-111111111111",
+        model_snapshot=_snapshot(),
+    )
+    repository.fail_selection_assist(prepared_paper.id, "assist-retry")
+    retry_snapshot = ModelSnapshot(
+        profile_id="22222222-2222-4222-8222-222222222222",
+        display_name="重试模型",
+        base_url="http://127.0.0.1:8002/v1",
+        model_name="Retry-Qwen",
+        revision=2,
+    )
+
+    assert repository.restart_failed_selection_assist(
+        prepared_paper.id,
+        request_id="assist-retry",
+        action="translate",
+        model_profile_id=retry_snapshot.profile_id,
+        model_snapshot=retry_snapshot,
+    ) is True
+
+    request = repository.get_selection_assist(prepared_paper.id, "assist-retry")
+    assert request["status"] == "running"
+    assert request["action"] == "translate"
+    assert request["model_profile_id"] == retry_snapshot.profile_id
+    assert json.loads(request["model_snapshot_json"])["model_name"] == "Retry-Qwen"
+    assert request["anchor_id"] is None
+    assert request["note_id"] is None
+    assert repository.restart_failed_selection_assist(
+        prepared_paper.id,
+        request_id="assist-retry",
+        action="translate",
+        model_profile_id=retry_snapshot.profile_id,
+        model_snapshot=retry_snapshot,
+    ) is False
