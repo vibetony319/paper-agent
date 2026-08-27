@@ -11,6 +11,7 @@ htmlcov/
 
 # Local application data and uploaded papers
 .paper-agent/
+.e2e-data/
 var/
 data/
 
@@ -21,6 +22,8 @@ dist/
 web/.npm-cache/
 web/node_modules/
 web/dist/
+web/test-results/
+web/playwright-report/
 
 # Isolated feature workspaces
 .worktrees/

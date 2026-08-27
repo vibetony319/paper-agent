@@ -1,253 +1,190 @@
 # paper-agent
 
-> 中文开发入口：[文档导航](docs/README.md) · [当前开发交接](docs/developer-handoff.md) · [贡献与开发指南](CONTRIBUTING.md)
+## 项目简介
 
-多模型 vLLM 配置与能力说明：[docs/model-services.md](docs/model-services.md)。
+paper-agent 是一个本地优先的论文阅读与研究工作台。它把原始 PDF、可定位文本、批注、笔记、知识图谱和带引用校验的论文助手放在同一个界面中，模型服务统一使用 OpenAI-compatible vLLM。
 
-A local-first workspace for reading AI/ML papers. A local FastAPI service can
-accept a PDF, parse and persist its document data, serve the original source
-PDF and page images, store paper-scoped notes, and build an evidence-backed
-knowledge graph with an optional local reasoning model. The Agent Runtime
-supports citation-aware, tool-calling paper chat, and the browser workbench is
-included for local reading.
+项目默认单机运行：论文、SQLite 数据库和模型密钥都保存在本地，不依赖 Model Gateway 或云端文档服务。
 
-## Requirements and local installation
+## 功能概览
 
-Use Python 3.12 or newer. The browser workbench requires Node.js 22.14 or
-newer on the Node 22 release line, or Node.js 24 or newer. From the repository
-root, create and activate a virtual environment if desired, then install the
-project and its development tools:
+- 连续浏览 PDF 原始页面，并通过 PDF.js TextLayer 选择可复制文字。
+- 对单页选区执行高亮、解释、翻译、手写笔记或“问助手”。
+- 解释和翻译使用聊天框当前模型，完成后自动保存为带原文锚点的笔记。
+- 论文助手自动检索当前论文的相关笔记，并对论文结论执行 Citation Guard 引用校验。
+- 构建核心和深度知识图谱，图谱节点和聊天引用都可跳回原始证据位置。
+- 配置多个 vLLM 模型档案，在聊天框中切换；切换模型不会清空当前会话。
+- 永久删除 PDF 及其页面、解析结果、图谱、批注、笔记和会话数据。
+- 桌面端使用 PDF + 工具区双栏布局，小屏使用“论文 / 工具”切换。
 
-```bash
-python -m pip install -e ".[dev]"
+## 界面截图
+
+最终截图将在确定性端到端数据完成验收后更新。项目不会把私人论文或本地数据库作为 README 示例资产提交。
+
+## 技术架构
+
+```mermaid
+flowchart LR
+    PDF[原始 PDF] --> P0[PyMuPDF 页面与几何]
+    PDF --> P1[MarkItDown 语义文本]
+    P0 --> Align[文本对齐]
+    P1 --> Align
+    Align --> DB[(SQLite)]
+    DB --> Reader[React + PDF.js 阅读器]
+    DB --> Graph[证据知识图谱]
+    Notes[批注与笔记] --> DB
+    Reader --> Notes
+    Reader --> Agent[论文助手]
+    Notes --> Agent
+    Profiles[多 vLLM 模型档案] --> Agent
+    Profiles --> Graph
+    Agent --> Guard[Citation Guard]
 ```
 
-## Local data
+主要技术栈：Python 3.12、FastAPI、SQLAlchemy、SQLite、PyMuPDF、MarkItDown、React、TypeScript、Vite、PDF.js、React Flow、ELK、Vitest 和 pytest。
 
-Unless an application instance is constructed with custom settings, the service
-uses `.paper-agent` under the directory from which it is started. It creates:
+## 环境要求
 
-- `.paper-agent/paper-agent.db` — the local SQLite database.
-- `.paper-agent/papers/` — the uploaded source PDFs, stored under generated
-  IDs rather than their original names.
+- Python 3.12 或更高版本。
+- Node.js 22.14+（Node 22 系列）或 Node.js 24+。
+- npm。
+- 可选：一个或多个 OpenAI-compatible vLLM 服务。阅读、笔记和 PDF 管理不要求模型服务；解释、翻译、图谱构建和论文助手需要相应模型能力。
 
-Uploads must have a `.pdf` name and PDF bytes. The service retains the original
-uploaded PDF bytes as its source file; parsed document records are stored in
-SQLite and do not replace that source file.
+## 快速开始（Windows PowerShell）
 
-## Test and run
-
-Run the full test suite with:
-
-```bash
-python -m pytest -v
-```
-
-Start the local development server from the repository root:
-
-```bash
-uvicorn paper_agent.app:create_app --factory --reload
-```
-
-The service listens on `http://127.0.0.1:8000` by default. `GET /health`
-returns `{"status":"ok"}` when it is running.
-
-```bash
-curl http://127.0.0.1:8000/health
-```
-
-## Browser workbench
-
-Run the backend and browser development server as two local processes from the
-repository root:
-
-1. Start paper-agent: `.venv\Scripts\uvicorn.exe paper_agent.app:create_app --factory --port 8000`
-2. In a second terminal: `cd web; npm install --cache .npm-cache; npm run dev`
-3. Open the Vite URL printed by the browser server, normally
-   `http://127.0.0.1:5173`.
-
-The Vite development server proxies only `/api` requests to the local
-paper-agent backend. The workbench has three panes: the left pane renders the
-original PDF and source highlights, the center pane shows the paper's evidence
-graph, and the right pane contains the Agent and Notes tools. Use **Build core
-graph** after document processing completes, then **Build deep graph** after
-the core graph is available. Selecting a graph node reveals its evidence;
-clicking a located evidence item or Agent citation selects the source element,
-jumps the reader to its page, and highlights its bounding box.
-
-The Agent separates `paper_only` from `external_knowledge`. `paper_only`
-returns only the citation-validated paper answer. `external_knowledge` keeps
-background knowledge in a separate explanation while paper-supported content
-stays in the citation-validated answer. The UI displays complete
-citation-validated responses and does not stream unverified model text.
-
-## Minimal upload and read workflow
-
-With the server running, upload a local PDF:
-
-```bash
-curl -F "file=@paper.pdf;type=application/pdf" http://127.0.0.1:8000/api/papers
-```
-
-The response contains the new paper's `id`. Substitute that value for
-`<paper-id>` to retrieve its summary, parsed document, or original source PDF:
-
-```bash
-curl http://127.0.0.1:8000/api/papers/<paper-id>
-curl http://127.0.0.1:8000/api/papers/<paper-id>/document
-curl -o source.pdf http://127.0.0.1:8000/api/papers/<paper-id>/source
-```
-
-An upload or summary response includes the independent graph-stage fields in
-addition to the paper's overall ingestion status:
-
-```json
-{
-  "id": "<paper-id>",
-  "original_filename": "paper.pdf",
-  "status": "completed",
-  "stage0_status": "completed",
-  "stage1_status": "completed",
-  "stage2_status": null,
-  "stage3_status": null,
-  "error": null
-}
-```
-
-`stage2_status` tracks the core graph and `stage3_status` tracks the deep
-graph. They remain `null` until the corresponding graph build is attempted.
-
-## Optional local reasoning configuration, graph processing, and paper chat
-
-Paper upload, document retrieval, source retrieval, page rendering, and notes
-work without a reasoning-model configuration. Graph construction is optional:
-when the prerequisites are satisfied but no reasoning model is configured, a
-core build (completed Stage 1) or deep build (completed Stages 1 and 2) returns
-`503 {"detail":"Reasoning model is not configured."}`. A build that does not
-meet those prerequisites returns `409 {"detail":"Paper graph prerequisites
-are not complete."}` instead; neither response creates a processing row.
-
-To enable local graph construction and citation-aware paper chat, run the
-OpenAI-compatible vLLM reasoning server on port `8001` and paper-agent on port
-`8000`. They are separate local services and must not share a port. Start
-vLLM with a parser that matches the served model:
-
-```text
-vllm serve <your-model> --port 8001 --enable-auto-tool-choice --tool-call-parser <parser-for-your-model>
-```
-
-The served model needs a tool-compatible chat template, auto tool choice, the
-appropriate vLLM tool-call parser, and strict JSON-schema support. Select the
-chat template and parser for the model you serve; do not copy a parser or model
-name from this runbook. The runtime uses strict JSON-schema output for final
-answers and strict tool parameter schemas. See the [vLLM tool-calling
-documentation](https://docs.vllm.ai/en/stable/features/tool_calling/) for
-model/parser compatibility and chat-template configuration.
-
-In PowerShell, set these variables before starting paper-agent:
+在仓库根目录安装后端：
 
 ```powershell
-$env:PAPER_AGENT_REASONING_BASE_URL = "http://127.0.0.1:8001/v1"
-$env:PAPER_AGENT_REASONING_MODEL = "your-served-model"
-$env:PAPER_AGENT_REASONING_API_KEY = "EMPTY"
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 ```
 
-Do not hard-code the model name: `PAPER_AGENT_REASONING_MODEL` must be the
-name exposed by the vLLM server. `PAPER_AGENT_REASONING_BASE_URL` and
-`PAPER_AGENT_REASONING_MODEL` must either both be set or both be absent. The
-API key defaults to `EMPTY` when omitted, which is suitable for a local vLLM
-server that does not require authentication.
+安装前端：
 
-During graph construction and agent chat, paper-agent sends OpenAI-compatible
-chat messages and requests a strict `json_schema` response format. This
-runbook documents the required configuration but does not start a vLLM server;
-the full local test suite runs without a configured vLLM endpoint.
+```powershell
+Set-Location web
+npm ci
+Set-Location ..
+```
 
-Start paper-agent on its separate port:
+终端一，启动后端：
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn paper_agent.app:create_app --factory --host 127.0.0.1 --port 8000 --reload
+```
+
+终端二，启动前端：
+
+```powershell
+Set-Location web
+npm run dev
+```
+
+浏览器打开 `http://127.0.0.1:5173`。后端健康检查地址是 `http://127.0.0.1:8000/health`。
+
+## 快速开始（Linux/macOS）
+
+在仓库根目录安装依赖：
 
 ```bash
-uvicorn paper_agent.app:create_app --factory --port 8000
+python3.12 -m venv .venv
+.venv/bin/python -m pip install -e ".[dev]"
+cd web
+npm ci
+cd ..
 ```
 
-With vLLM configured and paper-agent running, upload a PDF and use the
-returned ID to build the core graph:
+终端一，启动后端：
 
 ```bash
-curl -F "file=@paper.pdf;type=application/pdf" http://127.0.0.1:8000/api/papers
-curl -X POST http://127.0.0.1:8000/api/papers/<paper-id>/graph/core
+.venv/bin/python -m uvicorn paper_agent.app:create_app --factory --host 127.0.0.1 --port 8000 --reload
 ```
 
-A successful core build returns graph nodes and edges with their evidence IDs;
-all returned core entities use `"stage": "stage2"`. A subsequent paper
-summary then reports the completed core stage while leaving the deep stage
-unbuilt:
-
-```json
-{
-  "id": "<paper-id>",
-  "original_filename": "paper.pdf",
-  "status": "completed",
-  "stage0_status": "completed",
-  "stage1_status": "completed",
-  "stage2_status": "completed",
-  "stage3_status": null,
-  "error": null
-}
-```
-
-Core graph construction requires completed document ingestion. Deep graph
-construction additionally requires a completed core graph; otherwise the
-build endpoint returns `409 {"detail":"Paper graph prerequisites are not
-complete."}`.
-
-Visual graph enrichment remains outside the Agent Runtime increment.
-
-## Local tool-calling runbook
-
-With vLLM on `http://127.0.0.1:8001` and paper-agent on
-`http://127.0.0.1:8000`, explicitly validate tool calling before relying on
-agent chat. This endpoint asks the configured reasoning server for one
-no-argument health tool call; it is not the service's general `GET /health`
-endpoint.
+终端二，启动前端：
 
 ```bash
-curl -X POST http://127.0.0.1:8000/api/agent/health
+cd web
+npm run dev
 ```
 
-A correctly configured server returns:
+## 配置多个 vLLM 模型
 
-```json
-{"status":"ok"}
+1. 启动一个或多个 OpenAI-compatible vLLM 服务。
+2. 在阅读工作台点击“模型设置”，新增模型档案。
+3. 填写配置名称、服务地址、模型名称和可选 API 密钥；按需设为默认档案并执行能力测试。
+4. 在聊天框的“当前模型”中选择档案。聊天、解释、翻译和知识图谱构建都会使用这里当前选中的模型。
+
+模型档案按请求解析为不可变快照。会话中切换模型只影响后续请求，不会修改历史消息，也不会重置 `conversation_id`。密钥与 SQLite 中的公开档案字段分离保存，API 响应和模型快照不会返回密钥。
+
+以下环境变量只提供单模型兼容档案，适合本地快速联调；在界面中创建的模型档案是正式的多模型配置入口：
+
+```text
+PAPER_AGENT_REASONING_BASE_URL=http://127.0.0.1:8001/v1
+PAPER_AGENT_REASONING_MODEL=your-served-model
+PAPER_AGENT_REASONING_API_KEY=EMPTY
 ```
 
-If reasoning is not configured or explicit tool-calling validation fails, the
-endpoint returns `503` with `{"detail":"Reasoning model tool calling is
-unavailable."}`. Do not treat a passing unit test as evidence that a particular
-local vLLM model and parser work together; run the explicit health request after
-starting those services.
+`PAPER_AGENT_REASONING_BASE_URL` 与 `PAPER_AGENT_REASONING_MODEL` 必须同时设置或同时省略。工具调用模型还需要与模型匹配的 vLLM chat template、`--enable-auto-tool-choice` 和 tool-call parser。
 
-After an upload has parsed successfully (the upload response reports
-`"status": "completed"` and `"stage1_status": "completed"`), submit a
-non-streaming chat request using its returned paper ID:
+## 数据目录与永久删除
 
-```bash
-curl -X POST http://127.0.0.1:8000/api/papers/<paper-id>/agent/messages \
-  -H "Content-Type: application/json" \
-  -d '{"content":"What problem does this paper solve?","mode":"paper_only"}'
+默认数据目录是仓库启动目录下的 `.paper-agent/`：
+
+- `.paper-agent/paper-agent.db`：SQLite 数据库。
+- `.paper-agent/papers/`：按系统生成 ID 保存的原始 PDF。
+- `.paper-agent/secrets/`：模型密钥文件。
+- `.paper-agent/.trash/`：删除事务的短暂恢复区。
+
+“永久删除论文”会删除原始 PDF，以及该论文拥有的页面、解析元素、处理记录、图谱、文本锚点、高亮、笔记和会话数据。全局模型档案不会随论文删除。删除流程先暂存源文件，再在单个数据库事务中逆序删除；如果进程中断，下一次启动会依据恢复标记完成清理或还原。
+
+删除不可作为普通回收站撤销。重要论文请先自行备份原始 PDF 和需要保留的笔记。
+
+## 测试
+
+后端完整测试：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -v
 ```
 
-The response is an ordinary JSON object, not a stream. Its `conversation_id`
-can be included in a later request in the same mode to continue the
-conversation.
+前端单元测试与生产构建：
 
-The non-streaming Citation Guard validates the final model payload against
-source-element IDs returned by tools during the current request. `paper_only`
-returns only a citation-validated `paper_answer`. If the runtime cannot
-validate the evidence, it returns `status: "insufficient_evidence"` and does
-not return model prose as a paper claim. `external_knowledge` places model
-background only in `background_explanation`; paper-supported content remains
-in the separately citation-validated `paper_answer`.
+```powershell
+Set-Location web
+npm test
+npm run build
+```
 
-Current exclusions from this increment are Web UI streaming, vision
-enrichment, embeddings, and tool-calling retries beyond the bounded runtime
-loop.
+端到端浏览器测试及其确定性测试服务将在发布验收阶段补齐；完成后统一通过 `npm run test:e2e` 执行，且不会依赖公网、真实 vLLM 或私人 PDF。
+
+## 开发者文档索引
+
+- [文档导航](docs/README.md)
+- [贡献与开发指南](CONTRIBUTING.md)
+- [当前开发交接](docs/developer-handoff.md)
+- [系统架构](docs/architecture.md)
+- [HTTP API](docs/api.md)
+- [数据模型](docs/data-model.md)
+- [PDF 选区与批注](docs/pdf-annotations.md)
+- [模型服务与多模型档案](docs/model-services.md)
+- [笔记记忆](docs/note-memory.md)
+- [本地开发](docs/development.md)
+- [测试策略](docs/testing.md)
+- [路线图](docs/roadmap.md)
+
+## 当前限制
+
+- 不支持扫描件 OCR；没有可复制文字层的页面仍可查看，但不能创建文字选区。
+- 不支持跨页文字选区；一个锚点只属于一页。
+- 当前是本地单用户产品，不支持账户、多租户或细粒度权限。
+- 不提供云同步、多人协作或跨设备自动同步。
+- 知识图谱当前不可在画布上直接编辑。
+- 运行时锁和模型使用租约是进程内机制，不承诺多 worker / 多进程并发。
+
+## 安全说明
+
+- 默认只监听 `127.0.0.1`；如需暴露到局域网或公网，请先增加认证、TLS 和访问控制。
+- 不要把真实 API 密钥写入 README、`.env.example`、命令历史、日志、SQLite 或 Git。
+- 不要提交 `.paper-agent/`、PDF、数据库、模型密钥、`.env`、浏览器测试报告或私人论文截图。
+- 论文助手只把通过 Citation Guard 校验的论文结论作为正式答案；背景知识与论文证据分开显示。
+- `sources/` 是同步参考资料，只读，不应修改、移动或删除。
