@@ -57,31 +57,11 @@ class SelectionAssistService:
         request_id: str,
     ) -> Iterator[SelectionAssistEvent]:
         existing = self.repository.get_selection_assist(paper_id, request_id)
-        if existing is not None and existing["status"] == "completed":
-            yield from self._replay_completed(paper_id, existing)
-            return
-        if existing is not None and existing["status"] == "running":
-            yield SelectionAssistEvent(
-                "error",
-                {
-                    "code": "assist_running",
-                    "detail": "该选区请求正在处理中。",
-                },
-            )
-            return
-        if existing is not None and existing["status"] == "failed":
-            restarted = self.repository.restart_failed_selection_assist(
-                paper_id,
-                request_id=request_id,
-                action=action.value,
-                model_profile_id=model_snapshot.profile_id,
-                model_snapshot=model_snapshot,
-            )
-            if not restarted:
-                current = self.repository.get_selection_assist(paper_id, request_id)
-                if current is not None and current["status"] == "completed":
-                    yield from self._replay_completed(paper_id, current)
-                    return
+        while existing is not None:
+            if existing["status"] == "completed":
+                yield from self._replay_completed(paper_id, existing)
+                return
+            if existing["status"] == "running":
                 yield SelectionAssistEvent(
                     "error",
                     {
@@ -90,7 +70,18 @@ class SelectionAssistService:
                     },
                 )
                 return
-        elif existing is None:
+            if existing["status"] != "failed":
+                raise SelectionAssistError("selection assist has an invalid status")
+            if self.repository.restart_failed_selection_assist(
+                paper_id,
+                request_id=request_id,
+                action=action.value,
+                model_profile_id=model_snapshot.profile_id,
+                model_snapshot=model_snapshot,
+            ):
+                break
+            existing = self.repository.get_selection_assist(paper_id, request_id)
+        else:
             self.repository.create_selection_assist_running(
                 paper_id,
                 request_id=request_id,

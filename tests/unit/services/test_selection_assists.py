@@ -209,6 +209,57 @@ def test_failed_selection_assist_retries_with_the_same_request_id_once(
     assert len(repository.get_notes(prepared_paper.id)) == 1
 
 
+def test_losing_failed_retry_reclaims_after_winner_fails_before_reread(
+    monkeypatch: pytest.MonkeyPatch,
+    repository: PaperAnnotationRepository,
+    prepared_paper: Paper,
+) -> None:
+    request_id = "assist-retry-interleaving"
+    repository.create_selection_assist_running(
+        prepared_paper.id,
+        request_id=request_id,
+        action="explain",
+        model_profile_id=_snapshot().profile_id,
+        model_snapshot=_snapshot(),
+    )
+    repository.fail_selection_assist(prepared_paper.id, request_id)
+    service = SelectionAssistService(repository)
+    restart = repository.restart_failed_selection_assist
+    attempts = 0
+
+    def lose_first_claim_after_another_attempt_fails(
+        paper_id: str, **kwargs
+    ) -> bool:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            assert restart(paper_id, **kwargs) is True
+            repository.fail_selection_assist(paper_id, kwargs["request_id"])
+            return False
+        return restart(paper_id, **kwargs)
+
+    monkeypatch.setattr(
+        repository,
+        "restart_failed_selection_assist",
+        lose_first_claim_after_another_attempt_fails,
+    )
+
+    events = _events(
+        service,
+        prepared_paper.id,
+        SelectionAssistAction.explain,
+        FakeChatClient(["重试后完成。"]),
+        request_id,
+    )
+
+    assert [event.event for event in events] == ["started", "delta", "completed"]
+    assert attempts == 2
+    assert repository.get_selection_assist(prepared_paper.id, request_id)[
+        "status"
+    ] == "completed"
+    assert len(repository.get_notes(prepared_paper.id)) == 1
+
+
 def test_completed_duplicate_replays_without_calling_the_model(
     repository: PaperAnnotationRepository, prepared_paper: Paper
 ) -> None:
