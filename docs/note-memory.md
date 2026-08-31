@@ -1,6 +1,6 @@
 # 笔记记忆与 Agent 注入
 
-本文说明本地笔记检索、上下文预算和 Agent 使用笔记时的安全边界。
+本文说明本地笔记检索、上下文预算和 Agent 使用笔记时的安全边界。选区生成笔记与 SSE 契约见 [PDF 文本批注后端契约](pdf-annotations.md)，Agent 的非流式 Citation Guard 流程见 [系统架构](architecture.md)。
 
 ## 笔记类型与筛选
 
@@ -23,7 +23,7 @@
 
 ## 上下文预算
 
-默认最多取 8 条笔记、总预算 6,000 字符。超出预算的笔记不会进入 prompt。每条格式为：
+默认最多取 8 条笔记、总预算 **6,000 个字符**。超出预算的笔记不会进入 prompt。每条格式为：
 
 ```text
 [笔记 note:<id> | 类型:用户 | 页码:3]
@@ -41,4 +41,4 @@
 
 ## 与论文引用的区别
 
-`citation_element_ids` 只表示经过 Citation Guard 校验的论文原文元素；`note_references` 只表示本次请求实际注入的本地笔记。删除笔记后历史仍显示引用标识，`available` 为假，二者不会互相替代。表级引用关系和论文删除语义见[数据模型与删除恢复](data-model.md)。
+`citation_element_ids` 只表示经过 Citation Guard 校验、且来自本请求 Agent 工具回合的定位论文元素；`note_references` 只表示本次请求实际注入的本地笔记。删除笔记后历史仍显示引用标识，`available` 为假，二者不会互相替代。表级引用关系和论文删除语义见[数据模型与删除恢复](data-model.md)，请求与响应字段见 [HTTP API 业务语义](api.md)。

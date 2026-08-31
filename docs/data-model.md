@@ -1,6 +1,6 @@
 # 数据模型与删除恢复
 
-本文是后端 SQLite schema、论文数据所有权和永久删除语义的事实来源。表结构以 `src/paper_agent/database.py` 为准，删除顺序以 `src/paper_agent/storage.py` 的 `PAPER_DELETE_ORDER` 为准，文件暂存与恢复以 `src/paper_agent/services/paper_deletion.py` 为准。
+本文是后端 SQLite schema、论文数据所有权和永久删除语义的事实来源。表结构以 `src/paper_agent/database.py` 为准，删除顺序以 `src/paper_agent/storage.py` 的 `PAPER_DELETE_ORDER` 为准，文件暂存与恢复以 `src/paper_agent/services/paper_deletion.py` 为准。数据库初始化会运行递增且幂等的迁移；实际命令见 [本地开发](development.md)，接口返回语义见 [HTTP API 业务语义](api.md)。
 
 ## ER 总览
 
@@ -91,7 +91,7 @@ erDiagram
 
 ### 模型档案（全局，不属于论文）
 
-`model_profiles` 是全局表，软删除（`deleted_at`），**论文删除绝不触碰**。`processing_runs`、`notes`、`selection_assist_requests`、`conversation_messages` 上的 `model_profile_id` + `model_snapshot_json` 是调用追溯快照，不含密钥，档案删除后快照仍保留。
+`model_profiles` 是全局表，软删除（`deleted_at`），**论文删除绝不触碰**。`processing_runs`、`notes`、`selection_assist_requests`、`conversation_messages` 上的 `model_profile_id` + `model_snapshot_json` 是请求作用域调用的追溯快照，不含密钥，档案删除后快照仍保留。模型档案的修订与 usage lease 见 [模型服务与模型档案](model-services.md)。
 
 ## 永久删除
 
@@ -155,5 +155,5 @@ marker 位于 `.trash/<paper-id>.delete.json`，状态只有三种：
 
 ## 单项删除语义
 
-- 删除高亮不删除文本锚点或引用该锚点的笔记（见 [PDF 批注契约](pdf-annotations.md)）。
+- 删除高亮不删除文本锚点或引用该锚点的笔记（见 [PDF 文本批注后端契约](pdf-annotations.md)）。
 - 删除笔记不删除高亮，也不自动删除锚点；历史消息引用保留 `note_id` 并标记 `available: false`（见[笔记记忆](note-memory.md)）。
