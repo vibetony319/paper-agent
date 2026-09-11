@@ -32,13 +32,13 @@ flowchart LR
 | --- | --- |
 | `settings` | 数据库 URL、数据目录、模型回退配置等运行参数。 |
 | `model_profile_repository` | 模型档案的数据库 CRUD、修订号比较、默认档案切换与软删除。 |
-| `model_secret_store` | 档案密钥的本地秘密存取；只持有 `secret_ref` 的关联，绝不将密钥返回给 API。 |
+| `model_secret_store` | 保存本地档案密钥并供后端按 `secret_ref` 读写；数据库只保存引用，API 只返回密钥存在状态与掩码。 |
 | `reasoning_client_provider` | 解析启用的档案或只读环境回退，按 `(profile_id, revision)` 缓存 chat、structured、tool 三类客户端，并生成不含密钥的模型快照。 |
 | `model_profile_service` | 档案输入约束、密钥与数据库变更的补偿、能力探测、`If-Match` 所需的并发语义，以及请求期间的 usage lease。 |
 | `paper_repository` | 论文、解析阶段、页面/章节/元素、图谱、会话与消息的持久化和所有权校验；也保存图谱和 Agent 的请求重试记录。 |
 | `annotation_repository` | 锚点、高亮、笔记和选区辅助请求的持久化、同论文范围的校验、批注请求幂等和选区辅助状态。 |
 | `paper_operation_coordinator` | 单进程内论文操作与永久删除的互斥：普通写操作不能与删除并发。 |
-| `paper_deletion_service` | 受管 PDF 的暂存、删除标记、数据库级联清理和启动时恢复；不参与其他论文操作。 |
+| `paper_deletion_service` | 受管 PDF 的暂存、删除标记、调用仓储执行显式逆序事务清理和启动时恢复；不参与其他论文操作。 |
 | `annotation_service` | 将 HTTP 锚点草稿转换为批注领域操作，执行高亮/手写笔记 CRUD，不承载模型调用。 |
 | `selection_assist_service` | 对选区做解释或翻译的 SSE 编排；完成时创建 AI 笔记并保存可重放结果。 |
 | `paper_tool_registry` | Agent 可用的严格工具定义与执行，限定在当前论文的元素、章节和图谱，并返回可引用的定位证据 ID。 |
@@ -87,6 +87,7 @@ sequenceDiagram
     participant B as 浏览器
     participant A as annotations 路由
     participant C as PaperOperationCoordinator
+    participant V as ReasoningClientProvider
     participant M as 模型客户端
     participant S as SelectionAssistService
     participant R as PaperAnnotationRepository
@@ -95,10 +96,12 @@ sequenceDiagram
     alt 已完成
         A-->>B: SSE completed（重放已保存 note）
     else 新请求或失败重启
-        A->>C: operation(paper_id)
-        A->>M: 以请求档案流式生成
-        A->>S: stream(...)
+        A->>V: 解析请求档案并取得客户端与快照
+        A->>A: 检查所需能力（只读环境档案除外）
+        A->>C: operation(paper_id)；流期间持有模型 usage lease
+        A->>S: stream(client, snapshot, ...)
         S-->>B: SSE started
+        S->>M: 以请求档案流式生成
         loop 每个模型片段
             S-->>B: SSE delta {text}
         end
@@ -144,6 +147,8 @@ sequenceDiagram
 
 主 Agent **在 Citation Guard 校验通过或被规范化为证据不足之前不会输出响应**，因此为非流式 JSON。笔记仅是标注为不可信的本地检索上下文，不能充当论文引用。`citation_element_ids` 必须来自本请求工具回合的、可定位论文元素；`paper_only` 模式也不允许 `background_explanation`。笔记排序、字符预算和引用回显见 [笔记记忆与 Agent 注入](note-memory.md)。
 
+图中的 Agent 入口合并表示路由和运行时：路由解析请求模型并进入论文操作与模型使用租约，笔记检索、消息写入、工具执行和 Guard 编排实际由 `PaperAgentRuntime` 完成。模型返回工具调用描述，运行时调用 `PaperToolRegistry` 执行工具。
+
 ### 可崩溃恢复的永久删除
 
 ```mermaid
@@ -152,7 +157,7 @@ sequenceDiagram
     participant P as papers 路由
     participant C as PaperOperationCoordinator
     participant D as PaperDeletionService
-    participant F as papers/ 与 trash/
+    participant F as papers/ 与 .trash/
     participant R as PaperRepository
     B->>P: DELETE /api/papers/{id} {confirmation:id}
     P->>C: deletion(id)
@@ -161,7 +166,7 @@ sequenceDiagram
         P-->>B: 409 PAPER_BUSY
     else 可删除
         P->>D: delete(id)
-        D->>F: 写 prepared marker；移动 PDF 至 trash
+        D->>F: 写 prepared marker；移动 PDF 至 .trash
         D->>F: 更新 marker 为 staged
         D->>R: 单事务删除论文关联数据
         D->>F: 更新 cleanup_pending；删除暂存文件和 marker
@@ -171,7 +176,7 @@ sequenceDiagram
     Note over D,F: 下次 create_app 启动调用 recover_pending：\n数据库仍有论文则恢复源文件；不存在则清理暂存文件。
 ```
 
-删除请求必须以论文 UUID 作为 `confirmation`。协调器先阻止新的普通操作；文件先进入同受管目录下的暂存区并有持久 marker，数据库清理失败则尝试还原。稳定错误、恢复失败含义和数据库级联关系见 [数据模型与删除恢复](data-model.md)。
+删除请求必须以论文 UUID 作为 `confirmation`。协调器先阻止新的普通操作；文件先从 `data_dir/papers/` 进入同一数据目录下的 `data_dir/.trash/` 并有持久 marker，数据库清理失败则尝试还原。提交后 marker 写入失败保留原有恢复标记与暂存 PDF，不再恢复源文件；启动恢复根据数据库事实继续清理。启动调用尚未处理损坏 marker 的恢复报告，具体限制见 [ADR 0003](adr/0003-crash-recoverable-paper-deletion.md)。稳定错误和数据库删除关系见 [数据模型与删除恢复](data-model.md)。
 
 ## 并发、请求身份与模型边界
 
@@ -180,8 +185,10 @@ sequenceDiagram
 - Agent、图谱和 AI 笔记保存请求时的不可变、无密钥模型快照；后续更新档案不会改写历史。
 - `PaperOperationCoordinator` 只提供单进程互斥，不是分布式锁。永久删除与论文写操作冲突时返回 busy；调用方应在取得 `PAPER_BUSY` 后稍后以原删除确认重试。
 
-## ADR（Task 3 填写）
+## 关键决策
 
-| ADR | 决策 | 状态 | 说明 |
-| --- | --- | --- | --- |
-| 待 Task 3 补充 |  |  | 本表预留给已接受的架构决策记录；不要在此处回填未经接受的提案。 |
+| ADR | 状态 | 摘要 |
+| --- | --- | --- |
+| [ADR 0001：请求作用域模型档案](adr/0001-request-scoped-model-profiles.md) | 已接受 | 每次模型请求显式解析并冻结无密钥档案快照，使同一会话可切换模型且历史来源保持可追溯。 |
+| [ADR 0002：PDF 文本锚点](adr/0002-pdf-text-anchors.md) | 已接受 | PDF.js Canvas 与 TextLayer 共用 viewport，并以单页归一化矩形持久化可复制文字选区。 |
+| [ADR 0003：可崩溃恢复的论文永久删除](adr/0003-crash-recoverable-paper-deletion.md) | 已接受 | 删除协调器通过 marker、源文件暂存、逆序数据库事务与启动恢复处理阶段间崩溃，并明确文件异常补偿的现有限制。 |

@@ -65,6 +65,19 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it('keeps the note anchor when focusing the editor clears the browser selection', async () => {
+  const draft = { quote: 'Selected passage', page_number: 1, rects: [{ order: 0, x0: 0.1, y0: 0.1, x1: 0.5, y1: 0.2 }] };
+  const onSave = vi.fn().mockResolvedValue({ id: 'note-a' });
+  const props = { paperId: 'paper-a', pages: [], activeSource: null, onSourceCleared: vi.fn(), onCreateSelectionNote: onSave };
+  const { rerender } = render(<PdfReader {...props} selection={{ draft, toolbarRect: new DOMRect(20, 20, 100, 20) }} />);
+  fireEvent.click(screen.getByRole('button', { name: '记笔记' }));
+  rerender(<PdfReader {...props} selection={null} />);
+  fireEvent.change(screen.getByRole('textbox', { name: '选区笔记' }), { target: { value: '保留引用位置' } });
+  fireEvent.click(screen.getByRole('button', { name: /^保存$/ }));
+  await waitFor(() => expect(onSave).toHaveBeenCalledWith('保留引用位置', draft));
+  await waitFor(() => expect(screen.queryByRole('form', { name: '为选区记笔记' })).not.toBeInTheDocument());
+});
+
 it('keeps an aspect ratio page shell until a page enters the overscan area', async () => {
   render(
     <PdfReader paperId="paper-a" pages={manyPages} activeSource={null} onSourceCleared={vi.fn()} />,

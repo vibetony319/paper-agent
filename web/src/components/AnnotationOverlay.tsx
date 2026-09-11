@@ -13,7 +13,7 @@ export function AnnotationOverlay({ highlights, onAddNote, onDeleteHighlight }: 
   const [menuHighlight, setMenuHighlight] = useState<{ id: string; rect: DOMRect } | null>(null);
 
   return (
-    <div className="annotation-overlay" aria-label="论文高亮">
+    <div className="annotation-overlay" role="group" aria-label="论文高亮">
       {highlights.map((highlight) => (
         <div key={highlight.id} className="annotation-overlay__highlight-group">
           {highlight.anchor.rects.map((rect) => (

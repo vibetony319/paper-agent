@@ -80,10 +80,12 @@ POSIX shell：
 数据库迁移没有独立脚本：`PaperRepository` 与 `ModelProfileRepository` 初始化时都会调用 `initialize_database(database_url)`，后者依次 `metadata.create_all()`、兼容旧表，再执行 `run_schema_migrations(engine)`。对一个指定数据库执行同样的当前 API：
 
 ```powershell
+New-Item -ItemType Directory -Path .paper-agent-dev -Force | Out-Null
 .\.venv\Scripts\python.exe -c "from paper_agent.database import initialize_database; initialize_database('sqlite:///./.paper-agent-dev/paper-agent.db')"
 ```
 
 ```bash
+mkdir -p .paper-agent-dev
 .venv/bin/python -c "from paper_agent.database import initialize_database; initialize_database('sqlite:///./.paper-agent-dev/paper-agent.db')"
 ```
 
@@ -109,7 +111,7 @@ vLLM 联调失败时先在模型档案的测试操作中查看三项能力：bas
 
 - [系统架构](architecture.md)：`app.state`、服务边界、关键时序和并发限制。
 - [HTTP API 业务语义](api.md)：32 个当前操作、schema 索引、稳定错误与幂等。
-- [测试策略](testing.md)：目标测试、Vitest、计划中的 Playwright 与手工模型检查。
+- [测试策略](testing.md)：目标测试、Vitest、确定性 Playwright 与手工模型检查。
 - [模型服务与模型档案](model-services.md)：请求作用域模型、密钥和能力。
 - [数据模型与删除恢复](data-model.md)：持久化、迁移和永久删除。
 - [文档导航](README.md)：新开发者阅读顺序、规格与计划历史。

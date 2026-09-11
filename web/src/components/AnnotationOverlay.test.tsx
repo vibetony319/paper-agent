@@ -29,6 +29,7 @@ it('opens the required highlight menu and routes its actions', () => {
   );
 
   const overlay = screen.getByRole('button', { name: '高亮：论文片段' });
+  expect(screen.getByRole('group', { name: '论文高亮' })).toContainElement(overlay);
   expect(overlay).toHaveStyle({ left: '10%', top: '20%', width: '50%', height: '5%' });
   fireEvent.click(overlay);
   expect(screen.getAllByRole('menuitem').map((item) => item.textContent))

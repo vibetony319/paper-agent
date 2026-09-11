@@ -90,21 +90,7 @@ class PaperDeletionService:
             self._write_marker(
                 marker_path, replace(journal, state="staged")
             )
-            try:
-                self.repository.delete_paper_data(paper_id)
-            except Exception:
-                if trash_path.exists():
-                    self._replace_with_retries(trash_path, source)
-                marker_path.unlink(missing_ok=True)
-                raise
-            self._write_marker(
-                marker_path, replace(journal, state="cleanup_pending")
-            )
-            try:
-                trash_path.unlink()
-            except OSError:
-                return
-            marker_path.unlink(missing_ok=True)
+            self.repository.delete_paper_data(paper_id)
         except Exception:
             if trash_path.exists():
                 try:
@@ -116,6 +102,17 @@ class PaperDeletionService:
             else:
                 marker_path.unlink(missing_ok=True)
             raise
+
+        # The database commit is irreversible here. Cleanup failures must keep
+        # the staged journal for recovery, never restore an orphan source PDF.
+        self._write_marker(
+            marker_path, replace(journal, state="cleanup_pending")
+        )
+        try:
+            trash_path.unlink()
+        except OSError:
+            return
+        marker_path.unlink(missing_ok=True)
 
     def recover_pending(self) -> DeletionRecoveryReport:
         restored: list[str] = []

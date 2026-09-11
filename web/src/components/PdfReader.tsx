@@ -69,7 +69,6 @@ export function PdfReader({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [visiblePages, setVisiblePages] = useState<Set<number>>(() => new Set(pageNumbers.slice(0, 1)));
   const [assistAction, setAssistAction] = useState<SelectionAssistAction | null>(null);
-  const [manualNoteOpen, setManualNoteOpen] = useState(false);
   const [manualNoteTarget, setManualNoteTarget] = useState<{ draft: TextAnchorDraft; rect: DOMRect } | null>(null);
   const pageShells = useRef(new Map<number, HTMLDivElement>());
   const readerRef = useRef<HTMLElement>(null);
@@ -264,7 +263,7 @@ export function PdfReader({
             translate: runSelectionAssist === undefined || selectedModelProfileId === null
               ? undefined : () => setAssistAction('translate'),
             note: onCreateSelectionNote === undefined
-              ? undefined : () => setManualNoteOpen(true),
+              ? undefined : () => setManualNoteTarget({ draft: selection.draft, rect: selection.toolbarRect }),
             ask: selectionActions?.ask === undefined
               ? undefined
               : () => selectionActions.ask?.(selection.draft),
@@ -276,10 +275,6 @@ export function PdfReader({
         action={assistAction} draft={selection.draft} toolbarRect={selection.toolbarRect}
         modelProfileId={selectedModelProfileId} runSelectionAssist={runSelectionAssist}
         onDismiss={() => setAssistAction(null)}
-      /> : null}
-      {selection !== null && manualNoteOpen && onCreateSelectionNote !== undefined ? <ManualNotePopover
-        draft={selection.draft} toolbarRect={selection.toolbarRect}
-        onSave={onCreateSelectionNote} onDismiss={() => setManualNoteOpen(false)}
       /> : null}
       {manualNoteTarget !== null && onCreateSelectionNote !== undefined ? <ManualNotePopover draft={manualNoteTarget.draft} toolbarRect={manualNoteTarget.rect} onSave={onCreateSelectionNote} onDismiss={() => setManualNoteTarget(null)} /> : null}
     </section>

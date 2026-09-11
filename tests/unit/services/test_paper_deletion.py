@@ -64,9 +64,114 @@ def test_delete_restores_source_when_database_transaction_fails(
         service.delete(paper.id)
 
     assert source_pdf.exists()
-    assert list(service.trash_dir.glob("paper-a-*.pdf")) == []
+    assert list(service.trash_dir.glob("*.pdf")) == []
     assert list(service.trash_dir.glob("*.delete.json")) == []
     assert repository.get_paper(paper.id) is not None
+
+
+@pytest.mark.parametrize("error_type", [OSError, RuntimeError])
+def test_cleanup_marker_failure_preserves_committed_deletion_for_recovery(
+    service: PaperDeletionService,
+    repository: PaperRepository,
+    paper: Paper,
+    source_pdf: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    error_type: type[Exception],
+) -> None:
+    original_write_marker = service._write_marker
+    marker = service.trash_dir / f"{paper.id}.delete.json"
+    staged_bytes = None
+
+    def failing_write_marker(path, journal):
+        nonlocal staged_bytes
+        if journal.state == "cleanup_pending":
+            assert repository.get_paper(paper.id) is None
+            staged_bytes = path.read_bytes()
+            raise error_type("cleanup marker write failed")
+        return original_write_marker(path, journal)
+
+    with monkeypatch.context() as fault:
+        fault.setattr(service, "_write_marker", failing_write_marker)
+        with pytest.raises(error_type, match="cleanup marker write failed"):
+            service.delete(paper.id)
+
+    assert repository.get_paper(paper.id) is None
+    assert not source_pdf.exists()
+    assert staged_bytes is not None
+    assert marker.read_bytes() == staged_bytes
+    journal = service._read_marker(marker)
+    assert journal is not None and journal.state == "staged"
+    assert (service.trash_dir / journal.trash_name).read_bytes() == b"%PDF-1.4"
+
+    restarted_service = PaperDeletionService(
+        repository, papers_dir=service.papers_dir, trash_dir=service.trash_dir
+    )
+    report = restarted_service.recover_pending()
+
+    assert report.cleaned == (paper.id,)
+    assert report.restored == ()
+    assert report.damaged_markers == ()
+    assert not source_pdf.exists()
+    assert list(service.trash_dir.iterdir()) == []
+    assert restarted_service.recover_pending().cleaned == ()
+
+
+def test_staged_marker_failure_restores_source_before_commit(
+    service: PaperDeletionService,
+    repository: PaperRepository,
+    paper: Paper,
+    source_pdf: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_write_marker = service._write_marker
+
+    def failing_write_marker(path, journal):
+        if journal.state == "staged":
+            raise OSError("staged marker write failed")
+        return original_write_marker(path, journal)
+
+    monkeypatch.setattr(service, "_write_marker", failing_write_marker)
+    with pytest.raises(OSError, match="staged marker write failed"):
+        service.delete(paper.id)
+
+    assert repository.get_paper(paper.id) is not None
+    assert source_pdf.read_bytes() == b"%PDF-1.4"
+    assert list(service.trash_dir.iterdir()) == []
+
+
+def test_marker_unlink_failure_preserves_committed_deletion_for_recovery(
+    service: PaperDeletionService,
+    repository: PaperRepository,
+    paper: Paper,
+    source_pdf: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_unlink = Path.unlink
+    marker = service.trash_dir / f"{paper.id}.delete.json"
+
+    def failing_unlink(path, *args, **kwargs):
+        if path == marker:
+            raise OSError("marker unlink failed")
+        return original_unlink(path, *args, **kwargs)
+
+    with monkeypatch.context() as fault:
+        fault.setattr(Path, "unlink", failing_unlink)
+        with pytest.raises(OSError, match="marker unlink failed"):
+            service.delete(paper.id)
+
+    assert repository.get_paper(paper.id) is None
+    assert not source_pdf.exists()
+    journal = service._read_marker(marker)
+    assert journal is not None and journal.state == "cleanup_pending"
+    assert not (service.trash_dir / journal.trash_name).exists()
+
+    report = service.recover_pending()
+
+    assert report.cleaned == (paper.id,)
+    assert report.restored == ()
+    assert report.damaged_markers == ()
+    assert not source_pdf.exists()
+    assert list(service.trash_dir.iterdir()) == []
 
 
 def test_startup_recovery_restores_staged_file_when_paper_row_exists(

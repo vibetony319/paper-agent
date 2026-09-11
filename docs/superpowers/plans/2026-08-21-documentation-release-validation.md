@@ -454,7 +454,9 @@ Run: `git status --short`
 
 Expected: 只显示明确准备提交的文件；不得包含 `.paper-agent`、`.e2e-data`、PDF、数据库、secret 或 `AGENTS.md`。
 
-Run: `rg -n --hidden -g '!web/node_modules/**' -g '!.git/**' "(sk-|Bearer )[A-Za-z0-9_-]{12,}|huyaohua369" .`
+Run: `git grep -l -E '(sk-|Bearer )[A-Za-z0-9_-]{12,}' -- README.md CONTRIBUTING.md docs src web/src tests`
+
+只输出待检查的文件名，不打印匹配值；不得把用户曾提供的真实凭证写进扫描命令或文档。此启发式扫描不能替代人工审查。
 
 Expected: 无真实凭证匹配；测试中的固定 `top-secret` 不属于真实凭证，但只能存在测试或安全说明中。
 

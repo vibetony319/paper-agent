@@ -8,6 +8,10 @@ paper-agent 是一个本地优先的论文阅读与研究工作台。它把原�
 
 ## 功能概览
 
+![论文阅读工作区：PDF 高亮、自动笔记与模型选择](docs/assets/reader-workspace.png)
+
+截图使用合成测试论文和固定模型回答，不包含私人论文或真实模型密钥。
+
 - 连续浏览 PDF 原始页面，并通过 PDF.js TextLayer 选择可复制文字。
 - 对单页选区执行高亮、解释、翻译、手写笔记或“问助手”。
 - 解释和翻译使用聊天框当前模型，完成后自动保存为带原文锚点的笔记。
@@ -155,7 +159,7 @@ npm test
 npm run build
 ```
 
-确定性浏览器端到端测试及对应的 npm 脚本将在后续发布验收任务中添加；测试不会依赖公网、真实 vLLM 或私人 PDF。
+浏览器端到端测试：在 `web/` 首次执行 `npx playwright install chromium`，然后运行 `npm run test:e2e`。安装浏览器需要网络；测试使用合成 PDF 和固定模型响应，不依赖真实 vLLM 或私人 PDF。配置、隔离机制与报告位置见[测试策略](docs/testing.md)，当前验收进度见[开发交接](docs/developer-handoff.md)。
 
 ## 开发者文档索引
 
