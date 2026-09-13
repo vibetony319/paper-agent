@@ -2,7 +2,6 @@ import pytest
 
 from paper_agent.domain import (
     AgentMessageRole,
-    AgentMode,
     BoundingBox,
     Conversation,
     ConversationMessage,
@@ -16,7 +15,7 @@ from paper_agent.domain import (
 
 def test_conversation_records_expose_durable_agent_values():
     """Breaks if persisted conversation records lose their stable defaults or enum values."""
-    conversation = Conversation(paper_id="paper-1", mode=AgentMode.paper_only)
+    conversation = Conversation(paper_id="paper-1")
     message = ConversationMessage(
         conversation_id=conversation.id,
         paper_id=conversation.paper_id,
@@ -24,7 +23,6 @@ def test_conversation_records_expose_durable_agent_values():
         content="What does the paper claim?",
     )
 
-    assert [mode.value for mode in AgentMode] == ["paper_only", "external_knowledge"]
     assert [role.value for role in AgentMessageRole] == ["user", "assistant"]
     assert message.citation_element_ids == ()
     assert message.sequence is None

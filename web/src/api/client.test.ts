@@ -325,7 +325,7 @@ it('sends required current-model graph and Agent request payloads', async () => 
   await paperApi.buildCoreGraph('paper-a', graphInput);
   await paperApi.buildDeepGraph('paper-a', graphInput);
   await paperApi.askAgent('paper-a', {
-    content: '解释方法', mode: 'paper_only', model_profile_id: 'qwen', request_id: 'agent-request-a',
+    content: '解释方法', model_profile_id: 'qwen', request_id: 'agent-request-a',
     selection: { quote: '原文', page_number: 2, rects: [] },
   });
 
@@ -333,7 +333,7 @@ it('sends required current-model graph and Agent request payloads', async () => 
     core: graphInput,
     deep: graphInput,
     agent: {
-      content: '解释方法', mode: 'paper_only', model_profile_id: 'qwen', request_id: 'agent-request-a',
+      content: '解释方法', model_profile_id: 'qwen', request_id: 'agent-request-a',
       selection: { quote: '原文', page_number: 2, rects: [] },
     },
   });

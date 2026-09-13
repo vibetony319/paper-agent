@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type { ModelProfile, PaperSummary } from '../api/types';
 import type { usePaperWorkspace } from '../workspace/usePaperWorkspace';
 import { paperStageSummary } from './PaperLibrary';
-import { PdfReader } from './PdfReader';
+import { PdfReader, type SectionNavEntry } from './PdfReader';
 import { ResizableSplit } from './ResizableSplit';
 import { RightPanel } from './RightPanel';
 import type { ComposerAttachment } from './ChatComposer';
@@ -42,8 +42,7 @@ export function WorkspaceShell({
   const nextComposerAttachmentToken = useRef(0);
   const ownsActivePaper = workspace.activePaperId === paper.id;
   const document = ownsActivePaper ? workspace.document : null;
-  const graph = ownsActivePaper ? workspace.graph : null;
-  const blockingError = ownsActivePaper && (document === null || graph === null)
+  const blockingError = ownsActivePaper && document === null
     ? workspace.errorMessage
     : null;
 
@@ -66,6 +65,34 @@ export function WorkspaceShell({
   const currentComposerAttachment = composerAttachment?.paperId === paper.id
     ? composerAttachment
     : null;
+
+  const hasDocumentSections = document !== null && document.sections.length > 0;
+  const sectionEntries = useMemo<SectionNavEntry[]>(() => {
+    if (document === null) return [];
+    const sortedSections = [...document.sections].sort((left, right) => left.order - right.order);
+    if (sortedSections.length > 0) {
+      const pageBySection = new Map<string, number | null>(
+        sortedSections.map((section) => [section.id, section.page_number]),
+      );
+      for (const element of document.elements) {
+        if (element.section_id === null || element.page_number === null) continue;
+        const known = pageBySection.get(element.section_id);
+        if (known === null || known === undefined) {
+          pageBySection.set(element.section_id, element.page_number);
+        }
+      }
+      return sortedSections.map((section) => ({
+        id: section.id,
+        title: section.title,
+        pageNumber: pageBySection.get(section.id) ?? null,
+      }));
+    }
+    return document.pages.map((page) => ({
+      id: `page-${page.number}`,
+      title: `第 ${page.number} 页`,
+      pageNumber: page.number,
+    }));
+  }, [document]);
 
   return (
     <div className="workspace-shell">
@@ -128,11 +155,11 @@ export function WorkspaceShell({
           <p>论文仍在论文库中，可在处理完成后重试。</p>
           <button type="button" onClick={onRetryPaperLoading}>重试加载论文</button>
         </section>
-      ) : document === null || graph === null ? (
+      ) : document === null ? (
         <section className="workspace-state" aria-label="论文工作区加载">
           <h2>正在准备阅读面板</h2>
           <p role="status">正在加载论文阅读工作区…</p>
-          <p>文档和知识图谱准备完成后，将打开阅读器与研究工具。</p>
+          <p>文档准备完成后，将打开阅读器与研究工具。</p>
         </section>
       ) : (
         <div className="workspace-shell__content" data-testid="workspace-content">
@@ -160,6 +187,11 @@ export function WorkspaceShell({
                 onSelectionClear={workspace.clearSelection}
                 onCreateHighlight={() => { void workspace.createHighlight(); }}
                 onDeleteHighlight={(highlightId) => { void workspace.deleteHighlight(highlightId); }}
+                onChangeHighlightColor={(highlightId, color) => {
+                  void workspace.changeHighlightColor(highlightId, color);
+                }}
+                sections={sectionEntries}
+                sectionsTitle={hasDocumentSections ? '章节导航' : '页面导航'}
                 selectedModelProfileId={selectedModelProfileId}
                 runSelectionAssist={workspace.runSelectionAssist}
                 selectionActions={{
@@ -193,15 +225,6 @@ export function WorkspaceShell({
                     if (source !== null) workspace.selectAnchorSource(source);
                     else if (note?.element_id !== null && note?.element_id !== undefined) workspace.selectGraphEvidenceElement(note.element_id);
                   },
-                }}
-                graph={{
-                  graph,
-                  documentElements: document.elements,
-                  onSelectEvidence: workspace.selectGraphEvidenceElement,
-                  selectedModelProfileId,
-                  stageModel: paper.stage3_model ?? paper.stage2_model ?? null,
-                  buildCoreGraph: workspace.buildCoreGraph,
-                  buildDeepGraph: workspace.buildDeepGraph,
                 }}
                 notes={{
                   activeSource: workspace.activeSource,

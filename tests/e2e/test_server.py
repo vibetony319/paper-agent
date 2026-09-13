@@ -88,7 +88,7 @@ def test_agent_reads_note_memory_and_switches_model_in_same_conversation(e2e_cli
     conversation_id = None
     for profile in profiles(e2e_client):
         response = e2e_client.post(f'/api/papers/{paper_id}/agent/messages', json={
-            'content': '负载均衡损失如何分配专家？', 'mode': 'paper_only',
+            'content': '负载均衡损失如何分配专家？',
             'model_profile_id': profile['id'], 'request_id': str(uuid4()),
             'conversation_id': conversation_id,
         })

@@ -182,6 +182,7 @@ def test_health_check_only_accepts_the_expected_empty_health_call(
             client.validate_tool_calling()
 
     request = fake_openai.requests[0]
+    assert any(message['role'] == 'user' for message in request['messages'])
     assert request["tool_choice"] == "auto"
     assert request["parallel_tool_calls"] is False
     assert request["tools"] == [

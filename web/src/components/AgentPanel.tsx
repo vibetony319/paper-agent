@@ -16,7 +16,7 @@ export function AgentPanel({ paperId, exchanges, onSelectCitation, onSelectNoteR
   return (
     <section className="agent-panel" aria-labelledby="agent-panel-title">
       <header className="agent-panel__header">
-        <div><p className="agent-panel__eyebrow">论文助手</p><h2 id="agent-panel-title">论文助手</h2></div>
+        <div><h2 id="agent-panel-title">论文助手</h2></div>
         <p className="agent-panel__quiet-status">{paperId === null ? '请选择论文。' : '在下方输入问题。'}</p>
       </header>
       <div className="agent-panel__conversation" aria-live="polite">

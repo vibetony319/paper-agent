@@ -8,7 +8,6 @@ from threading import Lock
 
 from paper_agent.domain import (
     AgentMessageRole,
-    AgentMode,
     Conversation,
     ConversationMessage,
     ProcessingStatus,
@@ -65,7 +64,6 @@ class AgentRuntimeInvalidSelectionError(RuntimeError):
 @dataclass(frozen=True)
 class AgentQuestion:
     content: str
-    mode: AgentMode
     conversation_id: str | None = None
 
 
@@ -158,14 +156,13 @@ class PaperAgentRuntime:
 
             conversation = self._preflight(
                 paper_id=paper_id,
-                mode=question.mode,
                 conversation_id=conversation_id,
             )
             if client is None:
                 raise AgentRuntimeUnavailableError(_UNAVAILABLE_ERROR)
             if conversation is None:
                 conversation = self.repository.create_conversation(
-                    Conversation(paper_id=paper_id, mode=question.mode)
+                    Conversation(paper_id=paper_id)
                 )
 
             if partial_user is None:
@@ -201,6 +198,7 @@ class PaperAgentRuntime:
             except Exception:
                 raise AgentRuntimeResponseError(_RESPONSE_ERROR) from None
 
+            executed_calls = 0
             for tool_turn_index in range(MAX_TOOL_TURNS):
                 try:
                     turn = client.request_tool_turn(
@@ -208,19 +206,29 @@ class PaperAgentRuntime:
                         tools=tool_definitions,
                         tool_choice="required" if tool_turn_index == 0 else "auto",
                     )
-                    if len(turn.tool_calls) > 1:
-                        raise ValueError("multiple tool calls are not allowed")
+                    if len(turn.tool_calls) > MAX_TOOL_TURNS - executed_calls:
+                        raise ValueError("tool call budget exceeded")
                     if not turn.tool_calls:
                         break
-                    call = turn.tool_calls[0]
-                    execution = self.tools.execute(
-                        paper_id=paper_id,
-                        name=call.name,
-                        arguments=call.arguments,
-                    )
-                    tool_result_messages = _tool_result_messages(turn, call, execution)
-                    allowed_evidence_ids.update(execution.evidence_element_ids)
-                    messages.extend(tool_result_messages)
+                    if len({call.id for call in turn.tool_calls}) != len(turn.tool_calls):
+                        raise ValueError("duplicate tool call IDs")
+                    assistant_message = None
+                    tool_messages = []
+                    for call in turn.tool_calls:
+                        execution = self.tools.execute(
+                            paper_id=paper_id, name=call.name, arguments=call.arguments,
+                        )
+                        assistant, tool_message = _tool_result_messages(turn, call, execution)
+                        if assistant_message is None:
+                            assistant_message = assistant
+                        else:
+                            assistant_message['tool_calls'].extend(assistant['tool_calls'])
+                        tool_messages.append(tool_message)
+                        allowed_evidence_ids.update(execution.evidence_element_ids)
+                        executed_calls += 1
+                    messages.extend([assistant_message, *tool_messages])
+                    if executed_calls == MAX_TOOL_TURNS:
+                        break
                 except Exception:
                     raise AgentRuntimeResponseError(_RESPONSE_ERROR) from None
 
@@ -237,13 +245,11 @@ class PaperAgentRuntime:
             try:
                 answer = self.guard.validate(
                     payload,
-                    mode=question.mode,
                     allowed_evidence_ids=allowed_evidence,
                 )
             except CitationGuardError:
                 answer = _canonical_insufficient_answer(
                     self.guard,
-                    mode=question.mode,
                     allowed_evidence_ids=allowed_evidence,
                 )
             except Exception:
@@ -320,7 +326,6 @@ class PaperAgentRuntime:
         self,
         *,
         paper_id: str,
-        mode: AgentMode,
         conversation_id: str | None,
     ) -> Conversation | None:
         if self.repository.get_paper(paper_id) is None:
@@ -336,7 +341,7 @@ class PaperAgentRuntime:
             conversation = self.repository.get_conversation(
                 paper_id, conversation_id
             )
-            if conversation is None or conversation.mode is not mode:
+            if conversation is None:
                 raise AgentRuntimePrerequisiteError(_PREREQUISITE_ERROR)
         return conversation
 
@@ -391,7 +396,7 @@ class PaperAgentRuntime:
             limit=HISTORY_MESSAGE_LIMIT,
         )
         messages: list[dict[str, object]] = [
-            {"role": "system", "content": _system_prompt(conversation.mode)},
+            {"role": "system", "content": _system_prompt()},
         ]
         if note_context is not None and note_context.prompt_block:
             messages.append(
@@ -443,21 +448,15 @@ class PaperAgentRuntime:
         return tuple(references)
 
 
-def _system_prompt(mode: AgentMode) -> str:
-    prompt = (
+def _system_prompt() -> str:
+    return (
         "Use the provided paper and graph tools to answer the user's question. "
         "Graph data is for navigation only; graph node and edge IDs are not citations. "
         "Only source-element IDs returned by tools during this request may appear in "
         "citation_element_ids. If returned evidence does not support a paper claim, "
         "use status insufficient_evidence. "
+        "background_explanation must be null."
     )
-    if mode is AgentMode.external_knowledge:
-        return (
-            prompt
-            + "External background belongs only in the separate background_explanation "
-            "field and must not be mixed into paper_answer."
-        )
-    return prompt + "In paper-only mode, background_explanation must be null."
 
 
 def _tool_result_messages(
@@ -504,7 +503,6 @@ def _tool_result_messages(
 def _canonical_insufficient_answer(
     guard: CitationGuard,
     *,
-    mode: AgentMode,
     allowed_evidence_ids: frozenset[str],
 ) -> CitationValidatedAnswer:
     return guard.validate(
@@ -514,6 +512,5 @@ def _canonical_insufficient_answer(
             "citation_element_ids": [],
             "background_explanation": None,
         },
-        mode=mode,
         allowed_evidence_ids=allowed_evidence_ids,
     )

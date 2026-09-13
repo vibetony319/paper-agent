@@ -52,7 +52,7 @@ it('sends the selected model and attached selection, then clears the attachment 
   await user.type(screen.getByLabelText('向论文助手提问'), '解释这一段');
   await user.click(screen.getByRole('button', { name: '发送' }));
 
-  await waitFor(() => expect(askAgent).toHaveBeenCalledWith('解释这一段', 'paper_only', 'qwen', selection));
+  await waitFor(() => expect(askAgent).toHaveBeenCalledWith('解释这一段', 'qwen', selection));
   expect(onAttachmentClear).toHaveBeenCalledOnce();
   expect(onAttachmentClear).toHaveBeenCalledWith('attachment-a');
 });
@@ -154,8 +154,6 @@ it('uses the composer as the single model boundary and explains why sending is u
 
   expect(screen.getByRole('button', { name: '发送' })).toBeDisabled();
   expect(screen.getByText('请先在当前模型中选择可用模型，再发送问题。')).toBeVisible();
-  expect(screen.getByLabelText('仅基于论文')).toBeChecked();
-  expect(screen.getByLabelText('允许背景知识')).not.toBeChecked();
 
   await user.selectOptions(screen.getByLabelText('当前模型'), 'deepseek');
   expect(onSelectedModelProfileIdChange).toHaveBeenCalledWith('deepseek');

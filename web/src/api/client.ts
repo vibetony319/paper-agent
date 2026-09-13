@@ -14,6 +14,7 @@ import type {
   PaperDocument,
   PaperGraph,
   PaperSummary,
+  UpdateHighlightInput,
   UpdateNoteInput,
 } from './types';
 
@@ -143,6 +144,17 @@ export const paperApi = {
     request<Highlight>(
       `/api/papers/${encodeURIComponent(paperId)}/highlights`,
       jsonRequest('POST', input),
+    ),
+
+  updateHighlight: (
+    paperId: string,
+    highlightId: string,
+    input: UpdateHighlightInput,
+    init?: Pick<RequestInit, 'signal'>,
+  ) =>
+    request<Highlight>(
+      `/api/papers/${encodeURIComponent(paperId)}/highlights/${encodeURIComponent(highlightId)}`,
+      { ...jsonRequest('PATCH', input), ...init },
     ),
 
   deleteHighlight: (paperId: string, highlightId: string) =>

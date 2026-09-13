@@ -73,9 +73,9 @@ it('lists profiles with chinese capability states and the default badge', () => 
   expect(qwen.getByText('基础对话：未测试')).toBeVisible();
 
   const deepseek = within(screen.getByRole('listitem', { name: 'DeepSeek 远程' }));
-  expect(deepseek.getByText('基础对话：支持')).toBeVisible();
-  expect(deepseek.getByText('结构化输出：支持')).toBeVisible();
-  expect(deepseek.getByText('工具调用：不支持')).toBeVisible();
+  expect(deepseek.getByText('基础对话：检测通过')).toBeVisible();
+  expect(deepseek.getByText('结构化输出：检测通过')).toBeVisible();
+  expect(deepseek.getByText('工具调用：检测未通过（可能是接口不兼容，请重新测试或检查服务配置）')).toBeVisible();
 });
 
 it('creates a profile from the chinese form fields', async () => {
@@ -152,9 +152,9 @@ it('shows the three chinese capability results after a connection test', async (
   await user.click(screen.getByRole('button', { name: '测试能力' }));
 
   expect(onTest).toHaveBeenCalledWith('qwen');
-  expect(await screen.findByText('基础对话：支持')).toBeVisible();
-  expect(screen.getByText('结构化输出：支持')).toBeVisible();
-  expect(screen.getByText('工具调用：不支持')).toBeVisible();
+  expect(await screen.findByText('基础对话：检测通过')).toBeVisible();
+  expect(screen.getByText('结构化输出：检测通过')).toBeVisible();
+  expect(screen.getByText('工具调用：检测未通过（可能是接口不兼容，请重新测试或检查服务配置）')).toBeVisible();
 });
 
 it('refreshes the profile list after a revision conflict', async () => {

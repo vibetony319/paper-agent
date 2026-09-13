@@ -27,7 +27,7 @@ class FakeToolClient:
                     SimpleNamespace(
                         id="call-1",
                         name="search_paper",
-                        arguments={"query": "introduction", "limit": 5},
+                        arguments={"query": "sample body", "limit": 5},
                     ),
                 ),
             )
@@ -88,7 +88,6 @@ def test_agent_uses_relevant_notes_and_history_keeps_deleted_references(
             f"/api/papers/{paper_id}/agent/messages",
             json={
                 "content": "Introduction 的作用是什么？",
-                "mode": "paper_only",
                 "model_profile_id": ENVIRONMENT_FALLBACK_PROFILE_ID,
                 "request_id": str(uuid4()),
             },
@@ -136,7 +135,6 @@ def test_agent_rejects_cross_paper_selection_element(
             f"/api/papers/{paper_id}/agent/messages",
             json={
                 "content": "Explain it.",
-                "mode": "paper_only",
                 "model_profile_id": ENVIRONMENT_FALLBACK_PROFILE_ID,
                 "request_id": str(uuid4()),
                 "selection": {

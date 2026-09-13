@@ -35,3 +35,6 @@ web/playwright-report/
 Thumbs.db
 .vscode/
 .idea/
+
+# Runtime service logs
+*.log

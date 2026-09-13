@@ -37,8 +37,6 @@ function stagesFor(paper: PaperSummary): Stage[] {
   return [
     { label: '页面定位', status: paper.stage0_status },
     { label: '结构解析', status: paper.stage1_status },
-    { label: '核心图谱', status: paper.stage2_status },
-    { label: '深度图谱', status: paper.stage3_status },
   ];
 }
 
@@ -202,7 +200,7 @@ export function PaperLibrary({
                 <span className="paper-library__filename">{paper.original_filename}</span>
                 <span className="paper-library__stages">
                   {stagesFor(paper).map((stage) => (
-                    <span className="paper-library__stage" key={stage.label}>
+                    <span className="paper-library__stage" key={stage.label} data-status={stage.status ?? 'none'}>
                       <span>{stage.label} </span>
                       <strong>{statusLabel(stage.status)}</strong>
                     </span>

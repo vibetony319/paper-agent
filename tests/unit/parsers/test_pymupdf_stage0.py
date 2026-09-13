@@ -13,7 +13,7 @@ def test_stage0_extracts_page_text_and_normalized_block_location(sample_pdf):
     result = PyMuPdfStage0Parser().parse(sample_pdf)
 
     assert result.pages[0].number == 1
-    assert result.text_blocks[0].text == "Introduction"
+    assert result.text_blocks[0].text == "Sample body text."
     assert result.text_blocks[0].bbox.x0 == pytest.approx(0.1)
     assert 0 <= result.text_blocks[0].bbox.y0 < 1
 

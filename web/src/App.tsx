@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useState } from 'react';
 
 import type { PaperSummary } from './api/types';
 import { ModelSettingsDialog } from './components/ModelSettingsDialog';
@@ -16,21 +16,13 @@ export function App() {
   const [libraryHeadingFocusRequested, setLibraryHeadingFocusRequested] = useState(false);
   const [workspaceLoadRevision, setWorkspaceLoadRevision] = useState(0);
   const [modelSettingsOpen, setModelSettingsOpen] = useState(false);
-  const updateActivePaperSummary = useCallback((paper: PaperSummary) => {
-    setActivePaper((current) => current?.id === paper.id ? paper : current);
-  }, []);
-  const workspace = usePaperWorkspace(
-    activePaper?.id ?? null,
-    workspaceLoadRevision,
-    updateActivePaperSummary,
-  );
+  const workspace = usePaperWorkspace(activePaper?.id ?? null, workspaceLoadRevision);
   const modelProfiles = useModelProfiles(activePaper?.id ?? null);
 
   const selectPaper = (paper: PaperSummary) => {
     const isActivePaper = activePaper?.id === paper.id;
     const activeWorkspaceIsReady = workspace.activePaperId === paper.id
-      && workspace.document !== null
-      && workspace.graph !== null;
+      && workspace.document !== null;
 
     if (isActivePaper && !activeWorkspaceIsReady) {
       setWorkspaceLoadRevision((current) => current + 1);

@@ -9,9 +9,9 @@ from paper_agent.config import Settings
 from paper_agent.domain import DocumentElement, Note, PaperDocument, ProcessingStatus
 from paper_agent.parsers.base import PdfParseError
 from paper_agent.parsers.alignment import TextAligner
-from paper_agent.parsers.markitdown_stage1 import (
-    MarkdownParseError,
-    MarkItDownStage1Parser,
+from paper_agent.parsers.pymupdf_stage1 import (
+    PyMuPdfStage1Parser,
+    Stage1ParseError,
 )
 from paper_agent.parsers.pymupdf_stage0 import PyMuPdfStage0Parser
 from paper_agent.schemas import PaperSummary, UploadPayload
@@ -37,7 +37,7 @@ class PaperIngestionService:
         self.settings = settings
         self.repository = repository
         self.stage0_parser = PyMuPdfStage0Parser()
-        self.stage1_parser = MarkItDownStage1Parser()
+        self.stage1_parser = PyMuPdfStage1Parser()
         self.aligner = TextAligner()
 
     def ingest(self, upload: UploadPayload) -> PaperSummary:
@@ -136,7 +136,7 @@ class PaperIngestionService:
 
         try:
             stage1 = self._run_stage1(source_path)
-        except MarkdownParseError:
+        except Stage1ParseError:
             return self._finish_stage1_failure(paper)
         except Exception:
             self._finish_stage1_failure(paper)

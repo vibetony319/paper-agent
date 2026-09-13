@@ -2,25 +2,23 @@ import { useEffect, useId, useRef, useState } from 'react';
 
 import { AgentPanel, type AgentPanelProps } from './AgentPanel';
 import { ChatComposer, type ChatComposerProps } from './ChatComposer';
-import { GraphPanel, type GraphPanelProps } from './GraphPanel';
 import { NotesPanel, type NotesPanelProps } from './NotesPanel';
 
 export interface RightPanelProps {
   paperId: string | null;
   agent: Omit<AgentPanelProps, 'paperId'>;
-  graph: Omit<GraphPanelProps, 'paperId'>;
   notes: Omit<NotesPanelProps, 'paperId'>;
   composer: Omit<ChatComposerProps, 'paperId'>;
 }
 
-type PanelTab = 'agent' | 'graph' | 'notes';
+type PanelTab = 'agent' | 'notes';
 
-export function RightPanel({ paperId, agent, graph, notes, composer }: RightPanelProps) {
+export function RightPanel({ paperId, agent, notes, composer }: RightPanelProps) {
   const [selectedTab, setSelectedTab] = useState<PanelTab>('agent');
   const tabId = useId();
-  const tabRefs = useRef<Record<PanelTab, HTMLButtonElement | null>>({ agent: null, graph: null, notes: null });
+  const tabRefs = useRef<Record<PanelTab, HTMLButtonElement | null>>({ agent: null, notes: null });
   useEffect(() => { setSelectedTab('agent'); }, [paperId]);
-  const tabs: Array<[PanelTab, string]> = [['agent', '论文助手'], ['graph', '知识图谱'], ['notes', '笔记']];
+  const tabs: Array<[PanelTab, string]> = [['agent', '论文助手'], ['notes', '笔记']];
 
   return (
     <aside className="right-panel" aria-label="研究工具">
@@ -54,7 +52,6 @@ export function RightPanel({ paperId, agent, graph, notes, composer }: RightPane
       </div>
       <div className="right-panel__content">
         <div id={`${tabId}-agent-panel`} role="tabpanel" aria-labelledby={`${tabId}-agent-tab`} hidden={selectedTab !== 'agent'}><AgentPanel paperId={paperId} {...agent} /></div>
-        <div id={`${tabId}-graph-panel`} role="tabpanel" aria-labelledby={`${tabId}-graph-tab`} hidden={selectedTab !== 'graph'}><GraphPanel paperId={paperId ?? ''} {...graph} /></div>
         <div id={`${tabId}-notes-panel`} role="tabpanel" aria-labelledby={`${tabId}-notes-tab`} hidden={selectedTab !== 'notes'}><NotesPanel paperId={paperId} {...notes} /></div>
       </div>
       <ChatComposer paperId={paperId} {...composer} />

@@ -172,6 +172,45 @@ def test_client_cannot_write_generated_note_type(
     assert response.status_code == 422
 
 
+def test_update_highlight_color_and_delete(
+    client: TestClient, sample_pdf: Path
+) -> None:
+    paper_id = _upload(client, sample_pdf)["id"]
+    highlight = client.post(
+        f"/api/papers/{paper_id}/highlights",
+        json=_highlight_payload(),
+    ).json()
+
+    updated = client.patch(
+        f"/api/papers/{paper_id}/highlights/{highlight['id']}",
+        json={"color": "green"},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["color"] == "green"
+    assert updated.json()["id"] == highlight["id"]
+
+    bundle = client.get(f"/api/papers/{paper_id}/annotations").json()
+    assert [item["color"] for item in bundle["highlights"]] == ["green"]
+
+    invalid = client.patch(
+        f"/api/papers/{paper_id}/highlights/{highlight['id']}",
+        json={"color": "purple"},
+    )
+    assert invalid.status_code == 422
+
+    missing = client.patch(
+        f"/api/papers/{paper_id}/highlights/{uuid4()}",
+        json={"color": "blue"},
+    )
+    assert missing.status_code == 404
+    assert missing.json()["code"] == "annotation_not_found"
+
+    deleted = client.delete(
+        f"/api/papers/{paper_id}/highlights/{highlight['id']}"
+    )
+    assert deleted.status_code == 204
+
+
 def test_delete_highlight_keeps_anchored_note(
     client: TestClient, sample_pdf: Path
 ) -> None:

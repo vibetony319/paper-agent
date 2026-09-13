@@ -212,7 +212,34 @@ class GraphConstructionService:
         )
         if unsectioned:
             scopes.append(_SourceScope("Unsectioned", unsectioned))
-        return tuple(scope for scope in scopes if scope.elements)
+        scopes = [scope for scope in scopes if scope.elements]
+        if not scopes and text_blocks:
+            # Stage1 conversion can yield no sections (e.g. two-column PDFs with
+            # no detected headings); located page text blocks remain the only
+            # usable evidence, so group them per page as fallback scopes.
+            scopes = self._page_scopes(text_blocks)
+        if not scopes:
+            raise GraphBuildPrerequisiteError(
+                "No located source elements are available for graph construction."
+            )
+        return tuple(scopes)
+
+    @staticmethod
+    def _page_scopes(
+        text_blocks: tuple[DocumentElement, ...]
+    ) -> list[_SourceScope]:
+        blocks_by_page: dict[int | None, list[DocumentElement]] = {}
+        for block in text_blocks:
+            blocks_by_page.setdefault(block.page_number, []).append(block)
+        return [
+            _SourceScope(
+                "Unsectioned" if page is None else f"Page {page}",
+                tuple(blocks),
+            )
+            for page, blocks in sorted(
+                blocks_by_page.items(), key=lambda item: (item[0] is None, item[0])
+            )
+        ]
 
     @staticmethod
     def _section_sources(

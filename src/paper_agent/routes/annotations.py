@@ -16,6 +16,7 @@ from paper_agent.schemas import (
     AnnotationBundleResponse,
     HighlightCreateRequest,
     HighlightResponse,
+    HighlightUpdateRequest,
     NoteRequest,
     NoteResponse,
     NoteUpdateRequest,
@@ -165,6 +166,28 @@ def delete_highlight(
 
     _safe_errors(remove)
     return Response(status_code=204)
+
+
+@router.patch(
+    "/{paper_id}/highlights/{highlight_id}",
+    response_model=HighlightResponse,
+)
+def update_highlight(
+    paper_id: str,
+    highlight_id: UUID,
+    payload: HighlightUpdateRequest,
+    request: Request,
+) -> HighlightResponse:
+    def update() -> HighlightResponse:
+        with request.app.state.paper_operation_coordinator.operation(paper_id):
+            highlight = _service(request).update_highlight_color(
+                paper_id, str(highlight_id), payload.color
+            )
+            if highlight is None:
+                raise AnnotationNotFoundError("highlight was not found")
+        return HighlightResponse.from_highlight(highlight)
+
+    return _safe_errors(update)
 
 
 @router.post(

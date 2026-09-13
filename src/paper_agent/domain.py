@@ -17,11 +17,6 @@ class ProcessingStatus(StrEnum):
     failed = "failed"
 
 
-class AgentMode(StrEnum):
-    paper_only = "paper_only"
-    external_knowledge = "external_knowledge"
-
-
 class AgentMessageRole(StrEnum):
     user = "user"
     assistant = "assistant"
@@ -180,7 +175,6 @@ class Paper:
 @dataclass(frozen=True)
 class Conversation:
     paper_id: str
-    mode: AgentMode
     id: str = field(default_factory=lambda: str(uuid4()))
 
 

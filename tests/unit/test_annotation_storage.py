@@ -5,7 +5,12 @@ from paper_agent.annotation_storage import (
     IdempotencyConflictError,
     PaperAnnotationRepository,
 )
-from paper_agent.annotations import NoteType, TextAnchorDraft, TextAnchorRect
+from paper_agent.annotations import (
+    HIGHLIGHT_COLORS,
+    NoteType,
+    TextAnchorDraft,
+    TextAnchorRect,
+)
 from paper_agent.domain import BoundingBox, DocumentElement, Note, Page, Paper
 from paper_agent.model_profiles import ModelSnapshot
 from paper_agent.storage import PaperRepository
@@ -161,10 +166,50 @@ def test_annotation_rejects_unknown_page_and_invalid_color(
             prepared_paper.id, _draft(page=99, element_id=None)
         )
 
-    with pytest.raises(AnnotationInputError, match="yellow"):
+    with pytest.raises(AnnotationInputError, match="color"):
         annotations.create_highlight(
-            prepared_paper.id, _draft(), color="green"
+            prepared_paper.id, _draft(), color="purple"
         )
+
+
+def test_update_highlight_color_round_trip(
+    annotations: PaperAnnotationRepository, prepared_paper: Paper
+) -> None:
+    highlight = annotations.create_highlight(
+        prepared_paper.id, _draft(), color="yellow"
+    )
+
+    updated = annotations.update_highlight_color(
+        prepared_paper.id, highlight.id, "green"
+    )
+
+    assert updated is not None
+    assert updated.color == "green"
+    assert updated.anchor == highlight.anchor
+    assert annotations.list_highlights(prepared_paper.id) == (updated,)
+
+    missing = annotations.update_highlight_color(
+        prepared_paper.id, "missing-highlight", "blue"
+    )
+    assert missing is None
+
+    with pytest.raises(AnnotationInputError, match="color"):
+        annotations.update_highlight_color(
+            prepared_paper.id, highlight.id, "purple"
+        )
+    assert annotations.list_highlights(prepared_paper.id)[0].color == "green"
+
+
+def test_create_highlight_accepts_every_supported_color(
+    annotations: PaperAnnotationRepository, prepared_paper: Paper
+) -> None:
+    for color in HIGHLIGHT_COLORS:
+        highlight = annotations.create_highlight(
+            prepared_paper.id,
+            _draft(quote=f"{color} 选段"),
+            color=color,
+        )
+        assert highlight.color == color
 
 
 def test_duplicate_requests_return_same_object_and_reject_conflicting_fields(
@@ -244,6 +289,35 @@ def test_delete_note_keeps_highlight(
 
     assert annotations.delete_note(prepared_paper.id, note.id) is True
     assert annotations.list_highlights(prepared_paper.id) == (highlight,)
+
+
+def test_delete_note_clears_selection_assist_reference(
+    annotations: PaperAnnotationRepository, prepared_paper: Paper
+) -> None:
+    annotations.create_selection_assist_running(
+        prepared_paper.id,
+        request_id="assist-explain",
+        action="explain",
+        model_profile_id=_snapshot().profile_id,
+        model_snapshot=_snapshot(),
+    )
+    note = annotations.create_note(
+        prepared_paper.id,
+        _generated_note(),
+        anchor_draft=_draft(quote="routing tokens"),
+        request_id="note-assist",
+    )
+    annotations.complete_selection_assist(
+        prepared_paper.id,
+        "assist-explain",
+        anchor_id=note.anchor_ids[0],
+        note_id=note.id,
+    )
+
+    assert annotations.delete_note(prepared_paper.id, note.id) is True
+    stored = annotations.get_selection_assist(prepared_paper.id, "assist-explain")
+    assert stored["status"] == "completed"
+    assert stored["note_id"] is None
 
 
 def test_note_update_uses_updated_at_optimistic_guard(

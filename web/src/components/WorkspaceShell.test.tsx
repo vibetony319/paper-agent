@@ -76,7 +76,7 @@ it('does not carry a paper A selection attachment into a paper B Agent request',
   expect(screen.queryByLabelText('已附加选区')).not.toBeInTheDocument();
   await user.type(screen.getByLabelText('向论文助手提问'), '论文 B 的问题');
   await user.click(screen.getByRole('button', { name: '发送' }));
-  await waitFor(() => expect(workspaceB.askAgent).toHaveBeenCalledWith('论文 B 的问题', 'paper_only', 'qwen', undefined));
+  await waitFor(() => expect(workspaceB.askAgent).toHaveBeenCalledWith('论文 B 的问题', 'qwen', undefined));
 });
 
 it('keeps the composer mounted while switching all three right-side tabs', async () => {
@@ -84,7 +84,7 @@ it('keeps the composer mounted while switching all three right-side tabs', async
   const workspace = workspaceFixture();
   render(<WorkspaceShell paper={paper} workspace={workspace as never} onRetryPaperLoading={vi.fn()} onReturnToLibrary={vi.fn()} onOpenModelSettings={vi.fn()} onDeleteRequested={vi.fn()} modelProfiles={[profile]} selectedModelProfileId="qwen" onSelectedModelProfileIdChange={vi.fn()} />);
 
-  for (const tab of ['论文助手', '知识图谱', '笔记']) {
+  for (const tab of ['论文助手', '笔记']) {
     await user.click(screen.getByRole('tab', { name: tab }));
     expect(screen.getByLabelText('向论文助手提问')).toBeInTheDocument();
   }

@@ -4,6 +4,12 @@
 
 ## 最新进度（接手先读）
 
+### 真实接口兼容修复（2026-09-11，验收基线之后）
+
+配置的模型接口拒绝 `json_schema`、拒绝只有系统消息的工具探测，并可能忽略禁止并行调用参数。现增加明确不支持 Schema 时才启用的 JSON 对象兼容路径与本地 Schema 校验；工具探测带用户消息；实际只读工具批次按顺序执行，总调用预算仍为 6，拒绝重复 ID 和超预算批次。能力 UI 使用“检测未通过”，不再误称模型“不支持”。详情见[模型服务](model-services.md)。
+
+真实接口三项能力检测通过；独立临时数据中的合成论文对话返回 HTTP 200、grounded 和 3 条引用。未向真实用户论文或会话写入测试消息。普通 JSON 模式不保证每次模型输出都正确，返回仍须通过本地校验和 Citation Guard，不会直接放行无效答案。
+
 Plan 5 的文档、确定性浏览器验收与全新依赖安装验证已完成。中文 README、贡献指南、专题开发文档基线为 `526d802`；本轮补充三份 ADR、E2E 服务器、Playwright 脚本及故障修复。具体命令、环境和已知限制见[整体验收记录](release-validation.md)。
 
 - 修复永久删除在数据库提交后 marker 写入失败时错误恢复源 PDF 的问题；新增故障注入测试证明提交前还原、提交后保留恢复标记并继续清理。
@@ -98,7 +104,7 @@ Plan 4 的生产代码、测试和文档均已提交。仅三个未跟踪文件�
 - Task 5 的页面所有权 DOM 契约为 `[data-pdf-page]`，坐标归一化基准为 `.pdf-page-view__surface`；计划中的旧 `.pdf-page__surface` 不再使用。批注使用与 document/graph/notes 同一 abort signal 和 generation guard 独立加载，未替换既有 notes 请求路径。
 - `GET /api/papers/{paper_id}/annotations` 现以可选的 additive `anchors` 字段返回所有文本锚点；前端在新旧服务端响应间兼容空 anchors，并将矩形并集统一转换为 `SourceTarget`。这让手写或生成、但未创建高亮的笔记在刷新后仍可显示原文并定位。
 - Task 7 的 `GraphBuildInput` 与完整 `AskAgentInput` 均强制 `model_profile_id` 和 `request_id`。工作区在每个聊天或图谱构建请求内部使用 `crypto.randomUUID()`，因此不再发送旧的空 POST body。
-- 当前模型选择器只存在于固定 `ChatComposer`。切换模型不会重置同一回答范围下的会话；聊天、图谱构建和选区解释/翻译均使用这一选择。无模型时发送、两类图谱构建和选区辅助均禁用并给出中文提示。
+- 当前模型选择器只存在于固定 `ChatComposer`。切换模型不会重置当前会话；聊天、图谱构建和选区解释/翻译均使用这一选择。无模型时发送、两类图谱构建和选区辅助均禁用并给出中文提示。回答范围（仅基于论文/允许背景知识）选择已整体移除，Agent 固定仅基于论文作答，接口不再接受 `mode` 字段。
 - `问助手` 将当前 `TextAnchorDraft` 作为可移除附件写入聊天框并聚焦，不自动发送；成功后清除附件，失败保留以供重试。Agent 消息显示其不可变模型徽章，笔记引用与论文引用分开并可通过持久 anchor 或元素来源定位。
 - `ResizableSplit` 默认 62%，限制 45%–78%，持久化键为 `paper-agent:reader-split`；键盘左右键每次调整 2%。小于 880px 时显示论文/工具切换而不卸载任一子树。
 
@@ -143,7 +149,7 @@ npx tsc --noEmit --project tsconfig.app.json
 
 ## 9. 不可破坏的约束
 
-- MarkItDown 负责语义文本，PyMuPDF 负责 page/bbox/渲染；citation 几何不能依赖 MarkItDown。
+- Stage1（`pymupdf_stage1.py`）用 PyMuPDF span 字号/加粗启发式识别章节标题并组装段落，段落与 Stage0 文本块同源（`get_text` blocks/dict 分块一致），因此精确对齐；citation 几何不依赖任何 Markdown 中间产物。章节标题启发式：字号大于正文（比例阈值）、加粗、全大写、或整行命中标准章节标签（Abstract/References/编号标题等）；第 1 页首个正文字号行之前的内容视为标题/作者横幅，不作为章节。
 - Citation Guard 完成前，不向 UI 流式输出或持久化未经验证的论文回答。
 - API 密钥不进入数据库、响应、快照、缓存 key、日志或异常文本。
 - 模型档案和幂等锁只支持单服务进程；没有新设计前不宣称多 worker 安全。

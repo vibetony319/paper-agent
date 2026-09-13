@@ -1,5 +1,4 @@
 import type {
-  AgentMode,
   AgentMessage,
   DocumentElement,
   Highlight,
@@ -26,7 +25,6 @@ export const initialWorkspaceState: WorkspaceState = {
   activeSource: null,
   graphFocusNodeId: null,
   conversationId: null,
-  conversationMode: null,
   messages: [],
   exchanges: [],
   errorMessage: null,
@@ -62,7 +60,6 @@ export type WorkspaceAction =
     paperId: string;
     loadRevision: number;
     conversationId: string;
-    mode: AgentMode;
     question: string;
     message: AgentMessage;
   }
@@ -73,6 +70,13 @@ export type WorkspaceAction =
   | { type: 'selection/clear' }
   | {
     type: 'highlight/created';
+    paperId: string;
+    loadRevision: number;
+    mutationGeneration: number;
+    highlight: Highlight;
+  }
+  | {
+    type: 'highlight/updated';
     paperId: string;
     loadRevision: number;
     mutationGeneration: number;
@@ -178,7 +182,6 @@ export function workspaceReducer(
         ? {
           ...state,
           conversationId: action.conversationId,
-          conversationMode: action.mode,
           messages: [...state.messages, action.message],
           exchanges: [...state.exchanges, { question: action.question, message: action.message }],
           errorMessage: null,
@@ -213,6 +216,16 @@ export function workspaceReducer(
           highlightsMutationGeneration: action.mutationGeneration,
           selection: null,
           errorMessage: null,
+        }
+        : state;
+    case 'highlight/updated':
+      return isCurrentLoad(state, action.paperId, action.loadRevision)
+        ? {
+          ...state,
+          highlights: state.highlights.map((highlight) => (
+            highlight.id === action.highlight.id ? action.highlight : highlight
+          )),
+          highlightsMutationGeneration: action.mutationGeneration,
         }
         : state;
     case 'highlight/deleted':

@@ -1,11 +1,12 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const pdf = vi.hoisted(() => {
   const viewport = { width: 612, height: 792 };
   const render = vi.fn(() => ({ cancel: vi.fn(), promise: Promise.resolve() }));
+  const getViewport = vi.fn(() => viewport);
   const getPage = vi.fn(() => Promise.resolve({
-    getViewport: vi.fn(() => viewport),
+    getViewport,
     render,
     streamTextContent: vi.fn(() => ({ getReader: vi.fn() })),
   }));
@@ -15,7 +16,7 @@ const pdf = vi.hoisted(() => {
     return { render: vi.fn(() => Promise.resolve()), cancel: vi.fn() };
   });
 
-  return { TextLayer, destroy, getDocument, getPage, render };
+  return { TextLayer, destroy, getDocument, getPage, getViewport, render };
 });
 
 vi.mock('pdfjs-dist', () => ({
@@ -156,6 +157,97 @@ it('does not load PDF.js when the paper has no parsed pages', () => {
   expect(pdf.getDocument).not.toHaveBeenCalled();
   expect(screen.getByRole('link', { name: '打开原始 PDF' }))
     .toHaveAttribute('href', '/api/papers/paper-a/source');
+});
+
+it('expands the section card from the left-edge handle and scrolls to the chosen section', async () => {
+  render(
+    <PdfReader
+      paperId="paper-a"
+      pages={manyPages}
+      activeSource={null}
+      onSourceCleared={vi.fn()}
+      sectionsTitle="章节导航"
+      sections={[
+        { id: 'sec-1', title: 'Introduction', pageNumber: 1 },
+        { id: 'sec-2', title: 'Methods', pageNumber: 3 },
+        { id: 'sec-3', title: 'Unlocated Section', pageNumber: null },
+      ]}
+    />,
+  );
+
+  const handle = screen.getByRole('button', { name: '展开章节导航' });
+  fireEvent.click(handle);
+
+  const card = screen.getByRole('navigation', { name: '章节导航' });
+  expect(screen.queryByRole('button', { name: '展开章节导航' })).not.toBeInTheDocument();
+  expect(within(card).getByRole('button', { name: /Introduction/ })).toBeEnabled();
+  expect(within(card).getByRole('button', { name: /Unlocated Section/ })).toBeDisabled();
+
+  fireEvent.click(within(card).getByRole('button', { name: /Methods/ }));
+  await waitFor(() => expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalledWith(
+    expect.objectContaining({ block: 'start' }),
+  ));
+
+  fireEvent.click(within(card).getByRole('button', { name: '收起导航' }));
+  expect(screen.queryByRole('navigation', { name: '章节导航' })).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '展开章节导航' })).toHaveFocus();
+});
+
+it('hides the navigation handle when no navigation entries exist', () => {
+  render(<PdfReader paperId="paper-a" pages={manyPages} activeSource={null} onSourceCleared={vi.fn()} />);
+
+  expect(screen.queryByRole('button', { name: '展开章节导航' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: '展开页面导航' })).not.toBeInTheDocument();
+});
+
+it('zooms the paper from the reader controls', () => {
+  render(<PdfReader paperId="paper-a" pages={manyPages} activeSource={null} onSourceCleared={vi.fn()} />);
+
+  const zoomGroup = screen.getByRole('group', { name: '缩放控制' });
+  expect(zoomGroup).toHaveTextContent('100%');
+  expect(screen.getByRole('button', { name: '适配宽度' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: '放大' })).toBeEnabled();
+  expect(screen.getByRole('button', { name: '缩小' })).toBeEnabled();
+
+  fireEvent.click(screen.getByRole('button', { name: '放大' }));
+  expect(zoomGroup).toHaveTextContent('125%');
+  expect(screen.getByRole('button', { name: '适配宽度' })).toBeEnabled();
+
+  fireEvent.click(screen.getByRole('button', { name: '缩小' }));
+  expect(zoomGroup).toHaveTextContent('100%');
+
+  fireEvent.click(screen.getByRole('button', { name: '缩小' }));
+  expect(zoomGroup).toHaveTextContent('75%');
+
+  fireEvent.click(screen.getByRole('button', { name: '适配宽度' }));
+  expect(zoomGroup).toHaveTextContent('100%');
+});
+
+it('zooms with keyboard shortcuts and ctrl + wheel', () => {
+  render(<PdfReader paperId="paper-a" pages={manyPages} activeSource={null} onSourceCleared={vi.fn()} />);
+  const reader = screen.getByLabelText('论文阅读器');
+  const zoomGroup = screen.getByRole('group', { name: '缩放控制' });
+
+  fireEvent.keyDown(reader, { key: '=', ctrlKey: true });
+  expect(zoomGroup).toHaveTextContent('125%');
+
+  fireEvent.wheel(reader, { deltaY: -120, ctrlKey: true });
+  expect(zoomGroup).toHaveTextContent('150%');
+
+  fireEvent.keyDown(reader, { key: '-', ctrlKey: true });
+  expect(zoomGroup).toHaveTextContent('125%');
+
+  fireEvent.keyDown(reader, { key: '0', ctrlKey: true });
+  expect(zoomGroup).toHaveTextContent('100%');
+});
+
+it('passes the zoom factor into the rendered page viewport', async () => {
+  render(<PdfReader paperId="paper-a" pages={manyPages} activeSource={null} onSourceCleared={vi.fn()} />);
+  await screen.findByTestId('pdf-text-layer-1');
+
+  fireEvent.click(screen.getByRole('button', { name: '放大' }));
+
+  await waitFor(() => expect(pdf.getViewport).toHaveBeenCalledWith({ scale: 1.25 }));
 });
 
 it('clears an active evidence target through the workspace callback', () => {

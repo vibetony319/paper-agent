@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 
 import { paperApi } from '../api/client';
-import type { Highlight, Page, TextAnchorDraft } from '../api/types';
+import type { Highlight, HighlightColor, Page, TextAnchorDraft } from '../api/types';
 import { getDocument } from '../pdfjs';
 import type { SourceTarget, WorkspaceState } from '../workspace/types';
 import { PdfPageView } from './PdfPageView';
@@ -11,6 +11,12 @@ import { SelectionToolbar, type SelectionToolbarAction } from './SelectionToolba
 import { InlineAssistantPopover } from './InlineAssistantPopover';
 import { ManualNotePopover } from './ManualNotePopover';
 import type { SelectionAssistAction } from '../api/types';
+
+export interface SectionNavEntry {
+  id: string;
+  title: string;
+  pageNumber: number | null;
+}
 
 type PdfReaderProps = {
   paperId: string;
@@ -23,6 +29,9 @@ type PdfReaderProps = {
   onSelectionClear?: () => void;
   onCreateHighlight?: () => void;
   onDeleteHighlight?: (highlightId: string) => void;
+  onChangeHighlightColor?: (highlightId: string, color: HighlightColor) => void;
+  sections?: SectionNavEntry[];
+  sectionsTitle?: string;
   selectionActions?: Partial<Record<Exclude<SelectionToolbarAction, 'highlight'>, (draft: TextAnchorDraft) => void>>;
   selectedModelProfileId?: string | null;
   runSelectionAssist?: React.ComponentProps<typeof InlineAssistantPopover>['runSelectionAssist'];
@@ -30,6 +39,25 @@ type PdfReaderProps = {
 };
 
 type ReaderStatus = 'loading' | 'ready' | 'error';
+
+const ZOOM_STEPS = [0.5, 0.75, 1, 1.25, 1.5, 2, 2.5, 3] as const;
+const ZOOM_EPSILON = 1e-9;
+const MIN_ZOOM = ZOOM_STEPS[0];
+const MAX_ZOOM = ZOOM_STEPS[ZOOM_STEPS.length - 1];
+
+function nextZoom(current: number, direction: 1 | -1): number {
+  if (direction > 0) {
+    return ZOOM_STEPS.find((step) => step > current + ZOOM_EPSILON) ?? current;
+  }
+  for (let index = ZOOM_STEPS.length - 1; index >= 0; index -= 1) {
+    if (ZOOM_STEPS[index] < current - ZOOM_EPSILON) return ZOOM_STEPS[index];
+  }
+  return current;
+}
+
+function formatZoom(zoom: number): string {
+  return `${Math.round(zoom * 100)}%`;
+}
 
 function sortedPages(pages: Page[]): Page[] {
   return [...pages].sort((left, right) => left.number - right.number);
@@ -56,6 +84,9 @@ export function PdfReader({
   onSelectionClear,
   onCreateHighlight,
   onDeleteHighlight,
+  onChangeHighlightColor,
+  sections = [],
+  sectionsTitle = '章节导航',
   selectionActions,
   selectedModelProfileId = null,
   runSelectionAssist,
@@ -68,10 +99,33 @@ export function PdfReader({
   const [status, setStatus] = useState<ReaderStatus>('loading');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [visiblePages, setVisiblePages] = useState<Set<number>>(() => new Set(pageNumbers.slice(0, 1)));
+  const [zoom, setZoom] = useState(1);
   const [assistAction, setAssistAction] = useState<SelectionAssistAction | null>(null);
   const [manualNoteTarget, setManualNoteTarget] = useState<{ draft: TextAnchorDraft; rect: DOMRect } | null>(null);
+  const [sectionsOpen, setSectionsOpen] = useState(false);
+  const sectionsToggleRef = useRef<HTMLButtonElement | null>(null);
+  const wasSectionsOpen = useRef(false);
   const pageShells = useRef(new Map<number, HTMLDivElement>());
   const readerRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    // The handle remounts only after the collapse renders, so restore focus then.
+    if (wasSectionsOpen.current && !sectionsOpen) {
+      sectionsToggleRef.current?.focus();
+    }
+    wasSectionsOpen.current = sectionsOpen;
+  }, [sectionsOpen]);
+
+  const scrollToPage = useCallback((pageNumber: number) => {
+    const target = pageShells.current.get(pageNumber);
+    if (target === undefined) return;
+    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    target.scrollIntoView({ block: 'start', behavior: reducedMotion ? 'auto' : 'smooth' });
+  }, []);
+
+  const closeSections = useCallback(() => {
+    setSectionsOpen(false);
+  }, []);
 
   const clearTemporarySelection = useCallback(() => {
     const selectedPage = selection === null
@@ -94,6 +148,24 @@ export function PdfReader({
     if (result.ok) onSelectionSet?.(result.draft, result.toolbarRect);
     else onSelectionClear?.();
   }, [onSelectionClear, onSelectionSet]);
+
+  const shiftZoom = useCallback((direction: 1 | -1) => {
+    setZoom((current) => nextZoom(current, direction));
+  }, []);
+
+  const resetZoom = useCallback(() => setZoom(1), []);
+
+  useEffect(() => {
+    const reader = readerRef.current;
+    if (reader === null) return undefined;
+    const onWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey && !event.metaKey) return;
+      event.preventDefault();
+      setZoom((current) => nextZoom(current, event.deltaY < 0 ? 1 : -1));
+    };
+    reader.addEventListener('wheel', onWheel, { passive: false });
+    return () => reader.removeEventListener('wheel', onWheel);
+  }, []);
 
   useEffect(() => {
     const onSelectionChange = () => captureSelection();
@@ -182,6 +254,19 @@ export function PdfReader({
         if (event.key === 'Escape' && selection !== null) {
           event.preventDefault();
           clearTemporarySelection();
+          return;
+        }
+        if (event.ctrlKey || event.metaKey) {
+          if (event.key === '=' || event.key === '+') {
+            event.preventDefault();
+            shiftZoom(1);
+          } else if (event.key === '-') {
+            event.preventDefault();
+            shiftZoom(-1);
+          } else if (event.key === '0') {
+            event.preventDefault();
+            resetZoom();
+          }
         }
       }}
     >
@@ -190,14 +275,45 @@ export function PdfReader({
           <p className="pdf-reader__eyebrow">原始论文</p>
           <h2>PDF 阅读</h2>
         </div>
-        <a
-          className="pdf-reader__source-link"
-          href={paperApi.getSourceUrl(paperId)}
-          target="_blank"
-          rel="noreferrer"
-        >
-          打开原始 PDF
-        </a>
+        <div className="pdf-reader__toolbar">
+          {orderedPages.length > 0 ? (
+            <div className="pdf-reader__zoom" role="group" aria-label="缩放控制">
+              <button
+                type="button"
+                onClick={() => shiftZoom(-1)}
+                disabled={zoom <= MIN_ZOOM}
+                aria-label="缩小"
+              >
+                −
+              </button>
+              <span className="pdf-reader__zoom-level" aria-live="polite">{formatZoom(zoom)}</span>
+              <button
+                type="button"
+                onClick={() => shiftZoom(1)}
+                disabled={zoom >= MAX_ZOOM}
+                aria-label="放大"
+              >
+                ＋
+              </button>
+              <button
+                type="button"
+                className="pdf-reader__zoom-reset"
+                onClick={resetZoom}
+                disabled={zoom === 1}
+              >
+                适配宽度
+              </button>
+            </div>
+          ) : null}
+          <a
+            className="pdf-reader__source-link"
+            href={paperApi.getSourceUrl(paperId)}
+            target="_blank"
+            rel="noreferrer"
+          >
+            打开原始 PDF
+          </a>
+        </div>
       </header>
 
       {activeSource !== null ? (
@@ -210,7 +326,51 @@ export function PdfReader({
       {orderedPages.length === 0 ? (
         <p className="pdf-reader__empty">这篇论文没有可用的页面。</p>
       ) : (
-        <div className="pdf-reader__pages" aria-busy={status === 'loading'}>
+        <div className="pdf-reader__scroll-area">
+          {sections.length > 0 ? (
+            <div className="pdf-reader__section-rail">
+              {sectionsOpen ? (
+                <nav id="pdf-section-nav" className="pdf-reader__section-card" aria-label={sectionsTitle}>
+                  <div className="pdf-reader__section-card-head">
+                    <h3>{sectionsTitle}</h3>
+                    <button type="button" aria-label="收起导航" onClick={closeSections}>收起</button>
+                  </div>
+                  <ol className="pdf-reader__section-list">
+                    {sections.map((entry) => (
+                      <li key={entry.id}>
+                        <button
+                          type="button"
+                          disabled={entry.pageNumber === null}
+                          title={entry.pageNumber === null ? '该章节没有可定位的页面' : undefined}
+                          onClick={() => {
+                            if (entry.pageNumber !== null) scrollToPage(entry.pageNumber);
+                          }}
+                        >
+                          <span className="pdf-reader__section-title">{entry.title}</span>
+                          {entry.pageNumber !== null && entry.title !== `第 ${entry.pageNumber} 页` ? (
+                            <span className="pdf-reader__section-page">第 {entry.pageNumber} 页</span>
+                          ) : null}
+                        </button>
+                      </li>
+                    ))}
+                  </ol>
+                </nav>
+              ) : (
+                <button
+                  ref={sectionsToggleRef}
+                  type="button"
+                  className="pdf-reader__section-handle"
+                  aria-label={`展开${sectionsTitle}`}
+                  aria-expanded={false}
+                  aria-controls="pdf-section-nav"
+                  onClick={() => setSectionsOpen(true)}
+                >
+                  ❯
+                </button>
+              )}
+            </div>
+          ) : null}
+          <div className="pdf-reader__pages" aria-busy={status === 'loading'}>
           {status === 'loading' ? <p className="pdf-reader__status" role="status">正在加载原始 PDF…</p> : null}
           {status === 'error' ? <p className="pdf-reader__error" role="alert">{errorMessage}</p> : null}
           {orderedPages.map((page) => {
@@ -227,7 +387,12 @@ export function PdfReader({
                 className="pdf-reader__page-shell"
                 data-testid={`pdf-page-shell-${page.number}`}
                 data-pdf-page-number={page.number}
-                style={{ aspectRatio: `${page.width} / ${page.height}` }}
+                style={{
+                  aspectRatio: `${page.width} / ${page.height}`,
+                  // Reserve at most the rendered page width; a full-width shell
+                  // would blow the aspect-ratio height up on wide panes.
+                  minWidth: `min(100%, calc(${page.width}px + 2rem))`,
+                }}
               >
                 {pdfDocument !== null && isActive ? (
                   <PdfPageView
@@ -236,6 +401,7 @@ export function PdfReader({
                     active
                     overlays={overlays}
                     highlights={pageHighlights}
+                    zoom={zoom}
                     onHighlightNote={onCreateSelectionNote === undefined ? undefined : (highlight, rect) => {
                       setManualNoteTarget({ rect, draft: {
                         quote: highlight.anchor.quote,
@@ -245,11 +411,13 @@ export function PdfReader({
                       } });
                     }}
                     onHighlightDeleted={(highlightId) => onDeleteHighlight?.(highlightId)}
+                    onHighlightColorChange={onChangeHighlightColor}
                   />
                 ) : null}
               </div>
             );
           })}
+          </div>
         </div>
       )}
       {selection !== null ? (

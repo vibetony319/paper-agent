@@ -1,6 +1,7 @@
 import pytest
 
 from paper_agent.annotations import (
+    HIGHLIGHT_COLORS,
     Highlight,
     TextAnchor,
     TextAnchorDraft,
@@ -69,5 +70,8 @@ def test_highlight_rejects_unknown_color() -> None:
         rects=(_rect(0),),
     )
 
-    with pytest.raises(ValueError, match="yellow"):
-        Highlight(anchor=anchor, color="green")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="color"):
+        Highlight(anchor=anchor, color="purple")
+
+    for color in HIGHLIGHT_COLORS:
+        assert Highlight(anchor=anchor, color=color).color == color

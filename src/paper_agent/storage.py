@@ -33,7 +33,6 @@ from paper_agent.database import (
 )
 from paper_agent.domain import (
     AgentMessageRole,
-    AgentMode,
     BoundingBox,
     CitationSnapshot,
     Conversation,
@@ -457,7 +456,9 @@ class PaperRepository:
                 insert(conversations).values(
                     id=conversation.id,
                     paper_id=conversation.paper_id,
-                    mode=conversation.mode.value,
+                    # Legacy NOT NULL column kept for existing databases; the
+                    # answer-scope feature it stored has been removed.
+                    mode="paper_only",
                 )
             )
         return conversation
@@ -1623,9 +1624,7 @@ class PaperRepository:
 
     @staticmethod
     def _conversation_from_row(row) -> Conversation:
-        return Conversation(
-            id=row["id"], paper_id=row["paper_id"], mode=AgentMode(row["mode"])
-        )
+        return Conversation(id=row["id"], paper_id=row["paper_id"])
 
     @staticmethod
     def _conversation_message_from_row(

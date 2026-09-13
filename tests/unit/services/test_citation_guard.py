@@ -1,7 +1,5 @@
 import pytest
 
-from paper_agent.domain import AgentMode
-
 
 CANONICAL_INSUFFICIENT_EVIDENCE = (
     "I could not find enough evidence in this paper to answer that reliably."
@@ -30,7 +28,6 @@ def test_guard_replaces_an_unsupported_paper_answer_with_a_safe_refusal():
             "citation_element_ids": ["invented-element"],
             "background_explanation": None,
         },
-        mode=AgentMode.paper_only,
         allowed_evidence_ids=frozenset({"e1"}),
     )
 
@@ -47,7 +44,6 @@ def test_guard_returns_grounded_answer_for_unique_allowed_citations():
 
     answer = CitationGuard().validate(
         _grounded_payload(citations=["e2", "e1"]),
-        mode=AgentMode.paper_only,
         allowed_evidence_ids=frozenset({"e1", "e2"}),
     )
 
@@ -64,7 +60,6 @@ def test_guard_replaces_answers_without_a_nonempty_unique_citation_set(citations
 
     answer = CitationGuard().validate(
         _grounded_payload(citations=citations),
-        mode=AgentMode.paper_only,
         allowed_evidence_ids=frozenset({"e1"}),
     )
 
@@ -79,7 +74,6 @@ def test_guard_rejects_blank_evidence_ids_even_if_a_bad_allow_list_contains_them
 
     answer = CitationGuard().validate(
         _grounded_payload(citations=["   "]),
-        mode=AgentMode.paper_only,
         allowed_evidence_ids=frozenset({"   "}),
     )
 
@@ -88,27 +82,12 @@ def test_guard_rejects_blank_evidence_ids_even_if_a_bad_allow_list_contains_them
     assert answer.citation_element_ids == ()
 
 
-def test_external_mode_keeps_background_separate_from_cited_paper_answer():
-    """Breaks if external background is dropped or merged into the paper answer."""
-    from paper_agent.services.citation_guard import CitationGuard
-
-    answer = CitationGuard().validate(
-        _grounded_payload(citations=["e1"], background="  General background.  "),
-        mode=AgentMode.external_knowledge,
-        allowed_evidence_ids=frozenset({"e1"}),
-    )
-
-    assert answer.paper_answer == "The paper reports the measured result."
-    assert answer.background_explanation == "General background."
-
-
-def test_paper_only_background_causes_a_safe_refusal():
-    """Breaks if paper-only responses can expose uncited background prose."""
+def test_background_explanation_causes_a_safe_refusal():
+    """Breaks if uncited background prose can reach the user."""
     from paper_agent.services.citation_guard import CitationGuard
 
     answer = CitationGuard().validate(
         _grounded_payload(citations=["e1"], background="Outside the paper."),
-        mode=AgentMode.paper_only,
         allowed_evidence_ids=frozenset({"e1"}),
     )
 
@@ -129,7 +108,6 @@ def test_insufficient_evidence_status_discards_all_model_prose():
             "citation_element_ids": ["e1"],
             "background_explanation": "Unverified background.",
         },
-        mode=AgentMode.external_knowledge,
         allowed_evidence_ids=frozenset({"e1"}),
     )
 
@@ -150,7 +128,6 @@ def test_insufficient_evidence_status_ignores_blank_model_content():
             "citation_element_ids": [],
             "background_explanation": "   ",
         },
-        mode=AgentMode.paper_only,
         allowed_evidence_ids=frozenset(),
     )
 
@@ -170,7 +147,6 @@ def test_invalid_contract_raises_a_sanitized_error_without_model_content():
     with pytest.raises(CitationGuardError) as error:
         CitationGuard().validate(
             payload,
-            mode=AgentMode.paper_only,
             allowed_evidence_ids=frozenset({"e1"}),
         )
 

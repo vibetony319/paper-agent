@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { PDFDocumentProxy, PDFPageProxy, RenderTask } from 'pdfjs-dist';
 
-import type { Highlight, Page } from '../api/types';
+import type { Highlight, HighlightColor, Page } from '../api/types';
 import { TextLayer } from '../pdfjs';
 import type { SourceTarget } from '../workspace/types';
 import { sourceOverlayStyle } from './pdfGeometry';
@@ -13,8 +13,10 @@ type PdfPageViewProps = {
   active: boolean;
   overlays: SourceTarget[];
   highlights?: Highlight[];
+  zoom?: number;
   onHighlightNote?: (highlight: Highlight, rect: DOMRect) => void;
   onHighlightDeleted?: (highlightId: string) => void;
+  onHighlightColorChange?: (highlightId: string, color: HighlightColor) => void;
 };
 
 function isRenderCancellation(error: unknown): boolean {
@@ -25,8 +27,26 @@ function pageShellFor(surface: HTMLElement): HTMLElement | null {
   return surface.closest('.pdf-reader__page-shell');
 }
 
+function measurableContainer(surface: HTMLElement): HTMLElement | null {
+  return surface.closest<HTMLElement>('.pdf-reader__pages')
+    ?? pageShellFor(surface)
+    ?? surface.parentElement;
+}
+
+function horizontalPaddingOf(element: HTMLElement | null): number {
+  if (element === null) return 0;
+  const styles = window.getComputedStyle(element);
+  const padding = Number.parseFloat(styles.paddingLeft) + Number.parseFloat(styles.paddingRight);
+  return Number.isFinite(padding) ? padding : 0;
+}
+
+function contentWidthOf(element: HTMLElement): number {
+  const width = element.clientWidth - horizontalPaddingOf(element);
+  return width > 0 ? width : 0;
+}
+
 export function PdfPageView({
-  document, page, active, overlays, highlights = [], onHighlightNote = () => undefined, onHighlightDeleted = () => undefined,
+  document, page, active, overlays, highlights = [], zoom = 1, onHighlightNote = () => undefined, onHighlightDeleted = () => undefined, onHighlightColorChange,
 }: PdfPageViewProps) {
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -38,12 +58,20 @@ export function PdfPageView({
   useEffect(() => {
     if (!active || typeof ResizeObserver === 'undefined') return undefined;
     const surface = surfaceRef.current;
-    const target = surface === null ? null : pageShellFor(surface) ?? surface.parentElement;
+    if (surface === null) return undefined;
+    const target = measurableContainer(surface);
     if (target === null || target === undefined) return undefined;
 
     const resizeObserver = new ResizeObserver((entries) => {
-      const width = entries[0]?.contentRect.width;
-      if (width !== undefined && width > 0) setContainerWidth(width);
+      const entry = entries[0];
+      if (entry === undefined || entry.contentRect === undefined) return;
+      const entryTarget = entry.target instanceof HTMLElement ? entry.target : null;
+      // The pages container keeps a stable width while zoomed pages overflow it,
+      // so derive the fit width from it and discount the page shell gutter.
+      const width = entryTarget !== null && entryTarget.classList.contains('pdf-reader__pages')
+        ? entry.contentRect.width - horizontalPaddingOf(pageShellFor(surface))
+        : entry.contentRect.width;
+      if (width > 0) setContainerWidth(width);
     });
     resizeObserver.observe(target);
     return () => resizeObserver.disconnect();
@@ -69,10 +97,12 @@ export function PdfPageView({
         if (canvas === null || textContainer === null || surface === null) return;
 
         const baseViewport = pdfPage.getViewport({ scale: 1 });
-        const availableWidth = containerWidth ?? pageShellFor(surface)?.clientWidth ?? surface.clientWidth;
-        const scale = availableWidth > 0 && availableWidth < baseViewport.width
+        const target = measurableContainer(surface);
+        const availableWidth = containerWidth ?? (target === null ? 0 : contentWidthOf(target));
+        const fitScale = availableWidth > 0 && availableWidth < baseViewport.width
           ? availableWidth / baseViewport.width
           : 1;
+        const scale = fitScale * zoom;
         const viewport = pdfPage.getViewport({ scale });
         const pixelRatio = window.devicePixelRatio || 1;
         const context = canvas.getContext('2d');
@@ -129,7 +159,7 @@ export function PdfPageView({
       textLayer?.cancel();
       renderTask?.cancel();
     };
-  }, [active, containerWidth, document, page.number]);
+  }, [active, containerWidth, document, page.number, zoom]);
 
   return (
     <div className="pdf-page-view" data-pdf-page={page.number} tabIndex={-1}>
@@ -140,6 +170,7 @@ export function PdfPageView({
           highlights={highlights}
           onAddNote={onHighlightNote}
           onDeleteHighlight={onHighlightDeleted}
+          onChangeColor={onHighlightColorChange}
         />
         {overlays.map((overlay) => (
           <div

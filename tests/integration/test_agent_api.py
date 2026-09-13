@@ -19,7 +19,6 @@ from paper_agent.database import (
 )
 from paper_agent.domain import (
     AgentMessageRole,
-    AgentMode,
     BoundingBox,
     Conversation,
     ConversationMessage,
@@ -186,14 +185,12 @@ class RepositoryAwareReasoningProvider:
 def _agent_payload(
     content: str = "Question",
     *,
-    mode: str = "paper_only",
     conversation_id: str | None = None,
     model_profile_id: str = DEFAULT_PROFILE_ID,
     request_id: str | None = None,
 ) -> dict[str, str]:
     payload = {
         "content": content,
-        "mode": mode,
         "model_profile_id": model_profile_id,
         "request_id": request_id or str(uuid4()),
     }
@@ -373,7 +370,6 @@ def test_agent_returns_locatable_same_paper_citations_without_paths(
 
     assert history.status_code == 200
     assert history.json()["paper_id"] == uploaded_paper.id
-    assert history.json()["mode"] == "paper_only"
     assert history.json()["messages"][-1]["id"] == body["message_id"]
     assert history.json()["messages"][-1]["citations"] == body["citations"]
 
@@ -498,14 +494,13 @@ def test_complete_duplicate_replays_background_citation_order_and_original_geome
             "status": "grounded",
             "paper_answer": "Ordered answer.",
             "citation_element_ids": [second.id, uploaded_paper.element_id],
-            "background_explanation": "Stable external background.",
+            "background_explanation": None,
         },
     )
     provider = _configure_fake_agent_runtime(client.app, fake)
     request_id = "20000000-0000-0000-0000-000000000030"
     payload = _agent_payload(
         "Explain with context.",
-        mode="external_knowledge",
         request_id=request_id,
     )
 
@@ -528,7 +523,7 @@ def test_complete_duplicate_replays_background_citation_order_and_original_geome
 
     assert replay.status_code == 200
     assert replay.json() == first.json()
-    assert first.json()["background_explanation"] == "Stable external background."
+    assert first.json()["background_explanation"] is None
     assert [citation["id"] for citation in first.json()["citations"]] == [
         second.id,
         uploaded_paper.element_id,
@@ -911,14 +906,14 @@ def test_partial_retry_maps_unusable_original_profile_to_stable_conflict(
 
 @pytest.mark.parametrize(
     "conflict",
-    ("content", "conversation", "model", "mode"),
+    ("content", "conversation", "model"),
 )
 def test_partial_retry_rejects_rebinding_original_request_state(
     client: TestClient,
     uploaded_paper: UploadedPaper,
     conflict: str,
 ) -> None:
-    """Breaks if user-only recovery rebinds content, conversation, model, or mode."""
+    """Breaks if user-only recovery rebinds content, conversation, or model."""
     request_id = "20000000-0000-0000-0000-000000000013"
     _configure_fake_agent_runtime(
         client.app,
@@ -929,7 +924,7 @@ def test_partial_retry_rejects_rebinding_original_request_state(
         f"/api/papers/{uploaded_paper.id}/agent/messages", json=original
     ).status_code == 502
     other_conversation = client.app.state.paper_repository.create_conversation(
-        Conversation(paper_id=uploaded_paper.id, mode=AgentMode.paper_only)
+        Conversation(paper_id=uploaded_paper.id)
     )
     retry_client = FakeAgentClient()
     _configure_fake_agent_models(
@@ -944,10 +939,8 @@ def test_partial_retry_rejects_rebinding_original_request_state(
         retry["content"] = "Changed"
     elif conflict == "conversation":
         retry["conversation_id"] = other_conversation.id
-    elif conflict == "model":
-        retry["model_profile_id"] = SECOND_PROFILE_ID
     else:
-        retry["mode"] = "external_knowledge"
+        retry["model_profile_id"] = SECOND_PROFILE_ID
 
     response = client.post(
         f"/api/papers/{uploaded_paper.id}/agent/messages", json=retry
@@ -965,7 +958,7 @@ def test_conversation_history_exposes_legacy_model_as_null(
     """Breaks if pre-provenance rows become unreadable through the conversation API."""
     repository = client.app.state.paper_repository
     conversation = repository.create_conversation(
-        Conversation(paper_id=uploaded_paper.id, mode=AgentMode.paper_only)
+        Conversation(paper_id=uploaded_paper.id)
     )
     repository.append_conversation_message(
         ConversationMessage(
@@ -1011,7 +1004,7 @@ def test_conversation_get_batches_unique_cited_elements_once(
     """Breaks if each returned message materializes the paper's full element set."""
     repository = client.app.state.paper_repository
     conversation = repository.create_conversation(
-        Conversation(paper_id=uploaded_paper.id, mode=AgentMode.paper_only)
+        Conversation(paper_id=uploaded_paper.id)
     )
     messages = (
         ConversationMessage(
@@ -1094,7 +1087,7 @@ def test_conversation_get_does_not_lookup_elements_for_user_only_messages(
     """Breaks if citation DTO construction performs element reads for user messages."""
     repository = client.app.state.paper_repository
     conversation = repository.create_conversation(
-        Conversation(paper_id=uploaded_paper.id, mode=AgentMode.paper_only)
+        Conversation(paper_id=uploaded_paper.id)
     )
     for content in ("First question", "Second question"):
         repository.append_conversation_message(
@@ -1170,19 +1163,12 @@ def test_agent_maps_resource_validation_and_model_failures_to_safe_boundaries(
         f"/api/papers/{other_paper.id}/agent/messages",
         json=_agent_payload(conversation_id=conversation_id),
     ).status_code == 404
-    assert client.post(
-        f"/api/papers/{uploaded_paper.id}/agent/messages",
-        json=_agent_payload(
-            mode="external_knowledge", conversation_id=conversation_id
-        ),
-    ).status_code == 409
 
     for payload in (
         _agent_payload(""),
-        _agent_payload(mode="unsupported"),
         _agent_payload(conversation_id="not-a-uuid"),
         {**_agent_payload(), "unexpected": "field"},
-        {"content": "Question", "mode": "paper_only"},
+        {**_agent_payload(), "mode": "paper_only"},
     ):
         assert client.post(
             f"/api/papers/{uploaded_paper.id}/agent/messages", json=payload

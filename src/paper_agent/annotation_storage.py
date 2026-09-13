@@ -11,6 +11,7 @@ from sqlalchemy import delete, func, insert, select, update
 from sqlalchemy.engine import Connection, Engine
 
 from paper_agent.annotations import (
+    HIGHLIGHT_COLORS,
     Highlight,
     NoteType,
     TextAnchor,
@@ -77,8 +78,10 @@ class PaperAnnotationRepository:
         color: str = "yellow",
         request_id: str | None = None,
     ) -> Highlight:
-        if color != "yellow":
-            raise AnnotationInputError("highlight color must be yellow")
+        if color not in HIGHLIGHT_COLORS:
+            raise AnnotationInputError(
+                f"highlight color must be one of {', '.join(HIGHLIGHT_COLORS)}"
+            )
         with self.engine.begin() as connection:
             self._require_paper(connection, paper_id)
             self._require_draft_targets(connection, paper_id, draft)
@@ -177,6 +180,34 @@ class PaperAnnotationRepository:
                 .where(highlights.c.id == highlight_id)
             )
             return result.rowcount == 1
+
+    def update_highlight_color(
+        self, paper_id: str, highlight_id: str, color: str
+    ) -> Highlight | None:
+        if color not in HIGHLIGHT_COLORS:
+            raise AnnotationInputError(
+                f"highlight color must be one of {', '.join(HIGHLIGHT_COLORS)}"
+            )
+        with self.engine.begin() as connection:
+            self._require_paper(connection, paper_id)
+            row = connection.execute(
+                select(highlights)
+                .where(highlights.c.paper_id == paper_id)
+                .where(highlights.c.id == highlight_id)
+            ).mappings().first()
+            if row is None:
+                return None
+            connection.execute(
+                update(highlights)
+                .where(highlights.c.paper_id == paper_id)
+                .where(highlights.c.id == highlight_id)
+                .values(
+                    color=color,
+                    updated_at=_serialize_time(datetime.now(UTC)),
+                )
+            )
+            anchor = self._load_anchor(connection, row["anchor_id"])
+            return Highlight(anchor=anchor, color=color, id=highlight_id)
 
     def create_note(
         self,
@@ -282,6 +313,12 @@ class PaperAnnotationRepository:
         with self.engine.begin() as connection:
             if self._note_row(connection, paper_id, note_id) is None:
                 return False
+            connection.execute(
+                update(selection_assist_requests)
+                .where(selection_assist_requests.c.paper_id == paper_id)
+                .where(selection_assist_requests.c.note_id == note_id)
+                .values(note_id=None, updated_at=_serialize_time(datetime.now(UTC)))
+            )
             connection.execute(
                 delete(note_anchors)
                 .where(note_anchors.c.paper_id == paper_id)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+from jsonschema import Draft202012Validator
 from typing import TYPE_CHECKING, Any, Iterator
 
 if TYPE_CHECKING:
@@ -21,6 +22,38 @@ class VllmConfigurationError(ValueError):
 
 class VllmResponseError(RuntimeError):
     """Raised when vLLM does not provide a valid structured response."""
+
+
+def _json_completion(client, *, model, messages, schema_name, schema):
+    """Prefer native schema mode; only negotiate on explicit unsupported-format errors."""
+    from openai import BadRequestError
+
+    try:
+        response = client.chat.completions.create(
+            model=model, messages=messages, temperature=0,
+            response_format={"type": "json_schema", "json_schema": {
+                "name": schema_name, "schema": schema, "strict": True,
+            }},
+        )
+    except BadRequestError as error:
+        detail = json.dumps(error.body, ensure_ascii=False).lower()
+        if "json_schema" not in detail or not any(
+            term in detail for term in ("not supported", "unsupported", "does not support")
+        ):
+            raise
+        # Keep every source/tool message. The local schema and Citation Guard
+        # remain authoritative even when the provider only guarantees JSON syntax.
+        response = client.chat.completions.create(
+            model=model, temperature=0,
+            messages=[{"role": "system", "content":
+                       "Return only a JSON object matching this JSON Schema: " + json.dumps(schema)}] + list(messages),
+            response_format={"type": "json_object"},
+        )
+    result = json.loads(response.choices[0].message.content)
+    if not isinstance(result, dict):
+        raise ValueError("Expected a JSON object")
+    Draft202012Validator(schema).validate(result)
+    return result
 
 
 class VllmChatClient:
@@ -122,23 +155,13 @@ class VllmStructuredClient:
         failed = False
         result: object = None
         try:
-            response = self.client.chat.completions.create(
-                model=self.config.model,
-                messages=[
+            result = _json_completion(
+                self.client, model=self.config.model,
+                schema_name=schema_name, schema=schema, messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                temperature=0,
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": schema_name,
-                        "schema": schema,
-                        "strict": True,
-                    },
-                },
             )
-            result = json.loads(response.choices[0].message.content)
         except Exception:
             failed = True
         if failed:
@@ -202,20 +225,10 @@ class VllmToolCallingClient:
         failed = False
         result: object = None
         try:
-            response = self.client.chat.completions.create(
-                model=self.config.model,
-                messages=messages,
-                temperature=0,
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": schema_name,
-                        "schema": schema,
-                        "strict": True,
-                    },
-                },
+            result = _json_completion(
+                self.client, model=self.config.model, messages=messages,
+                schema_name=schema_name, schema=schema,
             )
-            result = json.loads(response.choices[0].message.content)
             if not isinstance(result, dict):
                 raise TypeError
         except Exception:
@@ -244,7 +257,7 @@ class VllmToolCallingClient:
             turn = self.request_tool_turn(
                 messages=[
                     {
-                        "role": "system",
+                        "role": "user",
                         "content": "Call paper_agent_tool_health with no arguments.",
                     }
                 ],

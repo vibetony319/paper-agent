@@ -267,6 +267,106 @@ def test_core_build_uses_located_text_blocks_when_a_section_has_no_located_parag
     assert section.title in client.requests[0]["user_prompt"]
 
 
+def test_core_build_groups_located_text_blocks_by_page_when_no_sections_exist(
+    repository: PaperRepository,
+) -> None:
+    """Breaks if a paper whose stage1 conversion found no sections builds an empty graph."""
+    paper = repository.create_paper(
+        original_filename="paper.pdf", stored_filename="paper.pdf"
+    )
+    repository.save_page(paper.id, Page(number=1, width=200, height=300))
+    repository.save_page(paper.id, Page(number=2, width=200, height=300))
+    first_block = repository.save_element(
+        paper.id,
+        DocumentElement(
+            id="text-block-1",
+            kind="text_block",
+            text="InfoGain-RAG filters uninformative documents.",
+            page_number=1,
+            bbox=BoundingBox(0, 0, 1, 0.2),
+        ),
+    )
+    second_block = repository.save_element(
+        paper.id,
+        DocumentElement(
+            id="text-block-2",
+            kind="text_block",
+            text="DIG scores measure information gain.",
+            page_number=2,
+            bbox=BoundingBox(0, 0, 1, 0.2),
+        ),
+    )
+    repository.record_processing_status(
+        paper.id, ProcessingStatus.completed, stage="stage1"
+    )
+    client = FakeStructuredClient(
+        [
+            {"nodes": [_node("n1", "problem", "Uninformative documents", [first_block.id])]},
+            {"nodes": [_node("n2", "method", "DIG scorer", [second_block.id])]},
+            {"edges": []},
+            {"edges": []},
+            {"edges": []},
+        ]
+    )
+
+    graph = GraphConstructionService(repository=repository).build_core(
+        paper.id,
+        client=client,
+        model_snapshot=_snapshot(),
+        request_id="request-no-sections",
+    )
+
+    assert {node.name for node in graph.nodes} == {
+        "Uninformative documents",
+        "DIG scorer",
+    }
+    assert [request["schema_name"] for request in client.requests] == [
+        "paper_graph_nodes",
+        "paper_graph_nodes",
+        "paper_graph_edges",
+        "paper_graph_edges",
+        "paper_graph_cross_section_edges",
+    ]
+    first_node_payload = json.loads(client.requests[0]["user_prompt"])
+    second_node_payload = json.loads(client.requests[1]["user_prompt"])
+    assert first_node_payload["section"] == {"title": "Page 1"}
+    assert second_node_payload["section"] == {"title": "Page 2"}
+    assert first_node_payload["source_elements"][0]["id"] == first_block.id
+    assert second_node_payload["source_elements"][0]["id"] == second_block.id
+    assert repository.get_latest_stage_status(paper.id, "stage2") == ProcessingStatus.completed
+
+
+def test_build_without_located_evidence_fails_instead_of_completing_empty(
+    repository: PaperRepository,
+) -> None:
+    """Breaks if a build with no usable evidence stores an empty graph as completed."""
+    paper = repository.create_paper(
+        original_filename="paper.pdf", stored_filename="paper.pdf"
+    )
+    repository.save_page(paper.id, Page(number=1, width=200, height=300))
+    repository.save_element(
+        paper.id,
+        DocumentElement.paragraph(
+            "No located evidence anywhere.",
+            location_status="unlocated",
+        ),
+    )
+    repository.record_processing_status(
+        paper.id, ProcessingStatus.completed, stage="stage1"
+    )
+
+    with pytest.raises(GraphBuildPrerequisiteError):
+        GraphConstructionService(repository=repository).build_core(
+            paper.id,
+            client=FakeStructuredClient([]),
+            model_snapshot=_snapshot(),
+            request_id="request-no-evidence",
+        )
+
+    assert repository.get_graph(paper.id).nodes == ()
+    assert repository.get_latest_stage_status(paper.id, "stage2") is ProcessingStatus.failed
+
+
 def test_deep_build_failure_keeps_completed_core_graph_and_marks_only_stage3_failed(
     repository: PaperRepository,
 ) -> None:

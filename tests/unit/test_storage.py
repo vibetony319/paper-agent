@@ -29,7 +29,6 @@ from paper_agent.database import (
 )
 from paper_agent.domain import (
     AgentMessageRole,
-    AgentMode,
     BoundingBox,
     Conversation,
     ConversationMessage,
@@ -671,7 +670,7 @@ def _paper_with_located_element(repository: PaperRepository, name: str):
 def _conversation_for_paper(repository: PaperRepository):
     paper, element = _paper_with_located_element(repository, "conversation")
     conversation = repository.create_conversation(
-        Conversation(paper_id=paper.id, mode=AgentMode.paper_only)
+        Conversation(paper_id=paper.id)
     )
     return paper, element, conversation
 
@@ -729,7 +728,7 @@ def _model_snapshot() -> ModelSnapshot:
 
 
 def test_repository_round_trips_paper_conversations_and_located_message_citations(repository):
-    """Breaks if conversation reads lose their mode, messages, or source-element citations."""
+    """Breaks if conversation reads lose their messages or source-element citations."""
     paper, element, conversation = _conversation_for_paper(repository)
     user = repository.append_conversation_message(_user_message(conversation, "Explain it."))
     assistant = repository.append_conversation_message(
@@ -1570,7 +1569,7 @@ def _fully_populated_paper(repository: PaperRepository) -> Paper:
     )
     note = repository.create_note(paper.id, Note(body="note body", page_number=1))
     conversation = repository.create_conversation(
-        Conversation(paper_id=paper.id, mode=AgentMode.paper_only)
+        Conversation(paper_id=paper.id)
     )
     user = repository.append_conversation_message(
         ConversationMessage(

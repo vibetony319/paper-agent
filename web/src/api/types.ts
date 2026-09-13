@@ -1,5 +1,4 @@
 export type ProcessingStatus = 'queued' | 'running' | 'completed' | 'partial' | 'failed';
-export type AgentMode = 'paper_only' | 'external_knowledge';
 export type AgentMessageRole = 'user' | 'assistant';
 export type NoteType = 'manual' | 'explanation' | 'translation';
 
@@ -62,15 +61,21 @@ export interface TextAnchorDraft {
   element_id?: string;
 }
 
+export type HighlightColor = 'yellow' | 'green' | 'blue' | 'pink';
+
 export interface Highlight {
   id: string;
-  color: 'yellow';
+  color: HighlightColor;
   anchor: TextAnchor;
 }
 
 export interface CreateHighlightInput extends TextAnchorDraft {
-  color?: 'yellow';
+  color?: HighlightColor;
   request_id: string;
+}
+
+export interface UpdateHighlightInput {
+  color: HighlightColor;
 }
 
 export interface AnnotationBundle {
@@ -224,7 +229,6 @@ export interface ConversationMessage {
 export interface Conversation {
   id: string;
   paper_id: string;
-  mode: AgentMode;
   messages: ConversationMessage[];
 }
 
@@ -243,7 +247,6 @@ export interface UpdateNoteInput {
 
 export interface AskAgentInput {
   content: string;
-  mode: AgentMode;
   conversation_id?: string;
   model_profile_id: string;
   request_id: string;

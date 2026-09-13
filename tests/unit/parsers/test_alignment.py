@@ -1,7 +1,7 @@
 from paper_agent.domain import BoundingBox
 from paper_agent.parsers.alignment import TextAligner
 from paper_agent.parsers.base import TextBlock
-from paper_agent.parsers.markitdown_stage1 import MarkdownParagraph
+from paper_agent.parsers.pymupdf_stage1 import Stage1Paragraph
 
 
 BOX = BoundingBox(0.1, 0.2, 0.8, 0.3)
@@ -17,7 +17,7 @@ def test_aligner_ignores_whitespace_and_unicode_punctuation():
             order=0,
         )
     ]
-    paragraphs = [MarkdownParagraph(text="We   introduce a method - today.")]
+    paragraphs = [Stage1Paragraph(text="We   introduce a method - today.")]
 
     aligned = TextAligner().align(paragraphs, blocks)
 
@@ -36,7 +36,7 @@ def test_aligner_ignores_unicode_punctuation_variants_beyond_dashes():
             order=0,
         )
     ]
-    paragraphs = [MarkdownParagraph(text="We compare methods, then report results.")]
+    paragraphs = [Stage1Paragraph(text="We compare methods, then report results.")]
 
     aligned = TextAligner().align(paragraphs, blocks)
 
@@ -55,7 +55,7 @@ def test_aligner_maps_unicode_minus_sign_to_ascii_hyphen():
             order=0,
         )
     ]
-    paragraphs = [MarkdownParagraph(text="Signal - to noise is measurable.")]
+    paragraphs = [Stage1Paragraph(text="Signal - to noise is measurable.")]
 
     aligned = TextAligner().align(paragraphs, blocks)
 
@@ -72,7 +72,7 @@ def test_aligner_leaves_repeated_text_unlocated():
         TextBlock(text=repeated, page_number=2, bbox=BOX, order=0),
     ]
 
-    element = TextAligner().align([MarkdownParagraph(text=repeated)], blocks)[0]
+    element = TextAligner().align([Stage1Paragraph(text=repeated)], blocks)[0]
 
     assert element.location_status == "unlocated"
     assert element.page_number is None
@@ -94,7 +94,7 @@ def test_aligner_uses_a_unique_long_containment_match():
     ]
 
     element = TextAligner().align(
-        [MarkdownParagraph(text=paragraph_text, section_id="methods", order=7)],
+        [Stage1Paragraph(text=paragraph_text, section_id="methods", order=7)],
         blocks,
     )[0]
 
@@ -117,7 +117,7 @@ def test_aligner_leaves_a_unique_short_containment_candidate_unlocated():
         )
     ]
 
-    element = TextAligner().align([MarkdownParagraph(text=paragraph_text)], blocks)[0]
+    element = TextAligner().align([Stage1Paragraph(text=paragraph_text)], blocks)[0]
 
     assert element.location_status == "unlocated"
     assert element.page_number is None

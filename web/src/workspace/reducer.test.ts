@@ -55,7 +55,6 @@ function readyWorkspace({
     },
     graphFocusNodeId: 'node-a',
     conversationId,
-    conversationMode: 'paper_only',
     messages: [{
       conversation_id: conversationId,
       message_id: 'message-a',
@@ -85,7 +84,6 @@ it('clears paper-specific workspace data when a different paper opens', () => {
     activeSource: null,
     graphFocusNodeId: null,
     conversationId: null,
-    conversationMode: null,
     messages: [],
     exchanges: [],
     notesErrorMessage: null,
@@ -151,7 +149,6 @@ it('ignores an Agent response that belongs to a paper that is no longer open', (
     paperId: 'paper-a',
     loadRevision: 0,
     conversationId: 'chat-a',
-    mode: 'paper_only',
     question: '过期问题。',
     message: {
       conversation_id: 'chat-a',
@@ -188,7 +185,6 @@ it.each([
     paperId: 'paper-a',
     loadRevision: 1,
     conversationId: 'stale-chat',
-    mode: 'paper_only',
     question: '过期问题。',
     message: {
       conversation_id: 'stale-chat',
@@ -252,7 +248,6 @@ it('resets paper-specific state when the same paper opens with a new load revisi
     activeSource: null,
     graphFocusNodeId: null,
     conversationId: null,
-    conversationMode: null,
     messages: [],
     exchanges: [],
     errorMessage: null,

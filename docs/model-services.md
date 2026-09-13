@@ -1,5 +1,13 @@
 # 模型服务与模型档案
 
+## OpenAI-compatible 接口兼容（2026-09-11）
+
+结构化生成优先请求 `json_schema`。仅当服务返回 HTTP 400 且明确表示不支持 `json_schema` 时，以 `json_object` 再请求一次，并把目标 Schema 加入系统指令；其他错误不降级。图谱抽取和 Agent 最终回答共享此路径，两种模式都必须通过本地 JSON Schema 校验，Agent 仍须通过 Citation Guard，不能把普通 JSON 等同于有效论文引用。
+
+工具能力检测包含用户消息，避免部分接口拒绝只有系统消息的请求；实际工具调用仍使用 `parallel_tool_calls=False`。检测失败只表示本次未通过，可能是接口兼容、连接或响应格式问题，不直接断定模型没有该能力。更新服务后需在模型设置中重新测试，不能手动伪造能力状态。
+
+部分兼容服务会忽略 `parallel_tool_calls=False`，一次返回多个工具调用。运行时按返回顺序串行执行现有只读论文工具，在单次问答中累计最多执行 6 次；同批次重复调用 ID 或超预算请求会拒绝。历史消息包含完整的助手工具列表和逐一匹配的工具结果，引用范围仅来自实际执行所得证据，不丢弃额外调用来伪装成功。
+
 本文说明 paper-agent 如何接入 OpenAI-compatible vLLM、管理多个模型档案，以及各功能对模型能力的要求。面向中文开发者；API 字段名保持与 OpenAPI 一致。
 
 ## 模型档案生命周期
@@ -74,7 +82,6 @@ curl -X POST http://127.0.0.1:8000/api/papers/<paper-id>/agent/messages \
   -H "Content-Type: application/json" \
   -d '{
     "content": "这篇文章解决了什么问题？",
-    "mode": "paper_only",
     "model_profile_id": "<profile-id>",
     "request_id": "8ef96cf9-75be-4ab9-97af-b4a93c3d4b12"
   }'

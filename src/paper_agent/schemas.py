@@ -14,7 +14,6 @@ from pydantic import (
 
 from paper_agent.domain import (
     AgentMessageRole,
-    AgentMode,
     Conversation,
     CitationSnapshot,
     ConversationMessage,
@@ -262,8 +261,14 @@ class TextAnchorDraftRequest(BaseModel):
 
 
 class HighlightCreateRequest(TextAnchorDraftRequest):
-    color: Literal["yellow"] = "yellow"
+    color: Literal["yellow", "green", "blue", "pink"] = "yellow"
     request_id: UUID
+
+
+class HighlightUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    color: Literal["yellow", "green", "blue", "pink"]
 
 
 class SelectionAssistRequest(TextAnchorDraftRequest):
@@ -276,7 +281,6 @@ class AgentMessageRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     content: str = Field(min_length=1)
-    mode: AgentMode
     conversation_id: UUID | None = None
     model_profile_id: UUID
     request_id: UUID
@@ -391,7 +395,6 @@ class ConversationMessageResponse(BaseModel):
 class ConversationResponse(BaseModel):
     id: str
     paper_id: str
-    mode: AgentMode
     messages: list[ConversationMessageResponse]
 
     @classmethod
@@ -403,7 +406,6 @@ class ConversationResponse(BaseModel):
         return cls(
             id=conversation.id,
             paper_id=conversation.paper_id,
-            mode=conversation.mode,
             messages=messages,
         )
 
@@ -612,7 +614,7 @@ class TextAnchorResponse(BaseModel):
 
 class HighlightResponse(BaseModel):
     id: str
-    color: Literal["yellow"]
+    color: str
     anchor: TextAnchorResponse
 
     @classmethod

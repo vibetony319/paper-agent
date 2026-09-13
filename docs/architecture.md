@@ -70,7 +70,7 @@ sequenceDiagram
     I->>X: Stage0 提取页面、文字块和视觉元素
     X-->>I: 页面与定位元素
     I->>R: 保存 Stage0；stage0 completed；stage1 running
-    I->>X: Stage1 转换 Markdown/章节
+    I->>X: Stage1 识别章节/段落（字体启发式）
     X-->>I: 章节与段落
     I->>I: 对齐段落与 Stage0 坐标
     I->>R: 保存 Stage1；记录 completed/partial/failed
@@ -145,7 +145,7 @@ sequenceDiagram
     A-->>B: 非流式 JSON 回答
 ```
 
-主 Agent **在 Citation Guard 校验通过或被规范化为证据不足之前不会输出响应**，因此为非流式 JSON。笔记仅是标注为不可信的本地检索上下文，不能充当论文引用。`citation_element_ids` 必须来自本请求工具回合的、可定位论文元素；`paper_only` 模式也不允许 `background_explanation`。笔记排序、字符预算和引用回显见 [笔记记忆与 Agent 注入](note-memory.md)。
+主 Agent **在 Citation Guard 校验通过或被规范化为证据不足之前不会输出响应**，因此为非流式 JSON。笔记仅是标注为不可信的本地检索上下文，不能充当论文引用。`citation_element_ids` 必须来自本请求工具回合的、可定位论文元素；`background_explanation` 一律不允许（必须为 null）。笔记排序、字符预算和引用回显见 [笔记记忆与 Agent 注入](note-memory.md)。
 
 图中的 Agent 入口合并表示路由和运行时：路由解析请求模型并进入论文操作与模型使用租约，笔记检索、消息写入、工具执行和 Guard 编排实际由 `PaperAgentRuntime` 完成。模型返回工具调用描述，运行时调用 `PaperToolRegistry` 执行工具。
 

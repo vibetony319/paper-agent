@@ -15,7 +15,6 @@ from paper_agent.annotations import TextAnchorDraft, TextAnchorRect
 from paper_agent.database import conversation_messages, conversations, processing_runs
 from paper_agent.domain import (
     AgentMessageRole,
-    AgentMode,
     BoundingBox,
     Conversation,
     ConversationMessage,
@@ -334,7 +333,7 @@ def test_runtime_persists_user_before_model_then_only_the_guarded_answer(reposit
     turn = _runtime(repository, client).ask(
         paper_id=paper.id,
         question=AgentQuestion(
-            content="How does routing work?", mode=AgentMode.paper_only
+            content="How does routing work?"
         ),
     )
 
@@ -377,7 +376,7 @@ def test_runtime_switches_models_in_one_conversation_and_persists_turn_audit_par
 
     first = runtime.ask(
         paper_id=paper.id,
-        question=AgentQuestion(content="First", mode=AgentMode.paper_only),
+        question=AgentQuestion(content="First"),
         client=FakeAgentClient(),
         model_snapshot=first_snapshot,
         request_id=first_request_id,
@@ -386,7 +385,6 @@ def test_runtime_switches_models_in_one_conversation_and_persists_turn_audit_par
         paper_id=paper.id,
         question=AgentQuestion(
             content="Second",
-            mode=AgentMode.paper_only,
             conversation_id=first.conversation.id,
         ),
         client=FakeAgentClient(),
@@ -418,7 +416,7 @@ def test_runtime_replays_complete_request_without_another_model_call(repository)
     first_client = FakeAgentClient()
     first = runtime.ask(
         paper_id=paper.id,
-        question=AgentQuestion(content="Original", mode=AgentMode.paper_only),
+        question=AgentQuestion(content="Original"),
         client=first_client,
         model_snapshot=_model_snapshot(),
         request_id=request_id,
@@ -429,7 +427,7 @@ def test_runtime_replays_complete_request_without_another_model_call(repository)
 
     replay = runtime.ask(
         paper_id=paper.id,
-        question=AgentQuestion(content="Conflicting duplicate", mode=AgentMode.paper_only),
+        question=AgentQuestion(content="Conflicting duplicate"),
         client=replay_client,
         model_snapshot=_model_snapshot(
             profile_id="10000000-0000-0000-0000-000000000009"
@@ -457,7 +455,7 @@ def test_runtime_retries_user_only_request_without_appending_a_second_user(repos
     with pytest.raises(AgentRuntimeResponseError):
         runtime.ask(
             paper_id=paper.id,
-            question=AgentQuestion(content="Retry me", mode=AgentMode.paper_only),
+            question=AgentQuestion(content="Retry me"),
             client=failing_client,
             model_snapshot=snapshot,
             request_id=request_id,
@@ -467,7 +465,7 @@ def test_runtime_retries_user_only_request_without_appending_a_second_user(repos
 
     recovered = runtime.ask(
         paper_id=paper.id,
-        question=AgentQuestion(content="Retry me", mode=AgentMode.paper_only),
+        question=AgentQuestion(content="Retry me"),
         client=FakeAgentClient(),
         model_snapshot=snapshot,
         request_id=request_id,
@@ -490,7 +488,7 @@ def test_runtime_rejects_partial_retry_when_current_snapshot_changed(repository)
     with pytest.raises(AgentRuntimeResponseError):
         runtime.ask(
             paper_id=paper.id,
-            question=AgentQuestion(content="Retry me", mode=AgentMode.paper_only),
+            question=AgentQuestion(content="Retry me"),
             client=FakeAgentClient(turns=(VllmToolCallingError("failed"),)),
             model_snapshot=first_snapshot,
             request_id=request_id,
@@ -500,7 +498,7 @@ def test_runtime_rejects_partial_retry_when_current_snapshot_changed(repository)
     with pytest.raises(RuntimeError, match="new request_id"):
         runtime.ask(
             paper_id=paper.id,
-            question=AgentQuestion(content="Retry me", mode=AgentMode.paper_only),
+            question=AgentQuestion(content="Retry me"),
             client=retry_client,
             model_snapshot=_model_snapshot(revision=2),
             request_id=request_id,
@@ -522,7 +520,7 @@ def test_runtime_serializes_concurrent_same_request_before_any_model_call(reposi
         barrier.wait()
         return runtime.ask(
             paper_id=paper.id,
-            question=AgentQuestion(content="Concurrent", mode=AgentMode.paper_only),
+            question=AgentQuestion(content="Concurrent"),
             client=client,
             model_snapshot=_model_snapshot(),
             request_id=request_id,
@@ -548,7 +546,7 @@ def test_runtime_releases_request_lock_entries_after_many_unique_failures(reposi
             runtime.ask(
                 paper_id=paper.id,
                 question=AgentQuestion(
-                    content=f"Failure {index}", mode=AgentMode.paper_only
+                    content=f"Failure {index}"
                 ),
                 client=FakeAgentClient(
                     turns=(VllmToolCallingError("expected failure"),)
@@ -572,7 +570,7 @@ def test_runtime_retries_after_unexpected_guard_failure_without_leaking_or_dupli
     with pytest.raises(AgentRuntimeResponseError) as caught:
         runtime.ask(
             paper_id=paper.id,
-            question=AgentQuestion(content="Guard retry", mode=AgentMode.paper_only),
+            question=AgentQuestion(content="Guard retry"),
             client=FakeAgentClient(),
             model_snapshot=snapshot,
             request_id=request_id,
@@ -582,7 +580,7 @@ def test_runtime_retries_after_unexpected_guard_failure_without_leaking_or_dupli
 
     recovered = runtime.ask(
         paper_id=paper.id,
-        question=AgentQuestion(content="Guard retry", mode=AgentMode.paper_only),
+        question=AgentQuestion(content="Guard retry"),
         client=FakeAgentClient(),
         model_snapshot=snapshot,
         request_id=request_id,
@@ -605,7 +603,7 @@ def test_runtime_sends_openai_tool_result_messages_with_returned_evidence_ids(re
 
     _runtime(repository, client).ask(
         paper_id=paper.id,
-        question=AgentQuestion(content="Explain it.", mode=AgentMode.paper_only),
+        question=AgentQuestion(content="Explain it."),
     )
 
     final_messages = client.final_requests[0]["messages"]
@@ -644,7 +642,7 @@ def test_agent_injects_relevant_notes_and_returns_note_references(repository):
 
     turn = runtime.ask(
         paper_id=paper.id,
-        question=AgentQuestion(content="负载如何均衡？", mode=AgentMode.paper_only),
+        question=AgentQuestion(content="负载如何均衡？"),
         client=client,
         model_snapshot=_model_snapshot(),
         request_id="agent-a",
@@ -688,7 +686,7 @@ def test_selection_is_wrapped_in_input_and_persisted_as_message_anchor(repositor
 
     turn = runtime.ask(
         paper_id=paper.id,
-        question=AgentQuestion(content="Explain it.", mode=AgentMode.paper_only),
+        question=AgentQuestion(content="Explain it."),
         client=client,
         model_snapshot=_model_snapshot(),
         request_id="agent-selection",
@@ -726,7 +724,7 @@ def test_notes_do_not_bypass_citation_guard_without_paper_evidence(repository):
 
     turn = runtime.ask(
         paper_id=paper.id,
-        question=AgentQuestion(content="负载如何均衡？", mode=AgentMode.paper_only),
+        question=AgentQuestion(content="负载如何均衡？"),
         client=client,
         model_snapshot=_model_snapshot(),
         request_id="agent-note-guard",
@@ -745,7 +743,7 @@ def test_runtime_checks_paper_before_client_without_creating_chat_or_processing_
     with pytest.raises(AgentRuntimePrerequisiteError):
         _runtime(repository, None).ask(
             paper_id="missing-paper",
-            question=AgentQuestion(content="Question", mode=AgentMode.paper_only),
+            question=AgentQuestion(content="Question"),
         )
 
     assert _chat_row_counts(repository) == before
@@ -768,7 +766,7 @@ def test_runtime_requires_latest_stage1_status_completed_before_any_chat_write(
         with pytest.raises(AgentRuntimePrerequisiteError):
             _runtime(repository, FakeAgentClient()).ask(
                 paper_id=paper_id,
-                question=AgentQuestion(content="Question", mode=AgentMode.paper_only),
+                question=AgentQuestion(content="Question"),
             )
 
     assert _chat_row_counts(repository) == before
@@ -779,7 +777,7 @@ def test_runtime_rejects_a_conversation_owned_by_another_paper_without_writes(re
     first = _paper_with_stage1_document(repository, "first")
     second = _paper_with_stage1_document(repository, "second")
     other_conversation = repository.create_conversation(
-        Conversation(paper_id=second.id, mode=AgentMode.paper_only)
+        Conversation(paper_id=second.id)
     )
     before = _chat_row_counts(repository)
 
@@ -788,29 +786,7 @@ def test_runtime_rejects_a_conversation_owned_by_another_paper_without_writes(re
             paper_id=first.id,
             question=AgentQuestion(
                 content="Question",
-                mode=AgentMode.paper_only,
                 conversation_id=other_conversation.id,
-            ),
-        )
-
-    assert _chat_row_counts(repository) == before
-
-
-def test_runtime_rejects_a_conversation_mode_change_without_writes(repository):
-    """Breaks if one durable conversation can mix paper-only and external modes."""
-    paper = _paper_with_stage1_document(repository)
-    conversation = repository.create_conversation(
-        Conversation(paper_id=paper.id, mode=AgentMode.external_knowledge)
-    )
-    before = _chat_row_counts(repository)
-
-    with pytest.raises(AgentRuntimePrerequisiteError):
-        _runtime(repository, FakeAgentClient()).ask(
-            paper_id=paper.id,
-            question=AgentQuestion(
-                content="Question",
-                mode=AgentMode.paper_only,
-                conversation_id=conversation.id,
             ),
         )
 
@@ -825,7 +801,7 @@ def test_runtime_requires_a_configured_client_before_creating_a_conversation(rep
     with pytest.raises(AgentRuntimeUnavailableError):
         _runtime(repository, None).ask(
             paper_id=paper.id,
-            question=AgentQuestion(content="Question", mode=AgentMode.paper_only),
+            question=AgentQuestion(content="Question"),
         )
 
     assert _chat_row_counts(repository) == before
@@ -837,7 +813,7 @@ def test_runtime_builds_model_history_from_only_the_latest_six_durable_messages(
     """Breaks if history is unbounded, unstable, or duplicates the current user turn."""
     paper = _paper_with_stage1_document(repository)
     conversation = repository.create_conversation(
-        Conversation(paper_id=paper.id, mode=AgentMode.paper_only)
+        Conversation(paper_id=paper.id)
     )
     for index in range(7):
         role = AgentMessageRole.user if index % 2 == 0 else AgentMessageRole.assistant
@@ -864,7 +840,6 @@ def test_runtime_builds_model_history_from_only_the_latest_six_durable_messages(
             paper_id=paper.id,
             question=AgentQuestion(
                 content="current-question",
-                mode=AgentMode.paper_only,
                 conversation_id=conversation.id,
             ),
         )
@@ -892,8 +867,25 @@ def test_runtime_builds_model_history_from_only_the_latest_six_durable_messages(
     assert "LIMIT" in history_reads[0].upper()
 
 
-def test_external_mode_prompt_and_result_keep_background_separate(repository):
-    """Breaks if graph claims or external background can be mixed into paper prose."""
+def test_system_prompt_forbids_uncited_background_and_off_request_citations(repository):
+    """Breaks if the model is no longer told to cite only request-scoped evidence."""
+    paper = _paper_with_stage1_document(repository)
+    client = FakeAgentClient()
+
+    _runtime(repository, client).ask(
+        paper_id=paper.id,
+        question=AgentQuestion(content="Question"),
+    )
+
+    system_prompt = client.tool_requests[0]["messages"][0]["content"].casefold()
+    assert "graph data is for navigation only" in system_prompt
+    assert "source-element ids returned by tools during this request" in system_prompt
+    assert "insufficient_evidence" in system_prompt
+    assert "background_explanation must be null" in system_prompt
+
+
+def test_runtime_replaces_background_bearing_answer_with_a_safe_refusal(repository):
+    """Breaks if uncited background prose reaches the user or persistence."""
     paper = _paper_with_stage1_document(repository)
     client = FakeAgentClient(
         turns=(
@@ -907,22 +899,13 @@ def test_external_mode_prompt_and_result_keep_background_separate(repository):
 
     turn = _runtime(repository, client).ask(
         paper_id=paper.id,
-        question=AgentQuestion(
-            content="Explain routing.", mode=AgentMode.external_knowledge
-        ),
+        question=AgentQuestion(content="Explain routing."),
     )
 
-    system_prompt = client.tool_requests[0]["messages"][0]["content"].casefold()
-    assert "graph data is for navigation only" in system_prompt
-    assert "source-element ids returned by tools during this request" in system_prompt
-    assert "insufficient_evidence" in system_prompt
-    assert "background_explanation" in system_prompt
-    assert "separate" in system_prompt
-    assert turn.answer.background_explanation == "General routing background."
-    assert turn.assistant_message.content == "The paper uses a router."
+    assert turn.answer.status == "insufficient_evidence"
+    assert turn.assistant_message.content == CANONICAL_INSUFFICIENT_EVIDENCE
     durable = repository.get_conversation_messages(paper.id, turn.conversation.id)
-    assert durable[-1].content == "The paper uses a router."
-    assert durable[-1].background_explanation == "General routing background."
+    assert durable[-1].background_explanation is None
     assert "General routing background" not in durable[-1].content
 
 
@@ -930,7 +913,7 @@ def test_runtime_does_not_authorize_citations_from_earlier_conversation_turns(re
     """Breaks if durable historical citations leak into the current request allow-list."""
     paper = _paper_with_stage1_document(repository)
     conversation = repository.create_conversation(
-        Conversation(paper_id=paper.id, mode=AgentMode.paper_only)
+        Conversation(paper_id=paper.id)
     )
     repository.append_conversation_message(
         ConversationMessage(
@@ -951,7 +934,6 @@ def test_runtime_does_not_authorize_citations_from_earlier_conversation_turns(re
         paper_id=paper.id,
         question=AgentQuestion(
             content="Can I reuse that citation?",
-            mode=AgentMode.paper_only,
             conversation_id=conversation.id,
         ),
     )
@@ -992,7 +974,7 @@ def test_runtime_treats_graph_ids_as_navigation_not_answer_citations(repository)
 
     turn = _runtime(repository, client).ask(
         paper_id=paper.id,
-        question=AgentQuestion(content="What is Router?", mode=AgentMode.paper_only),
+        question=AgentQuestion(content="What is Router?"),
     )
 
     assert turn.answer.status == "insufficient_evidence"
@@ -1018,7 +1000,7 @@ def test_runtime_stops_after_six_single_tool_turns(repository):
 
     turn = _runtime(repository, client).ask(
         paper_id=paper.id,
-        question=AgentQuestion(content="Keep searching.", mode=AgentMode.paper_only),
+        question=AgentQuestion(content="Keep searching."),
     )
 
     assert turn.answer.status == "grounded"
@@ -1027,10 +1009,10 @@ def test_runtime_stops_after_six_single_tool_turns(repository):
     assert len(client.final_requests) == 1
 
 
-def test_runtime_rejects_multiple_tool_calls_in_one_turn_without_assistant_write(
+def test_runtime_rejects_duplicate_tool_ids_without_assistant_write(
     repository,
 ):
-    """Breaks if a nonparallel runtime executes more than one call from one model turn."""
+    """Ambiguous tool IDs must never be sent back as distinct tool results."""
     paper = _paper_with_stage1_document(repository)
     client = FakeAgentClient(
         turns=(
@@ -1041,7 +1023,7 @@ def test_runtime_rejects_multiple_tool_calls_in_one_turn_without_assistant_write
                     _tool_call(
                         "search_paper",
                         {"query": "secret second query", "limit": 5},
-                        call_id="call-2",
+                        call_id="call-1",
                     ),
                 ),
             ),
@@ -1051,12 +1033,38 @@ def test_runtime_rejects_multiple_tool_calls_in_one_turn_without_assistant_write
     with pytest.raises(AgentRuntimeResponseError) as error:
         _runtime(repository, client).ask(
             paper_id=paper.id,
-            question=AgentQuestion(content="Question", mode=AgentMode.paper_only),
+            question=AgentQuestion(content="Question"),
         )
 
     assert str(error.value) == "Reasoning model could not complete the request."
     assert "multi-call" not in str(error.value)
     assert _all_durable_rows(repository) == [("user", "Question")]
+
+
+def test_runtime_rejects_batches_over_the_total_call_budget(repository):
+    paper = _paper_with_stage1_document(repository)
+    client = FakeAgentClient(turns=(VllmToolTurn(content=None, tool_calls=tuple(
+        _tool_call('search_paper', {'query':'router','limit':5}, call_id=str(i))
+        for i in range(7)
+    )),))
+    with pytest.raises(AgentRuntimeResponseError):
+        _runtime(repository, client).ask(paper_id=paper.id,
+            question=AgentQuestion(content='Question'))
+    assert _all_durable_rows(repository) == [('user','Question')]
+
+
+def test_runtime_executes_batched_read_tools_sequentially_with_matching_results(repository):
+    paper = _paper_with_stage1_document(repository)
+    client = FakeAgentClient(turns=(VllmToolTurn(content=None, tool_calls=(
+        _tool_call('search_paper', {'query':'router','limit':5}, call_id='one'),
+        _tool_call('search_paper', {'query':'router','limit':5}, call_id='two'),
+    )),), final_payload=_grounded_payload(citations=[paper.element_id]))
+    turn = _runtime(repository, client).ask(paper_id=paper.id,
+        question=AgentQuestion(content='Explain'))
+    assert turn.answer.status == 'grounded'
+    messages = client.final_requests[0]['messages']
+    assert [c['id'] for c in messages[-3]['tool_calls']] == ['one','two']
+    assert [m['tool_call_id'] for m in messages[-2:]] == ['one','two']
 
 
 def test_runtime_converts_malformed_final_contract_to_canonical_persisted_answer(
@@ -1072,7 +1080,7 @@ def test_runtime_converts_malformed_final_contract_to_canonical_persisted_answer
 
     turn = _runtime(repository, client).ask(
         paper_id=paper.id,
-        question=AgentQuestion(content="Question", mode=AgentMode.paper_only),
+        question=AgentQuestion(content="Question"),
     )
 
     assert turn.answer.status == "insufficient_evidence"
@@ -1101,7 +1109,7 @@ def test_runtime_sanitizes_tool_execution_failure_after_persisting_only_the_user
     with pytest.raises(AgentRuntimeResponseError) as error:
         _runtime(repository, client, tools=tools).ask(
             paper_id=paper.id,
-            question=AgentQuestion(content="Question", mode=AgentMode.paper_only),
+            question=AgentQuestion(content="Question"),
         )
 
     assert str(error.value) == "Reasoning model could not complete the request."
@@ -1119,7 +1127,7 @@ def test_runtime_sanitizes_tool_definition_failure_after_persisting_only_the_use
     with pytest.raises(AgentRuntimeResponseError) as error:
         _runtime(repository, FakeAgentClient(), tools=FailingDefinitionsToolRegistry()).ask(
             paper_id=paper.id,
-            question=AgentQuestion(content="Question", mode=AgentMode.paper_only),
+            question=AgentQuestion(content="Question"),
         )
 
     assert str(error.value) == "Reasoning model could not complete the request."
@@ -1138,7 +1146,7 @@ def test_runtime_sanitizes_tool_turn_transport_failure_after_user_persistence(re
     with pytest.raises(AgentRuntimeResponseError) as error:
         _runtime(repository, client).ask(
             paper_id=paper.id,
-            question=AgentQuestion(content="Question", mode=AgentMode.paper_only),
+            question=AgentQuestion(content="Question"),
         )
 
     assert str(error.value) == "Reasoning model could not complete the request."
@@ -1157,7 +1165,7 @@ def test_runtime_sanitizes_final_transport_failure_after_user_persistence(reposi
     with pytest.raises(AgentRuntimeResponseError) as error:
         _runtime(repository, client).ask(
             paper_id=paper.id,
-            question=AgentQuestion(content="Question", mode=AgentMode.paper_only),
+            question=AgentQuestion(content="Question"),
         )
 
     assert str(error.value) == "Reasoning model could not complete the request."

@@ -5,8 +5,6 @@ from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from paper_agent.domain import AgentMode
-
 
 _INSUFFICIENT_EVIDENCE_ANSWER = (
     "I could not find enough evidence in this paper to answer that reliably."
@@ -43,7 +41,6 @@ class CitationGuard:
         self,
         payload: dict[str, object],
         *,
-        mode: AgentMode,
         allowed_evidence_ids: frozenset[str],
     ) -> CitationValidatedAnswer:
         try:
@@ -58,14 +55,8 @@ class CitationGuard:
         if not paper_answer:
             raise CitationGuardError("invalid final answer contract")
 
-        if mode is AgentMode.paper_only and final_answer.background_explanation is not None:
+        if final_answer.background_explanation is not None:
             return _insufficient_evidence_answer()
-
-        background_explanation = final_answer.background_explanation
-        if background_explanation is not None:
-            background_explanation = background_explanation.strip()
-            if not background_explanation:
-                raise CitationGuardError("invalid final answer contract")
 
         citation_ids = tuple(final_answer.citation_element_ids)
         if (
@@ -83,11 +74,7 @@ class CitationGuard:
             status="grounded",
             paper_answer=paper_answer,
             citation_element_ids=citation_ids,
-            background_explanation=(
-                background_explanation
-                if mode is AgentMode.external_knowledge
-                else None
-            ),
+            background_explanation=None,
         )
 
 

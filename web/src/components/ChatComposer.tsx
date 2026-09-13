@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react';
 
-import type { AgentMessage, AgentMode, ModelProfile, TextAnchorDraft } from '../api/types';
+import type { AgentMessage, ModelProfile, TextAnchorDraft } from '../api/types';
 import { ModelSelector } from './ModelSelector';
 
 export type ComposerAttachment = {
@@ -15,7 +15,6 @@ export interface ChatComposerProps {
   onSelectedModelProfileIdChange: (id: string) => void;
   askAgent: (
     content: string,
-    mode: AgentMode,
     modelProfileId: string,
     selection?: TextAnchorDraft,
   ) => Promise<AgentMessage | null>;
@@ -35,7 +34,6 @@ export function ChatComposer({
   focusRequest = 0,
 }: ChatComposerProps) {
   const [content, setContent] = useState('');
-  const [mode, setMode] = useState<AgentMode>('paper_only');
   const [pending, setPending] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const inputId = useId();
@@ -54,7 +52,6 @@ export function ChatComposer({
   useEffect(() => {
     requestVersion.current += 1;
     setContent('');
-    setMode('paper_only');
     setPending(false);
     setErrorMessage(null);
   }, [paperId]);
@@ -72,7 +69,7 @@ export function ChatComposer({
     setPending(true);
     setErrorMessage(null);
     try {
-      const response = await askAgent(question, mode, selectedModelProfileId, sentAttachment?.draft);
+      const response = await askAgent(question, selectedModelProfileId, sentAttachment?.draft);
       if (!isCurrentRequest()) return;
       if (response === null) {
         setErrorMessage('发送失败，请重试。');
@@ -100,17 +97,6 @@ export function ChatComposer({
           value={selectedModelProfileId}
           onChange={onSelectedModelProfileIdChange}
         />
-        <fieldset className="chat-composer__mode" disabled={pending || paperId === null}>
-          <legend>回答范围</legend>
-          <label>
-            <input type="radio" name="agent-mode" checked={mode === 'paper_only'} onChange={() => setMode('paper_only')} />
-            仅基于论文
-          </label>
-          <label>
-            <input type="radio" name="agent-mode" checked={mode === 'external_knowledge'} onChange={() => setMode('external_knowledge')} />
-            允许背景知识
-          </label>
-        </fieldset>
       </div>
       {attachment !== null && (
         <div className="chat-composer__attachment" aria-label="已附加选区">

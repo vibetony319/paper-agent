@@ -156,6 +156,26 @@ it('uses the page shell width instead of a self-sized surface for its viewport',
   expect(pdf.TextLayer).toHaveBeenCalledWith(expect.objectContaining({ viewport: narrowViewport }));
 });
 
+it('applies the zoom factor on top of the fit width scale', async () => {
+  const zoomedViewport = { width: 1224, height: 1584, scale: 2, userUnit: 2 };
+  pdf.getViewport.mockImplementation(({ scale }) => (scale === 2 ? zoomedViewport : pdf.viewport));
+  vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(function clientWidth(this: HTMLElement) {
+    if (this.classList.contains('pdf-reader__page-shell')) return 612;
+    return 0;
+  });
+
+  render(
+    <div className="pdf-reader__page-shell">
+      <PdfPageView document={document as never} page={page} active overlays={[]} zoom={2} />
+    </div>,
+  );
+
+  const canvas = await screen.findByRole('img', { name: 'PDF 第 1 页' });
+  await waitFor(() => expect(pdf.render).toHaveBeenCalledOnce());
+  expect(pdf.getViewport).toHaveBeenCalledWith({ scale: 2 });
+  expect(canvas).toHaveStyle({ width: '1224px', height: '1584px' });
+});
+
 it('keeps the canvas visible when the page has no selectable text', async () => {
   render(<PdfPageView document={document as never} page={page} active overlays={[]} />);
 

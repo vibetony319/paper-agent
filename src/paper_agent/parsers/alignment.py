@@ -4,7 +4,7 @@ from collections.abc import Sequence
 
 from paper_agent.domain import DocumentElement
 from paper_agent.parsers.base import TextBlock
-from paper_agent.parsers.markitdown_stage1 import MarkdownParagraph
+from paper_agent.parsers.pymupdf_stage1 import Stage1Paragraph
 
 
 _MIN_CONTAINMENT_LENGTH = 40
@@ -24,7 +24,7 @@ def _normalize_text(text: str) -> str:
 class TextAligner:
     def align(
         self,
-        paragraphs: Sequence[MarkdownParagraph],
+        paragraphs: Sequence[Stage1Paragraph],
         text_blocks: Sequence[TextBlock],
     ) -> list[DocumentElement]:
         normalized_blocks = [(_normalize_text(block.text), block) for block in text_blocks]

@@ -109,7 +109,7 @@ def _resolve_agent_model(
     ):
         raise HTTPException(
             status_code=409,
-            detail="Selected model does not support Agent requests.",
+            detail="当前模型的结构化输出或工具调用检测未通过，请在模型设置中重新测试；仍失败时检查服务接口兼容性。",
         )
     return resolved
 
@@ -248,7 +248,6 @@ def _run_agent_request(
                 and str(payload.conversation_id) != partial_user.conversation_id
             )
             or conversation is None
-            or conversation.mode is not payload.mode
         ):
             raise _request_conflict()
         profile_id = partial_user.model_profile_id
@@ -266,7 +265,6 @@ def _run_agent_request(
                 paper_id=paper_id_text,
                 question=AgentQuestion(
                     content=payload.content,
-                    mode=payload.mode,
                     conversation_id=(
                         None
                         if payload.conversation_id is None
@@ -302,7 +300,7 @@ def _run_agent_request(
     except AgentRuntimeResponseError:
         raise HTTPException(
             status_code=502,
-            detail="Reasoning model could not complete the request.",
+            detail="模型未能完成有效回答，可能是工具调用或返回格式不符合要求，请重试或在模型设置中重新测试。",
         ) from None
     return _agent_message_response(repository, paper_id_text, turn)
 

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useReducer, useRef } from 'react';
 
 import { paperApi, publicApiMessage } from '../api/client';
 import { streamSelectionAssist } from '../api/sse';
-import type { AgentMode, Citation, PaperSummary, SelectionAssistAction, TextAnchorDraft } from '../api/types';
+import type { Citation, HighlightColor, SelectionAssistAction, TextAnchorDraft } from '../api/types';
 import {
   initialWorkspaceState,
   toSourceTarget,
@@ -24,22 +24,14 @@ function selectionAssistFailureMessage(action: SelectionAssistAction): string {
 export function usePaperWorkspace(
   activePaperId: string | null,
   loadRevision = 0,
-  onPaperSummaryUpdated?: (paper: PaperSummary) => void,
 ) {
   const [state, dispatch] = useReducer(workspaceReducer, initialWorkspaceState);
   // Keep reducer guards unique even when callers reset their retry trigger.
   const nextLoadGeneration = useRef(0);
-  const currentPaperId = useRef(activePaperId);
-  const currentWorkspaceRevision = useRef(loadRevision);
-  const currentLoadGeneration = useRef(state.loadRevision);
   const highlightsMutationGeneration = useRef(0);
   const notesMutationGeneration = useRef(0);
   const anchorsMutationGeneration = useRef(0);
   const workspaceLifetimeController = useRef(new AbortController());
-
-  currentPaperId.current = activePaperId;
-  currentWorkspaceRevision.current = loadRevision;
-  currentLoadGeneration.current = state.loadRevision;
 
   const reportApiError = useCallback((
     paperId: string,
@@ -58,44 +50,6 @@ export function usePaperWorkspace(
     });
   }, []);
 
-  const isCurrentPaperRequest = useCallback((
-    paperId: string,
-    requestLoadGeneration: number,
-    requestWorkspaceRevision: number,
-  ) => (
-    currentPaperId.current === paperId
-    && currentLoadGeneration.current === requestLoadGeneration
-    && currentWorkspaceRevision.current === requestWorkspaceRevision
-  ), []);
-
-  const refreshPaperSummary = useCallback(async (
-    paperId: string,
-    requestLoadGeneration: number,
-    requestWorkspaceRevision: number,
-  ) => {
-    try {
-      const paper = await paperApi.getPaper(paperId);
-      if (
-        onPaperSummaryUpdated !== undefined
-        && isCurrentPaperRequest(paperId, requestLoadGeneration, requestWorkspaceRevision)
-      ) {
-        onPaperSummaryUpdated?.(paper);
-      }
-    } catch (error) {
-      if (
-        onPaperSummaryUpdated !== undefined
-        && isCurrentPaperRequest(paperId, requestLoadGeneration, requestWorkspaceRevision)
-      ) {
-        reportApiError(
-          paperId,
-          requestLoadGeneration,
-          error,
-          '论文处理状态暂时无法刷新。',
-        );
-      }
-    }
-  }, [isCurrentPaperRequest, onPaperSummaryUpdated, reportApiError]);
-
   useEffect(() => {
     const loadGeneration = nextLoadGeneration.current++;
     const controller = new AbortController();
@@ -112,11 +66,8 @@ export function usePaperWorkspace(
       return () => controller.abort();
     }
 
-    void Promise.all([
-      paperApi.getDocument(activePaperId, { signal: controller.signal }),
-      paperApi.getGraph(activePaperId, { signal: controller.signal }),
-    ])
-      .then(([document, graph]) => {
+    void paperApi.getDocument(activePaperId, { signal: controller.signal })
+      .then((document) => {
         if (controller.signal.aborted) {
           return;
         }
@@ -125,7 +76,7 @@ export function usePaperWorkspace(
           paperId: activePaperId,
           loadRevision: loadGeneration,
           document,
-          graph,
+          graph: { nodes: [], edges: [] },
         });
       })
       .catch((error: unknown) => {
@@ -188,91 +139,8 @@ export function usePaperWorkspace(
     };
   }, [activePaperId, loadRevision]);
 
-  const buildCoreGraph = useCallback(async (modelProfileId: string) => {
-    if (state.activePaperId === null) {
-      return null;
-    }
-    const paperId = state.activePaperId;
-    const requestLoadGeneration = state.loadRevision;
-    const requestWorkspaceRevision = loadRevision;
-    try {
-      const graph = await paperApi.buildCoreGraph(paperId, {
-        model_profile_id: modelProfileId,
-        request_id: crypto.randomUUID(),
-      });
-      dispatch({
-        type: 'graph/loaded', paperId, loadRevision: requestLoadGeneration, graph,
-      });
-      if (
-        onPaperSummaryUpdated !== undefined
-        && isCurrentPaperRequest(paperId, requestLoadGeneration, requestWorkspaceRevision)
-      ) {
-        await refreshPaperSummary(paperId, requestLoadGeneration, requestWorkspaceRevision);
-      }
-      return graph;
-    } catch (error) {
-      reportApiError(
-        paperId,
-        requestLoadGeneration,
-        error,
-        '暂时无法构建核心图谱。',
-      );
-      throw error;
-    }
-  }, [
-    isCurrentPaperRequest,
-    onPaperSummaryUpdated,
-    refreshPaperSummary,
-    reportApiError,
-    loadRevision,
-    state.activePaperId,
-    state.loadRevision,
-  ]);
-
-  const buildDeepGraph = useCallback(async (modelProfileId: string) => {
-    if (state.activePaperId === null) {
-      return null;
-    }
-    const paperId = state.activePaperId;
-    const requestLoadGeneration = state.loadRevision;
-    const requestWorkspaceRevision = loadRevision;
-    try {
-      const graph = await paperApi.buildDeepGraph(paperId, {
-        model_profile_id: modelProfileId,
-        request_id: crypto.randomUUID(),
-      });
-      dispatch({
-        type: 'graph/loaded', paperId, loadRevision: requestLoadGeneration, graph,
-      });
-      if (
-        onPaperSummaryUpdated !== undefined
-        && isCurrentPaperRequest(paperId, requestLoadGeneration, requestWorkspaceRevision)
-      ) {
-        await refreshPaperSummary(paperId, requestLoadGeneration, requestWorkspaceRevision);
-      }
-      return graph;
-    } catch (error) {
-      reportApiError(
-        paperId,
-        requestLoadGeneration,
-        error,
-        '暂时无法构建深度图谱。',
-      );
-      throw error;
-    }
-  }, [
-    isCurrentPaperRequest,
-    onPaperSummaryUpdated,
-    refreshPaperSummary,
-    reportApiError,
-    loadRevision,
-    state.activePaperId,
-    state.loadRevision,
-  ]);
-
   const askAgent = useCallback(async (
     content: string,
-    mode: AgentMode,
     modelProfileId: string,
     selection?: TextAnchorDraft,
   ) => {
@@ -281,11 +149,10 @@ export function usePaperWorkspace(
     }
     const paperId = state.activePaperId;
     const requestLoadRevision = state.loadRevision;
-    const conversationId = state.conversationMode === mode ? state.conversationId : null;
+    const conversationId = state.conversationId;
     try {
       const message = await paperApi.askAgent(paperId, {
         content,
-        mode,
         conversation_id: conversationId ?? undefined,
         model_profile_id: modelProfileId,
         request_id: crypto.randomUUID(),
@@ -296,7 +163,6 @@ export function usePaperWorkspace(
         paperId,
         loadRevision: requestLoadRevision,
         conversationId: message.conversation_id,
-        mode,
         question: content,
         message,
       });
@@ -314,7 +180,6 @@ export function usePaperWorkspace(
     reportApiError,
     state.activePaperId,
     state.conversationId,
-    state.conversationMode,
     state.loadRevision,
   ]);
 
@@ -441,10 +306,6 @@ export function usePaperWorkspace(
     dispatch({ type: 'source/selected', source: null });
   }, []);
 
-  const setGraphFocus = useCallback((nodeId: string | null) => {
-    dispatch({ type: 'graph/focused', nodeId });
-  }, []);
-
   const setSelection = useCallback((draft: TextAnchorDraft, toolbarRect: DOMRect) => {
     dispatch({ type: 'selection/set', draft, toolbarRect });
   }, []);
@@ -497,16 +358,44 @@ export function usePaperWorkspace(
         type: 'request/failed',
         paperId,
         loadRevision: requestLoadRevision,
-        message: `删除高亮失败：${publicWorkspaceError(error, '请稍后重试。')}`,
+        message: `取消高亮失败：${publicWorkspaceError(error, '请稍后重试。')}`,
       });
       return false;
     }
   }, [state.activePaperId, state.loadRevision]);
 
+  const changeHighlightColor = useCallback(async (highlightId: string, color: HighlightColor) => {
+    if (state.activePaperId === null) return null;
+    const paperId = state.activePaperId;
+    const requestLoadRevision = state.loadRevision;
+    try {
+      const highlight = await paperApi.updateHighlight(
+        paperId,
+        highlightId,
+        { color },
+        { signal: workspaceLifetimeController.current.signal },
+      );
+      const mutationGeneration = highlightsMutationGeneration.current + 1;
+      highlightsMutationGeneration.current = mutationGeneration;
+      dispatch({
+        type: 'highlight/updated', paperId, loadRevision: requestLoadRevision, mutationGeneration, highlight,
+      });
+      return highlight;
+    } catch (error) {
+      if (!isAbortError(error)) {
+        dispatch({
+          type: 'request/failed',
+          paperId,
+          loadRevision: requestLoadRevision,
+          message: `修改高亮颜色失败：${publicWorkspaceError(error, '请稍后重试。')}`,
+        });
+      }
+      return null;
+    }
+  }, [state.activePaperId, state.loadRevision]);
+
   return {
     ...state,
-    buildCoreGraph,
-    buildDeepGraph,
     askAgent,
     saveNote,
     selectCitation,
@@ -515,11 +404,11 @@ export function usePaperWorkspace(
     updateNote,
     deleteNote,
     clearActiveSource,
-    setGraphFocus,
     setSelection,
     clearSelection,
     createHighlight,
     deleteHighlight,
+    changeHighlightColor,
     runSelectionAssist,
   };
 }

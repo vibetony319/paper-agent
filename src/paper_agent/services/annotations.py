@@ -62,6 +62,13 @@ class AnnotationService:
     def delete_highlight(self, paper_id: str, highlight_id: str) -> bool:
         return self.repository.delete_highlight(paper_id, highlight_id)
 
+    def update_highlight_color(
+        self, paper_id: str, highlight_id: str, color: str
+    ) -> Highlight | None:
+        return self.repository.update_highlight_color(
+            paper_id, highlight_id, color
+        )
+
     def create_note(
         self,
         paper_id: str,

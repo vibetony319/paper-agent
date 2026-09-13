@@ -2,8 +2,9 @@
 
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Literal
 from uuid import uuid4
+
+HIGHLIGHT_COLORS = ("yellow", "green", "blue", "pink")
 
 
 class NoteType(StrEnum):
@@ -101,11 +102,13 @@ class TextAnchor:
 @dataclass(frozen=True)
 class Highlight:
     anchor: TextAnchor
-    color: Literal["yellow"] = "yellow"
+    color: str = "yellow"
     id: str = field(default_factory=lambda: str(uuid4()))
 
     def __post_init__(self) -> None:
         if not isinstance(self.anchor, TextAnchor):
             raise ValueError("highlight requires a text anchor")
-        if self.color not in {"yellow"}:
-            raise ValueError("highlight color must be yellow")
+        if self.color not in HIGHLIGHT_COLORS:
+            raise ValueError(
+                f"highlight color must be one of {', '.join(HIGHLIGHT_COLORS)}"
+            )

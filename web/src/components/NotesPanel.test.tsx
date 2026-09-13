@@ -101,6 +101,27 @@ it('does not show a stale paper A save failure after switching to paper B', asyn
   expect(screen.getByLabelText('新建笔记')).toHaveValue('');
 });
 
+it('keeps the note and reports the failure when deletion fails', async () => {
+  const user = userEvent.setup();
+  render(
+    <NotesPanel
+      paperId="paper-a"
+      activeSource={null}
+      notes={[{ id: 'note-a', body: '待删除笔记。', element_id: null, page_number: 1 }]}
+      anchors={[]}
+      documentElements={[]}
+      saveNote={vi.fn()}
+      onSelectSource={vi.fn()}
+      deleteNote={vi.fn().mockResolvedValue(false)}
+    />,
+  );
+
+  await user.click(screen.getByRole('button', { name: '删除' }));
+
+  expect(await screen.findByRole('alert')).toHaveTextContent('笔记删除失败，请稍后重试。');
+  expect(screen.getByText('待删除笔记。')).toBeInTheDocument();
+});
+
 it('shows notes newest first and keeps their original order when timestamps match or are absent', () => {
   render(
     <NotesPanel

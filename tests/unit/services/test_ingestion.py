@@ -1,13 +1,14 @@
 from pathlib import Path
 from uuid import UUID
 
+import pymupdf
 import pytest
 
 import paper_agent.services.ingestion as ingestion_module
 from paper_agent.config import Settings
 from paper_agent.domain import BoundingBox, DocumentElement, ProcessingStatus, Section
 from paper_agent.parsers.base import PdfParseError
-from paper_agent.parsers.markitdown_stage1 import MarkdownDocument, MarkdownParseError
+from paper_agent.parsers.pymupdf_stage1 import Stage1Document, Stage1ParseError
 from paper_agent.schemas import UploadPayload
 from paper_agent.services.ingestion import PaperIngestionService
 from paper_agent.storage import PaperRepository
@@ -51,7 +52,7 @@ def test_ingestion_persists_source_geometry_and_document(
     paragraph = next(
         element
         for element in document.elements
-        if element.kind == "paragraph" and element.text == "Introduction"
+        if element.kind == "paragraph" and element.text == "Sample body text."
     )
     assert paragraph.location_status == "located"
     assert paragraph.page_number == 1
@@ -61,7 +62,7 @@ def test_ingestion_persists_source_geometry_and_document(
         paragraph.bbox.y0,
         paragraph.bbox.x1,
         paragraph.bbox.y1,
-    ) == pytest.approx((0.1, 0.040875, 0.387375, 0.116445))
+    ) == pytest.approx((0.100000, 0.040875, 0.540220, 0.116445))
     assert service.get_source_path(paper.id).read_bytes() == sample_pdf_bytes
     assert service.repository.get_paper(paper.id).source_published is True
     assert service.repository.get_processing_statuses(paper.id) == (
@@ -356,6 +357,48 @@ def test_temporary_cleanup_failure_after_publish_keeps_paper_successful(
     assert source_path.samefile(temporary_source_path)
 
 
+def test_ingestion_persists_sections_with_page_numbers_and_linked_paragraphs(
+    service: PaperIngestionService, tmp_path: Path
+) -> None:
+    """Breaks if font-detected sections lose their page or paragraph linkage."""
+    document = pymupdf.open()
+    page = document.new_page(width=400, height=600)
+    page.insert_text((40, 60), "1. Introduction", fontsize=16)
+    page.insert_text((40, 100), "We study routing for sparse experts.", fontsize=10)
+    page = document.new_page(width=400, height=600)
+    page.insert_text((40, 60), "2. Method", fontsize=16)
+    page.insert_text((40, 100), "Tokens are routed to experts.", fontsize=10)
+    content = document.tobytes()
+    document.close()
+
+    paper = service.ingest(
+        UploadPayload(
+            filename="sections.pdf",
+            content=content,
+            media_type="application/pdf",
+        )
+    )
+
+    assert paper.stage1_status == ProcessingStatus.completed
+    document = service.get_document(paper.id)
+    assert [(section.title, section.order, section.page_number) for section in document.sections] == [
+        ("1. Introduction", 0, 1),
+        ("2. Method", 1, 2),
+    ]
+    sections_by_id = {section.id: section for section in document.sections}
+    paragraphs = [
+        element
+        for element in document.elements
+        if element.kind == "paragraph" and element.location_status == "located"
+    ]
+    assert [paragraph.text for paragraph in paragraphs] == [
+        "We study routing for sparse experts.",
+        "Tokens are routed to experts.",
+    ]
+    assert [paragraph.section_id for paragraph in paragraphs] == list(sections_by_id)
+    assert [paragraph.page_number for paragraph in paragraphs] == [1, 2]
+
+
 def test_stage1_failure_keeps_stage0_and_marks_paper_partial(
     service: PaperIngestionService,
     sample_pdf_bytes: bytes,
@@ -363,7 +406,7 @@ def test_stage1_failure_keeps_stage0_and_marks_paper_partial(
 ) -> None:
     """Breaks if Stage 1 failure erases source records or reports completion."""
     def fail_stage1(*_args, **_kwargs):
-        raise MarkdownParseError("converter failed")
+        raise Stage1ParseError("converter failed")
 
     monkeypatch.setattr(service, "_run_stage1", fail_stage1)
 
@@ -481,7 +524,7 @@ def test_stage1_persistence_failure_rolls_back_sections_and_paragraphs(
     monkeypatch.setattr(
         service,
         "_run_stage1",
-        lambda _path: MarkdownDocument(sections=(section,), paragraphs=()),
+        lambda _path: Stage1Document(sections=(section,), paragraphs=()),
     )
     monkeypatch.setattr(service.aligner, "align", lambda *_args: elements)
 

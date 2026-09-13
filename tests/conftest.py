@@ -22,7 +22,7 @@ def sample_pdf(tmp_path: Path) -> Path:
     path = tmp_path / "sample.pdf"
     document = pymupdf.open()
     page = document.new_page(width=200, height=200)
-    page.insert_text((20, 20), "Introduction")
+    page.insert_text((20, 20), "Sample body text.")
     document.save(path)
     document.close()
     return path

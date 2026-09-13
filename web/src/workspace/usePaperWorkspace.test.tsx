@@ -12,13 +12,6 @@ const emptyGraph: PaperGraph = { nodes: [], edges: [] };
 const selectionDraft: TextAnchorDraft = {
   quote: '选中的原文', page_number: 1, rects: [{ order: 0, x0: 0.1, y0: 0.2, x1: 0.5, y1: 0.3 }],
 };
-const builtGraph: PaperGraph = {
-  nodes: [{
-    id: 'built', node_type: 'claim', name: 'Built graph', summary: 'Workspace result.',
-    stage: 'stage2', evidence_element_ids: [],
-  }],
-  edges: [],
-};
 
 function documentFor(paperId: string): PaperDocument {
   return {
@@ -105,41 +98,19 @@ it('reports an unfinished translate stream as a translate-specific failure', asy
   expect(response).toEqual({ status: 'failed', text: '', message: '翻译请求未完成。' });
 });
 
-it('returns and stores a core graph built for the active paper', async () => {
-  const buildCoreGraph = vi.spyOn(paperApi, 'buildCoreGraph').mockResolvedValue(builtGraph);
-  const { result } = renderHook(() => usePaperWorkspace('paper-a'));
-  await waitFor(() => expect(result.current.graph).toBe(emptyGraph));
-
-  let returnedGraph: PaperGraph | null | undefined;
-  await act(async () => {
-    returnedGraph = await result.current.buildCoreGraph('qwen');
-  });
-
-  expect(buildCoreGraph).toHaveBeenCalledWith('paper-a', expect.objectContaining({
-    model_profile_id: 'qwen', request_id: expect.any(String),
-  }));
-  expect(returnedGraph).toBe(builtGraph);
-  expect(result.current.graph).toBe(builtGraph);
-});
-
-it('uses a fresh current-model payload for graph and Agent calls without resetting a same-mode conversation', async () => {
+it('uses a fresh current-model payload for Agent calls without resetting the conversation', async () => {
   const first: AgentMessage = { conversation_id: 'conversation-a', message_id: 'message-a', status: 'grounded', paper_answer: '回答一', background_explanation: null, citations: [] };
   const second: AgentMessage = { ...first, message_id: 'message-b', paper_answer: '回答二' };
-  const core = vi.spyOn(paperApi, 'buildCoreGraph').mockResolvedValue(builtGraph);
-  const deep = vi.spyOn(paperApi, 'buildDeepGraph').mockResolvedValue(builtGraph);
   const agent = vi.spyOn(paperApi, 'askAgent').mockResolvedValueOnce(first).mockResolvedValueOnce(second);
-  vi.stubGlobal('crypto', { randomUUID: vi.fn().mockReturnValueOnce('agent-request-a').mockReturnValueOnce('agent-request-b').mockReturnValueOnce('core-request').mockReturnValueOnce('deep-request') });
+  vi.stubGlobal('crypto', { randomUUID: vi.fn().mockReturnValueOnce('agent-request-a').mockReturnValueOnce('agent-request-b') });
   const { result } = renderHook(() => usePaperWorkspace('paper-a'));
   await waitFor(() => expect(result.current.document).not.toBeNull());
 
-  await act(async () => { await result.current.askAgent('第一个问题', 'paper_only', 'qwen'); });
-  await act(async () => { await result.current.askAgent('第二个问题', 'paper_only', 'deepseek', { quote: '选择原文', page_number: 2, rects: [] }); });
-  await act(async () => { await result.current.buildCoreGraph('deepseek'); await result.current.buildDeepGraph('deepseek'); });
+  await act(async () => { await result.current.askAgent('第一个问题', 'qwen'); });
+  await act(async () => { await result.current.askAgent('第二个问题', 'deepseek', { quote: '选择原文', page_number: 2, rects: [] }); });
 
-  expect(agent).toHaveBeenNthCalledWith(1, 'paper-a', { content: '第一个问题', mode: 'paper_only', conversation_id: undefined, model_profile_id: 'qwen', request_id: 'agent-request-a' });
-  expect(agent).toHaveBeenNthCalledWith(2, 'paper-a', { content: '第二个问题', mode: 'paper_only', conversation_id: 'conversation-a', model_profile_id: 'deepseek', request_id: 'agent-request-b', selection: { quote: '选择原文', page_number: 2, rects: [] } });
-  expect(core).toHaveBeenCalledWith('paper-a', { model_profile_id: 'deepseek', request_id: 'core-request' });
-  expect(deep).toHaveBeenCalledWith('paper-a', { model_profile_id: 'deepseek', request_id: 'deep-request' });
+  expect(agent).toHaveBeenNthCalledWith(1, 'paper-a', { content: '第一个问题', conversation_id: undefined, model_profile_id: 'qwen', request_id: 'agent-request-a' });
+  expect(agent).toHaveBeenNthCalledWith(2, 'paper-a', { content: '第二个问题', conversation_id: 'conversation-a', model_profile_id: 'deepseek', request_id: 'agent-request-b', selection: { quote: '选择原文', page_number: 2, rects: [] } });
   expect(result.current.conversationId).toBe('conversation-a');
   expect(result.current.messages.map(({ message_id }) => message_id)).toEqual(['message-a', 'message-b']);
   expect(result.current.exchanges).toEqual([
@@ -284,94 +255,33 @@ it('keeps the selection and uses a local error when highlight persistence fails'
   expect(result.current.errorMessage).toBe('高亮保存失败：请稍后重试。');
 });
 
-it('starts a new Agent conversation when the second request changes answer scope', async () => {
-  const paperOnlyResponse: AgentMessage = {
-    conversation_id: 'paper-only-conversation',
-    message_id: 'message-1',
-    status: 'grounded',
-    paper_answer: 'Paper-only answer.',
-    background_explanation: null,
-    citations: [],
+it('updates a highlight color and reports a failed color change safely', async () => {
+  const yellowHighlight: Highlight = {
+    id: 'highlight-a', color: 'yellow',
+    anchor: {
+      id: 'anchor-a', quote: '选中的文字', page_number: 1, element_id: null,
+      rects: [{ order: 0, x0: 0.1, y0: 0.2, x1: 0.5, y1: 0.3 }],
+    },
   };
-  const backgroundResponse: AgentMessage = {
-    ...paperOnlyResponse,
-    conversation_id: 'background-conversation',
-    message_id: 'message-2',
-  };
-  const continuedBackgroundResponse: AgentMessage = {
-    ...backgroundResponse,
-    message_id: 'message-3',
-  };
-  const askAgent = vi.spyOn(paperApi, 'askAgent')
-    .mockResolvedValueOnce(paperOnlyResponse)
-    .mockResolvedValueOnce(backgroundResponse)
-    .mockResolvedValueOnce(continuedBackgroundResponse);
+  const greenHighlight: Highlight = { ...yellowHighlight, color: 'green' };
+  vi.spyOn(paperApi, 'getAnnotations').mockResolvedValue({ highlights: [yellowHighlight], notes: [] });
+  vi.spyOn(paperApi, 'updateHighlight').mockResolvedValue(greenHighlight);
   const { result } = renderHook(() => usePaperWorkspace('paper-a'));
-  await waitFor(() => expect(result.current.document).not.toBeNull());
+  await waitFor(() => expect(result.current.highlights).toEqual([yellowHighlight]));
 
-  await act(async () => {
-    await result.current.askAgent('What does the paper show?', 'paper_only', 'qwen');
-  });
-  await waitFor(() => expect(result.current.conversationId).toBe('paper-only-conversation'));
-  await act(async () => {
-    await result.current.askAgent('Why does that matter?', 'external_knowledge', 'qwen');
-  });
-  await waitFor(() => expect(result.current.conversationId).toBe('background-conversation'));
-  await act(async () => {
-    await result.current.askAgent('What follows from that?', 'external_knowledge', 'qwen');
-  });
+  await act(async () => { await result.current.changeHighlightColor('highlight-a', 'green'); });
 
-  expect(askAgent).toHaveBeenNthCalledWith(1, 'paper-a', expect.objectContaining({
-    content: 'What does the paper show?', mode: 'paper_only', conversation_id: undefined,
-    model_profile_id: 'qwen', request_id: expect.any(String),
-  }));
-  expect(askAgent).toHaveBeenNthCalledWith(2, 'paper-a', expect.objectContaining({
-    content: 'Why does that matter?', mode: 'external_knowledge', conversation_id: undefined,
-    model_profile_id: 'qwen', request_id: expect.any(String),
-  }));
-  expect(askAgent).toHaveBeenNthCalledWith(3, 'paper-a', expect.objectContaining({
-    content: 'What follows from that?', mode: 'external_knowledge', conversation_id: 'background-conversation',
-    model_profile_id: 'qwen', request_id: expect.any(String),
-  }));
-  expect(result.current.conversationId).toBe('background-conversation');
-});
+  expect(paperApi.updateHighlight).toHaveBeenCalledWith(
+    'paper-a', 'highlight-a', { color: 'green' },
+    expect.objectContaining({ signal: expect.any(AbortSignal) }),
+  );
+  expect(result.current.highlights).toEqual([greenHighlight]);
 
-it('returns null without calling a builder when no paper is active', async () => {
-  const buildCoreGraph = vi.spyOn(paperApi, 'buildCoreGraph');
-  const buildDeepGraph = vi.spyOn(paperApi, 'buildDeepGraph');
-  const { result } = renderHook(() => usePaperWorkspace(null));
+  vi.mocked(paperApi.updateHighlight).mockRejectedValueOnce(new ApiError(503, '服务不可用。'));
+  await act(async () => { await result.current.changeHighlightColor('highlight-a', 'blue'); });
 
-  let coreResult: PaperGraph | null | undefined;
-  let deepResult: PaperGraph | null | undefined;
-  await act(async () => {
-    coreResult = await result.current.buildCoreGraph('qwen');
-    deepResult = await result.current.buildDeepGraph('qwen');
-  });
-
-  expect(coreResult).toBeNull();
-  expect(deepResult).toBeNull();
-  expect(buildCoreGraph).not.toHaveBeenCalled();
-  expect(buildDeepGraph).not.toHaveBeenCalled();
-});
-
-it('reports and rethrows a deep graph API error', async () => {
-  const apiError = new ApiError(503, 'Graph service is unavailable.');
-  vi.spyOn(paperApi, 'buildDeepGraph').mockRejectedValue(apiError);
-  const { result } = renderHook(() => usePaperWorkspace('paper-a'));
-  await waitFor(() => expect(result.current.graph).toBe(emptyGraph));
-
-  let caught: unknown;
-  await act(async () => {
-    try {
-      await result.current.buildDeepGraph('qwen');
-    } catch (error) {
-      caught = error;
-    }
-  });
-
-  expect(caught).toBe(apiError);
-  expect(result.current.errorMessage).toBe('暂时无法构建深度图谱。');
-  expect(result.current.graph).toBe(emptyGraph);
+  expect(result.current.highlights).toEqual([greenHighlight]);
+  expect(result.current.errorMessage).toBe('修改高亮颜色失败：请稍后重试。');
 });
 
 it('mounts required document and graph state when notes fail independently', async () => {
@@ -382,7 +292,7 @@ it('mounts required document and graph state when notes fail independently', asy
   const { result } = renderHook(() => usePaperWorkspace('paper-a'));
 
   await waitFor(() => expect(result.current.document).not.toBeNull());
-  expect(result.current.graph).toBe(emptyGraph);
+  expect(result.current.graph).toEqual(emptyGraph);
   expect(result.current.errorMessage).toBeNull();
   expect(result.current.notesErrorMessage).toBe('论文笔记暂时无法加载。');
 });
@@ -394,7 +304,7 @@ it('mounts required document and graph state while notes remain unresolved', asy
   const { result } = renderHook(() => usePaperWorkspace('paper-a'));
 
   await waitFor(() => expect(result.current.document).not.toBeNull());
-  expect(result.current.graph).toBe(emptyGraph);
+  expect(result.current.graph).toEqual(emptyGraph);
   expect(result.current.notes).toEqual([]);
 });
 
@@ -416,7 +326,6 @@ it('ignores a stale notes response after retrying the same paper', async () => {
   rerender({ revision: 1 });
   await waitFor(() => expect(result.current.notes).toEqual([currentNote]));
   expect(paperApi.getDocument).toHaveBeenCalledTimes(2);
-  expect(paperApi.getGraph).toHaveBeenCalledTimes(2);
   expect(paperApi.getNotes).toHaveBeenCalledTimes(2);
   await act(async () => {
     staleNotes.resolve([{
@@ -454,13 +363,9 @@ it('ignores a stale notes response after switching papers', async () => {
   expect(result.current.notes).toEqual([paperBNote]);
 });
 
-it('ignores old graph, Agent, and note completions after retrying the same paper', async () => {
-  const oldCoreGraph = deferred<PaperGraph>();
-  const oldDeepGraph = deferred<PaperGraph>();
+it('ignores old Agent and note completions after retrying the same paper', async () => {
   const oldAgentMessage = deferred<AgentMessage>();
   const oldNote = deferred<Note>();
-  vi.spyOn(paperApi, 'buildCoreGraph').mockReturnValue(oldCoreGraph.promise);
-  vi.spyOn(paperApi, 'buildDeepGraph').mockReturnValue(oldDeepGraph.promise);
   vi.spyOn(paperApi, 'askAgent').mockReturnValue(oldAgentMessage.promise);
   vi.spyOn(paperApi, 'createNote').mockReturnValue(oldNote.promise);
 
@@ -470,22 +375,13 @@ it('ignores old graph, Agent, and note completions after retrying the same paper
   );
   await waitFor(() => expect(result.current.document).not.toBeNull());
 
-  const coreRequest = result.current.buildCoreGraph('qwen');
-  const deepRequest = result.current.buildDeepGraph('qwen');
-  const agentRequest = result.current.askAgent('Old question.', 'paper_only', 'qwen');
+  const agentRequest = result.current.askAgent('Old question.', 'qwen');
   const noteRequest = result.current.saveNote('Old note.');
 
   rerender({ revision: 1 });
   await waitFor(() => expect(result.current.loadRevision).toBe(1));
   await waitFor(() => expect(result.current.document).not.toBeNull());
 
-  const staleGraph: PaperGraph = {
-    nodes: [{
-      id: 'stale-node', node_type: 'claim', name: 'Stale graph', summary: 'Old result.',
-      stage: 'stage2', evidence_element_ids: [],
-    }],
-    edges: [],
-  };
   const staleMessage: AgentMessage = {
     conversation_id: 'stale-conversation',
     message_id: 'stale-message',
@@ -499,76 +395,36 @@ it('ignores old graph, Agent, and note completions after retrying the same paper
   };
 
   await act(async () => {
-    oldCoreGraph.resolve(staleGraph);
-    oldDeepGraph.resolve(staleGraph);
     oldAgentMessage.resolve(staleMessage);
     oldNote.resolve(staleNote);
-    await Promise.all([coreRequest, deepRequest, agentRequest, noteRequest]);
+    await Promise.all([agentRequest, noteRequest]);
   });
 
-  expect(result.current.graph).toBe(emptyGraph);
   expect(result.current.conversationId).toBeNull();
   expect(result.current.messages).toEqual([]);
   expect(result.current.notes).toEqual([]);
 });
 
-it('ignores an obsolete A graph completion after retrying A, switching to B, and returning to A', async () => {
-  const obsoleteGraph = deferred<PaperGraph>();
-  vi.spyOn(paperApi, 'buildCoreGraph').mockReturnValue(obsoleteGraph.promise);
-
-  const { result, rerender } = renderHook(
-    ({ paperId, revision }) => usePaperWorkspace(paperId, revision),
-    { initialProps: { paperId: 'paper-a' as string | null, revision: 0 } },
-  );
-  await waitFor(() => expect(result.current.document).not.toBeNull());
-  const obsoleteRequest = result.current.buildCoreGraph('qwen');
-
-  rerender({ paperId: 'paper-a', revision: 1 });
-  await waitFor(() => expect(result.current.loadRevision).toBe(1));
-  await waitFor(() => expect(result.current.document).not.toBeNull());
-
-  rerender({ paperId: 'paper-b', revision: 0 });
-  await waitFor(() => expect(result.current.activePaperId).toBe('paper-b'));
-  await waitFor(() => expect(result.current.document?.paper.id).toBe('paper-b'));
-
-  rerender({ paperId: 'paper-a', revision: 0 });
-  await waitFor(() => expect(result.current.activePaperId).toBe('paper-a'));
-  await waitFor(() => expect(result.current.document?.paper.id).toBe('paper-a'));
-
-  await act(async () => {
-    obsoleteGraph.resolve({
-      nodes: [{
-        id: 'obsolete-node', node_type: 'claim', name: 'Obsolete graph', summary: 'Old result.',
-        stage: 'stage2', evidence_element_ids: [],
-      }],
-      edges: [],
-    });
-    await obsoleteRequest;
-  });
-
-  expect(result.current.graph).toBe(emptyGraph);
-});
-
 it('ignores an old mutation failure after retrying the same paper', async () => {
-  const oldDeepGraph = deferred<PaperGraph>();
-  const apiError = new ApiError(503, 'Old graph failure.');
-  vi.spyOn(paperApi, 'buildDeepGraph').mockReturnValue(oldDeepGraph.promise);
+  const oldAgentMessage = deferred<AgentMessage>();
+  const apiError = new ApiError(503, 'Old agent failure.');
+  vi.spyOn(paperApi, 'askAgent').mockReturnValue(oldAgentMessage.promise);
 
   const { result, rerender } = renderHook(
     ({ revision }) => usePaperWorkspace('paper-a', revision),
     { initialProps: { revision: 0 } },
   );
   await waitFor(() => expect(result.current.document).not.toBeNull());
-  const oldRequest = result.current.buildDeepGraph('qwen');
-  const settledOldRequest = oldRequest.catch((error: unknown) => error);
+  const oldRequest = result.current.askAgent('Old question.', 'qwen');
+  const settledOldRequest = oldRequest.then((value) => value, (error: unknown) => error);
 
   rerender({ revision: 1 });
   await waitFor(() => expect(result.current.loadRevision).toBe(1));
   await act(async () => {
-    oldDeepGraph.reject(apiError);
+    oldAgentMessage.reject(apiError);
     await settledOldRequest;
   });
 
-  expect(await settledOldRequest).toBe(apiError);
+  expect(await settledOldRequest).toBeNull();
   expect(result.current.errorMessage).toBeNull();
 });

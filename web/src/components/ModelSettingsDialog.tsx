@@ -40,7 +40,7 @@ function capabilityText(capabilities: ModelProfile['capabilities'], key: Capabil
   if (capabilities.checked_at === null) {
     return '未测试';
   }
-  return capabilities[key] ? '支持' : '不支持';
+  return capabilities[key] ? '检测通过' : '检测未通过（可能是接口不兼容，请重新测试或检查服务配置）';
 }
 
 export function ModelSettingsDialog({
