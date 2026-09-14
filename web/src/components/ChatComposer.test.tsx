@@ -42,6 +42,30 @@ const firstAttachment = { draft: selection, token: 'attachment-a' };
 
 afterEach(cleanup);
 
+it('renders pending messages in the conversation and supports Enter and Shift+Enter', async () => {
+  const user = userEvent.setup();
+  const task = deferred<AgentMessage | null>();
+  const target = document.createElement('div');
+  document.body.append(target);
+  const askAgent = vi.fn(() => task.promise);
+  const view = render(<ChatComposer paperId="paper-a" profiles={profiles} selectedModelProfileId="qwen"
+    onSelectedModelProfileIdChange={vi.fn()} askAgent={askAgent} attachment={null}
+    onAttachmentClear={vi.fn()} messageTarget={target} />);
+  try {
+    const input = screen.getByRole('textbox');
+    await user.type(input, '解释方法');
+    await user.keyboard('{Shift>}{Enter}{/Shift}');
+    expect(askAgent).not.toHaveBeenCalled();
+    await user.type(input, '以及结论');
+    await user.keyboard('{Enter}');
+    expect(askAgent).toHaveBeenCalledWith('解释方法\n以及结论', 'qwen', undefined);
+    expect(target).toHaveTextContent('正在生成回答');
+    expect(screen.getByRole('form', { name: '论文助手输入区' })).not.toHaveTextContent('正在生成回答');
+    await act(async () => task.resolve(response));
+    expect(target).toBeEmptyDOMElement();
+  } finally { view.unmount(); target.remove(); }
+});
+
 it('answers greetings locally and shows honest pending feedback for paper questions', async () => {
   const user = userEvent.setup();
   const task = deferred<AgentMessage | null>();
@@ -55,9 +79,11 @@ it('answers greetings locally and shows honest pending feedback for paper questi
   expect(askAgent).not.toHaveBeenCalled();
   await user.type(input, '这篇论文讲了什么');
   await user.click(screen.getByRole('button', { name: '发送' }));
-  expect(screen.getByText(/正在等待论文助手处理/)).toBeVisible();
+  expect(screen.getByText(/正在生成回答/)).toBeVisible();
+  expect(input).toHaveValue('');
+  expect(screen.getByText('这篇论文讲了什么')).toHaveClass('agent-panel__question');
   await act(async () => task.resolve(response));
-  expect(screen.queryByText(/正在等待论文助手处理/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/正在生成回答/)).not.toBeInTheDocument();
 });
 
 it('sends the selected model and attached selection, then clears the attachment only after success', async () => {

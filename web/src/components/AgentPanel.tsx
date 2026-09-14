@@ -1,4 +1,5 @@
 import type { AgentMessage, Citation } from '../api/types';
+import { useEffect, useRef } from 'react';
 import type { AgentExchange } from '../workspace/types';
 
 export interface AgentPanelProps {
@@ -13,19 +14,21 @@ function statusLabel(status: AgentMessage['status']): string {
 }
 
 export function AgentPanel({ paperId, exchanges, onSelectCitation, onSelectNoteReference }: AgentPanelProps) {
+  const endRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { if (exchanges.length) endRef.current?.scrollIntoView?.({ block: 'nearest' }); }, [exchanges.length]);
   return (
     <section className="agent-panel" aria-labelledby="agent-panel-title">
-      <header className="agent-panel__header">
+      <header className="agent-panel__header chat-visually-hidden">
         <div><h2 id="agent-panel-title">论文助手</h2></div>
         <p className="agent-panel__quiet-status">{paperId === null ? '请选择论文。' : '在下方输入问题。'}</p>
       </header>
       <div className="agent-panel__conversation" aria-live="polite">
-        {exchanges.length === 0 ? <p className="agent-panel__empty">回答会显示在这里。</p> : exchanges.map(({ question, message }) => (
+        {exchanges.length === 0 ? <div className="chat-welcome"><h2>一起读懂这篇论文</h2><p>可以提问，也可以选中原文后深入讨论。</p></div> : exchanges.map(({ question, message }) => (
           <article className="agent-panel__exchange" key={message.message_id}>
             <p className="agent-panel__question">{question}</p>
             <div className="agent-panel__message-meta">
-              <p className={`agent-panel__status agent-panel__status--${message.status}`}>{statusLabel(message.status)}</p>
-              <span className="agent-panel__model-badge">{message.model?.display_name ?? '旧版本模型记录不可用'}</span>
+              <span className="chat-feedback__name">论文助手</span>
+              <span className="agent-panel__model-badge" title={statusLabel(message.status)}>{message.model?.display_name ?? ''}</span>
             </div>
             {message.paper_answer !== '' && <p className="agent-panel__answer">{message.paper_answer}</p>}
             {message.background_explanation !== null && <section className="agent-panel__background" aria-label="背景知识说明"><h3>背景知识</h3><p>{message.background_explanation}</p></section>}
@@ -34,6 +37,7 @@ export function AgentPanel({ paperId, exchanges, onSelectCitation, onSelectNoteR
           </article>
         ))}
       </div>
+      <div ref={endRef} />
     </section>
   );
 }

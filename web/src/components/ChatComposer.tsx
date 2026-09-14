@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 import type { AgentMessage, ModelProfile, TextAnchorDraft } from '../api/types';
 import { ModelSelector } from './ModelSelector';
@@ -21,6 +22,8 @@ export interface ChatComposerProps {
   attachment: ComposerAttachment | null;
   onAttachmentClear: (token: string) => void;
   focusRequest?: number;
+  messageTarget?: HTMLDivElement | null;
+  onSendStart?: () => void;
 }
 
 export function ChatComposer({
@@ -32,11 +35,18 @@ export function ChatComposer({
   attachment,
   onAttachmentClear,
   focusRequest = 0,
+  messageTarget = null,
+  onSendStart,
 }: ChatComposerProps) {
   const [content, setContent] = useState('');
   const [pending, setPending] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [greeting, setGreeting] = useState(false);
+  const [sentQuestion, setSentQuestion] = useState('');
+  const feedbackRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    feedbackRef.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [pending, greeting, messageTarget]);
   useEffect(() => {
     if (!pending) return;
     const started = Date.now();
@@ -63,6 +73,7 @@ export function ChatComposer({
     setContent('');
     setPending(false);
     setGreeting(false);
+    setSentQuestion('');
     setErrorMessage(null);
   }, [paperId]);
 
@@ -70,7 +81,7 @@ export function ChatComposer({
     event.preventDefault();
     const question = content.trim();
     if (!pending && /^(你好|您好|嗨|hello|hi)[！!。.?？\s]*$/i.test(question) && attachment === null) {
-      setGreeting(true); setContent(''); return;
+      setGreeting(true); setSentQuestion(question); setContent(''); onSendStart?.(); return;
     }
     if (!question || pending || paperId === null || selectedModelProfileId === null) return;
     const requestId = ++requestVersion.current;
@@ -80,12 +91,16 @@ export function ChatComposer({
       requestVersion.current === requestId && currentPaperId.current === requestPaperId
     );
     setPending(true);
+    setSentQuestion(question);
+    setContent('');
+    onSendStart?.();
     setGreeting(false);
     setErrorMessage(null);
     try {
       const response = await askAgent(question, selectedModelProfileId, sentAttachment?.draft);
       if (!isCurrentRequest()) return;
       if (response === null) {
+        setContent(question);
         setErrorMessage('发送失败，请重试。');
         return;
       }
@@ -95,6 +110,7 @@ export function ChatComposer({
       }
     } catch {
       if (!isCurrentRequest()) return;
+      setContent(question);
       setErrorMessage('发送失败，请重试。');
     } finally {
       if (isCurrentRequest()) setPending(false);
@@ -102,6 +118,13 @@ export function ChatComposer({
   };
 
   const unavailable = selectedModelProfileId === null;
+  const feedback = (pending || greeting) && <div ref={feedbackRef} className="chat-feedback">
+    <p className="agent-panel__question">{sentQuestion}</p>
+    <div className="chat-feedback__assistant" role="status">
+      <span className="chat-feedback__name">论文助手</span>
+      {greeting ? <p>你好！我可以帮你概括论文、解释方法或分析选中的段落。试试问“这篇论文讲了什么”。</p> : <p className="chat-feedback__waiting"><span className="chat-typing" aria-hidden="true"><i /><i /><i /></span>{elapsed >= 20 ? '模型还在处理，请稍候…' : '正在生成回答…'}</p>}
+    </div>
+  </div>;
 
   return (
     <form className="chat-composer" onSubmit={submit} aria-label="论文助手输入区">
@@ -118,12 +141,19 @@ export function ChatComposer({
           <button type="button" onClick={() => onAttachmentClear(attachment.token)} aria-label="移除选区附件">移除</button>
         </div>
       )}
-      <label htmlFor={inputId}>向论文助手提问</label>
+      <label className="chat-composer__label" htmlFor={inputId}>向论文助手提问</label>
       <div className="chat-composer__input-row">
         <textarea
           ref={textareaRef}
           id={inputId}
-          rows={3}
+          rows={2}
+          placeholder="围绕这篇论文，问点什么…"
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) {
+              event.preventDefault();
+              event.currentTarget.form?.requestSubmit();
+            }
+          }}
           value={content}
           onChange={(event) => setContent(event.target.value)}
           disabled={pending || paperId === null || unavailable}
@@ -133,8 +163,8 @@ export function ChatComposer({
         </button>
       </div>
       {unavailable && <p className="chat-composer__guidance">请先在当前模型中选择可用模型，再发送问题。</p>}
-      {greeting && <p role="status">你好！我可以帮你概括论文、解释方法或分析选中的段落。试试问“这篇论文讲了什么”。</p>}
-      {pending && <div role="status" aria-live="polite"><p>已收到：{content}</p><p>正在等待论文助手处理，已用时 {elapsed} 秒。回答完成后会显示。</p>{elapsed >= 20 && <p>模型处理较慢，请稍候，无需重复发送。</p>}</div>}
+      <p className="chat-composer__hint">Enter 发送，Shift+Enter 换行</p>
+      {messageTarget ? createPortal(feedback, messageTarget) : feedback}
       {errorMessage !== null && <p className="chat-composer__error" role="alert">{errorMessage}</p>}
     </form>
   );

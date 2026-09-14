@@ -15,6 +15,7 @@ type PanelTab = 'agent' | 'notes';
 
 export function RightPanel({ paperId, agent, notes, composer }: RightPanelProps) {
   const [selectedTab, setSelectedTab] = useState<PanelTab>('agent');
+  const [messageTarget, setMessageTarget] = useState<HTMLDivElement | null>(null);
   const tabId = useId();
   const tabRefs = useRef<Record<PanelTab, HTMLButtonElement | null>>({ agent: null, notes: null });
   useEffect(() => { setSelectedTab('agent'); }, [paperId]);
@@ -51,10 +52,10 @@ export function RightPanel({ paperId, agent, notes, composer }: RightPanelProps)
         })}
       </div>
       <div className="right-panel__content">
-        <div id={`${tabId}-agent-panel`} role="tabpanel" aria-labelledby={`${tabId}-agent-tab`} hidden={selectedTab !== 'agent'}><AgentPanel paperId={paperId} {...agent} /></div>
+        <div id={`${tabId}-agent-panel`} role="tabpanel" aria-labelledby={`${tabId}-agent-tab`} hidden={selectedTab !== 'agent'}><AgentPanel paperId={paperId} {...agent} /><div className="chat-live-messages" ref={setMessageTarget} /></div>
         <div id={`${tabId}-notes-panel`} role="tabpanel" aria-labelledby={`${tabId}-notes-tab`} hidden={selectedTab !== 'notes'}><NotesPanel paperId={paperId} {...notes} /></div>
       </div>
-      <ChatComposer paperId={paperId} {...composer} />
+      <ChatComposer paperId={paperId} {...composer} messageTarget={messageTarget} onSendStart={() => setSelectedTab('agent')} />
     </aside>
   );
 }
