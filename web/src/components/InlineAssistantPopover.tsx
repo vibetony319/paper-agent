@@ -70,10 +70,14 @@ export function InlineAssistantPopover({
     setState('streaming');
     setText('');
     setMessage(null);
-    const result = await runSelectionAssist(
+    let result: AssistResult;
+    try { result = await runSelectionAssist(
       action, draft, modelProfileId, requestId.current, nextController.signal,
       (delta) => setText((current) => current + delta),
-    );
+    ); } catch {
+      result = nextController.signal.aborted ? { status: 'cancelled', text: '' }
+        : { status: 'failed', text: '', message: `${title}失败，请重试。` };
+    }
     if (controller.current !== nextController) return;
     controller.current = null;
     setText(result.text);
@@ -85,7 +89,7 @@ export function InlineAssistantPopover({
     if (modelProfileId === null) return undefined;
     // The timeout keeps StrictMode's development-only setup/cleanup cycle from starting a live request.
     const timer = window.setTimeout(() => { void start(); }, 0);
-    return () => { window.clearTimeout(timer); controller.current?.abort(); };
+    return () => { window.clearTimeout(timer); const active = controller.current; controller.current = null; active?.abort(); };
   }, [action, draft, modelProfileId, start]);
 
   const cancel = () => controller.current?.abort();

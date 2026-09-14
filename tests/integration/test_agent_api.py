@@ -1190,10 +1190,10 @@ def test_agent_maps_resource_validation_and_model_failures_to_safe_boundaries(
     assert "raw model endpoint secret" not in failure.text
 
 
-def test_agent_keeps_citation_guard_fallback_as_a_successful_safe_answer(
+def test_agent_returns_model_answer_without_citation_guard_replacement(
     client: TestClient, uploaded_paper: UploadedPaper
 ) -> None:
-    """Breaks if an unsupported final model claim becomes an error or escapes unchanged."""
+    """A model answer is returned even when no tool evidence was collected."""
     _configure_fake_agent_runtime(
         client.app,
         FakeAgentClient(
@@ -1212,9 +1212,9 @@ def test_agent_keeps_citation_guard_fallback_as_a_successful_safe_answer(
     )
 
     assert response.status_code == 200
-    assert response.json()["status"] == "insufficient_evidence"
-    assert response.json()["citations"] == []
-    assert "raw unsupported claim" not in response.text
+    assert response.json()["status"] == "grounded"
+    assert len(response.json()["citations"]) == 1
+    assert "raw unsupported claim" in response.text
 
 
 def test_agent_health_is_explicit_and_maps_unavailable_or_failed_validation_to_503(

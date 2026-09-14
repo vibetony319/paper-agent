@@ -17,7 +17,7 @@
 - [模型服务与模型档案](model-services.md)：请求作用域模型、能力、密钥与快照。
 - [数据模型与删除恢复](data-model.md)：SQLite、迁移、所有权与永久删除。
 - [PDF 文本批注后端契约](pdf-annotations.md)：TextLayer、单页归一化锚点、SSE 与笔记。
-- [笔记记忆与 Agent 注入](note-memory.md)：6,000 字符预算、检索和 Citation Guard 边界。
+- [笔记记忆与 Agent 注入](note-memory.md)：6,000 字符预算、检索和模型回答/引用链接边界。
 - [后续路线图](roadmap.md)：尚未实现的 OCR、协作、跨页选区和可编辑图谱。
 
 ## 当前实施计划

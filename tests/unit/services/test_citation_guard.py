@@ -1,11 +1,6 @@
 import pytest
 
 
-CANONICAL_INSUFFICIENT_EVIDENCE = (
-    "I could not find enough evidence in this paper to answer that reliably."
-)
-
-
 def _grounded_payload(
     *, citations: list[str], background: str | None = None
 ) -> dict[str, object]:
@@ -17,34 +12,30 @@ def _grounded_payload(
     }
 
 
-def test_guard_replaces_an_unsupported_paper_answer_with_a_safe_refusal():
-    """Breaks if a fabricated or cross-request citation can carry model prose."""
+def test_parser_keeps_model_answer_when_citations_are_not_request_scoped():
+    """Citations are optional links and must not replace the model prose."""
     from paper_agent.services.citation_guard import CitationGuard
 
-    answer = CitationGuard().validate(
+    answer = CitationGuard().parse_model_answer(
         {
             "status": "grounded",
             "paper_answer": "The method improves accuracy.",
             "citation_element_ids": ["invented-element"],
             "background_explanation": None,
-        },
-        allowed_evidence_ids=frozenset({"e1"}),
+        }
     )
 
-    assert answer.status == "insufficient_evidence"
-    assert answer.paper_answer == CANONICAL_INSUFFICIENT_EVIDENCE
-    assert answer.citation_element_ids == ()
+    assert answer.status == "grounded"
+    assert answer.paper_answer == "The method improves accuracy."
+    assert answer.citation_element_ids == ("invented-element",)
     assert answer.background_explanation is None
-    assert "improves accuracy" not in answer.paper_answer
 
 
-def test_guard_returns_grounded_answer_for_unique_allowed_citations():
-    """Breaks if evidence returned in this request is discarded or altered."""
+def test_parser_keeps_grounded_answer_and_citation_order():
     from paper_agent.services.citation_guard import CitationGuard
 
-    answer = CitationGuard().validate(
-        _grounded_payload(citations=["e2", "e1"]),
-        allowed_evidence_ids=frozenset({"e1", "e2"}),
+    answer = CitationGuard().parse_model_answer(
+        _grounded_payload(citations=["e2", "e1"])
     )
 
     assert answer.status == "grounded"
@@ -53,103 +44,90 @@ def test_guard_returns_grounded_answer_for_unique_allowed_citations():
     assert answer.background_explanation is None
 
 
-@pytest.mark.parametrize("citations", [[], ["e1", "e1"]])
-def test_guard_replaces_answers_without_a_nonempty_unique_citation_set(citations: list[str]):
-    """Breaks if empty or duplicate citation lists can return a paper claim."""
+@pytest.mark.parametrize("citations", [[], ["e1", "e1"], ["   "]])
+def test_parser_keeps_answer_without_clean_citations(citations: list[str]):
     from paper_agent.services.citation_guard import CitationGuard
 
-    answer = CitationGuard().validate(
-        _grounded_payload(citations=citations),
-        allowed_evidence_ids=frozenset({"e1"}),
+    answer = CitationGuard().parse_model_answer(
+        _grounded_payload(citations=citations)
     )
 
-    assert answer.status == "insufficient_evidence"
-    assert answer.paper_answer == CANONICAL_INSUFFICIENT_EVIDENCE
-    assert answer.citation_element_ids == ()
+    assert answer.status == "grounded"
+    assert answer.paper_answer == "The paper reports the measured result."
+    assert answer.citation_element_ids == tuple(citations)
 
 
-def test_guard_rejects_blank_evidence_ids_even_if_a_bad_allow_list_contains_them():
-    """Breaks if a malformed evidence ID can become a grounded citation."""
+def test_parser_keeps_background_explanation():
     from paper_agent.services.citation_guard import CitationGuard
 
-    answer = CitationGuard().validate(
-        _grounded_payload(citations=["   "]),
-        allowed_evidence_ids=frozenset({"   "}),
+    answer = CitationGuard().parse_model_answer(
+        _grounded_payload(citations=["e1"], background="Outside the paper.")
     )
 
-    assert answer.status == "insufficient_evidence"
-    assert answer.paper_answer == CANONICAL_INSUFFICIENT_EVIDENCE
-    assert answer.citation_element_ids == ()
+    assert answer.status == "grounded"
+    assert answer.paper_answer == "The paper reports the measured result."
+    assert answer.citation_element_ids == ("e1",)
+    assert answer.background_explanation == "Outside the paper."
 
 
-def test_background_explanation_causes_a_safe_refusal():
-    """Breaks if uncited background prose can reach the user."""
+def test_parser_keeps_model_content_for_insufficient_evidence_status():
     from paper_agent.services.citation_guard import CitationGuard
 
-    answer = CitationGuard().validate(
-        _grounded_payload(citations=["e1"], background="Outside the paper."),
-        allowed_evidence_ids=frozenset({"e1"}),
-    )
-
-    assert answer.status == "insufficient_evidence"
-    assert answer.paper_answer == CANONICAL_INSUFFICIENT_EVIDENCE
-    assert answer.citation_element_ids == ()
-    assert answer.background_explanation is None
-
-
-def test_insufficient_evidence_status_discards_all_model_prose():
-    """Breaks if a model can attach unverified prose to its own refusal."""
-    from paper_agent.services.citation_guard import CitationGuard
-
-    answer = CitationGuard().validate(
+    answer = CitationGuard().parse_model_answer(
         {
             "status": "insufficient_evidence",
-            "paper_answer": "Unverified model claim.",
+            "paper_answer": "I need more context before answering.",
             "citation_element_ids": ["e1"],
-            "background_explanation": "Unverified background.",
-        },
-        allowed_evidence_ids=frozenset({"e1"}),
+            "background_explanation": "Try selecting the relevant paragraph.",
+        }
     )
 
     assert answer.status == "insufficient_evidence"
-    assert answer.paper_answer == CANONICAL_INSUFFICIENT_EVIDENCE
-    assert answer.citation_element_ids == ()
-    assert answer.background_explanation is None
+    assert answer.paper_answer == "I need more context before answering."
+    assert answer.citation_element_ids == ("e1",)
+    assert answer.background_explanation == "Try selecting the relevant paragraph."
 
 
-def test_insufficient_evidence_status_ignores_blank_model_content():
-    """Breaks if irrelevant refusal fields block the canonical safe response."""
+def test_parser_does_not_reject_blank_model_content():
     from paper_agent.services.citation_guard import CitationGuard
 
-    answer = CitationGuard().validate(
+    answer = CitationGuard().parse_model_answer(
         {
             "status": "insufficient_evidence",
             "paper_answer": "",
             "citation_element_ids": [],
             "background_explanation": "   ",
-        },
-        allowed_evidence_ids=frozenset(),
+        }
     )
 
     assert answer.status == "insufficient_evidence"
-    assert answer.paper_answer == CANONICAL_INSUFFICIENT_EVIDENCE
+    assert answer.paper_answer == ""
     assert answer.citation_element_ids == ()
-    assert answer.background_explanation is None
+    assert answer.background_explanation == "   "
 
 
 def test_invalid_contract_raises_a_sanitized_error_without_model_content():
-    """Breaks if unknown or malformed model fields are silently accepted or leaked."""
+    """Only malformed transport structure remains an error boundary."""
     from paper_agent.services.citation_guard import CitationGuard, CitationGuardError
 
     payload = _grounded_payload(citations=["e1"])
     payload["unexpected"] = "secret model content"
 
     with pytest.raises(CitationGuardError) as error:
-        CitationGuard().validate(
-            payload,
-            allowed_evidence_ids=frozenset({"e1"}),
-        )
+        CitationGuard().parse_model_answer(payload)
 
     assert str(error.value) == "invalid final answer contract"
     assert "secret model content" not in str(error.value)
     assert error.value.__cause__ is None
+
+
+def test_legacy_validate_alias_no_longer_applies_an_evidence_allow_list():
+    from paper_agent.services.citation_guard import CitationGuard
+
+    answer = CitationGuard().validate(
+        _grounded_payload(citations=["outside-request"]),
+        allowed_evidence_ids=frozenset(),
+    )
+
+    assert answer.paper_answer == "The paper reports the measured result."
+    assert answer.citation_element_ids == ("outside-request",)

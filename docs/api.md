@@ -86,7 +86,7 @@
 
 ## Agent 与会话（3 个操作）
 
-主 Agent 是非流式 JSON：服务必须先完成工具循环和 Citation Guard 校验，才保存并返回回答；不可将它与 selection-assists SSE 混用。
+主 Agent 是非流式 JSON：服务完成工具循环后解析模型返回的结构化答案，再保存并返回模型回答；不可将它与 selection-assists SSE 混用。引用只影响可选的页面跳转，不会把模型正文替换成固定拒答。
 
 | 方法与路径 | 用途与重要请求/响应字段 | 稳定错误 / 幂等 |
 | --- | --- | --- |
@@ -94,7 +94,7 @@
 | `GET /api/papers/{paper_id}/agent/conversations/{conversation_id}` | 返回 [`ConversationResponse`](#schema-索引)，含用户/助手消息、历史模型快照、引用和笔记引用可用性。 | 论文或会话不存在 `404`；只读。 |
 | `POST /api/agent/health` | 校验默认/环境回退模型的工具调用能力，返回 `AgentHealthResponse`（默认 `status: "ok"`）。 | `503` 工具调用不可用；只做能力探测，不写业务数据，可安全重复。 |
 
-Citation Guard 只允许本次工具执行带回的定位元素作为 `citation_element_ids`；任何无效最终结构、重复/空/越界引用都会得到规范化的 `insufficient_evidence` 答案，而非未经验证的模型文本。
+模型返回的 `paper_answer`、`status` 和 `background_explanation` 会直接保存并返回。`citation_element_ids` 仅作为可选页面跳转：重复或无法定位到当前论文的 ID 会被去重/忽略，但不会改写模型回答。只有无法解析为约定 JSON 结构的响应才会返回 `502`。
 
 ## Schema 索引
 
@@ -103,5 +103,5 @@ Citation Guard 只允许本次工具执行带回的定位元素作为 `citation_
 重点响应字段：
 
 - `NoteResponse.model`、Agent 消息的 `model`、论文摘要的 Stage 2/3 模型均是无密钥快照；`NoteResponse` 还标明 `note_type`、`ai_generated`、`user_edited`、锚点和时间。
-- `PaperGraphResponse` 的节点/边都带 `evidence_element_ids`；图谱证据不能替代 Agent 的 Citation Guard 校验。
+- `PaperGraphResponse` 的节点/边都带 `evidence_element_ids`；图谱证据可用于模型上下文，但不会自动变成聊天引用链接。
 - `AgentMessageResponse.citations` 的每一项包含元素 ID、类型、页码与归一化 `bbox`；`note_references` 仅说明本次检索到的笔记，不是论文证据。

@@ -99,7 +99,7 @@ POST /api/papers/{paper_id}/selection-assists
 
 请求在选区字段基础上增加 `action`、`model_profile_id` 和 `request_id`。响应是 `text/event-stream`，事件固定为 `started`、`delta`、`completed`、`error`。只有 `completed` 才表示正式笔记已创建；取消、模型失败或输出超过 64,000 字符都只记录失败，不产生残缺笔记。
 
-相同 `paper_id + request_id` 的已完成请求只重放一个已保存的 `completed` 事件及其笔记，不再调用模型或重放旧 `delta`；运行中的请求产生 `error/assist_running`，失败请求可用同一标识重新开始。选区辅助是独立 SSE 管线，不是主 Agent 聊天；主 Agent 在 Citation Guard 处理结束前保持非流式。详见 [系统架构](architecture.md)。
+相同 `paper_id + request_id` 的已完成请求只重放一个已保存的 `completed` 事件及其笔记，不再调用模型或重放旧 `delta`；运行中的请求产生 `error/assist_running`，失败请求可用同一标识重新开始。选区辅助是独立 SSE 管线，不是主 Agent 聊天；主 Agent 因结构化答案解析保持非流式，模型正文不会因为引用缺失而被替换。详见 [系统架构](architecture.md)。
 
 ## 服务端校验
 

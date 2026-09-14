@@ -42,6 +42,24 @@ const firstAttachment = { draft: selection, token: 'attachment-a' };
 
 afterEach(cleanup);
 
+it('answers greetings locally and shows honest pending feedback for paper questions', async () => {
+  const user = userEvent.setup();
+  const task = deferred<AgentMessage | null>();
+  const askAgent = vi.fn(() => task.promise);
+  render(<ChatComposer paperId="paper-a" profiles={profiles} selectedModelProfileId="qwen"
+    onSelectedModelProfileIdChange={vi.fn()} askAgent={askAgent} attachment={null} onAttachmentClear={vi.fn()} />);
+  const input = screen.getByRole('textbox');
+  await user.type(input, '你好');
+  await user.click(screen.getByRole('button', { name: '发送' }));
+  expect(screen.getByText(/你好！我可以帮你概括论文/)).toBeVisible();
+  expect(askAgent).not.toHaveBeenCalled();
+  await user.type(input, '这篇论文讲了什么');
+  await user.click(screen.getByRole('button', { name: '发送' }));
+  expect(screen.getByText(/正在等待论文助手处理/)).toBeVisible();
+  await act(async () => task.resolve(response));
+  expect(screen.queryByText(/正在等待论文助手处理/)).not.toBeInTheDocument();
+});
+
 it('sends the selected model and attached selection, then clears the attachment only after success', async () => {
   const user = userEvent.setup();
   const askAgent = vi.fn().mockResolvedValue(response);

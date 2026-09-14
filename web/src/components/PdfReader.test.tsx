@@ -79,6 +79,25 @@ it('keeps the note anchor when focusing the editor clears the browser selection'
   await waitFor(() => expect(screen.queryByRole('form', { name: '为选区记笔记' })).not.toBeInTheDocument());
 });
 
+it('keeps assist snapshots after selection clears and starts fresh requests on reopening', async () => {
+  const draft = { quote: 'Selected passage', page_number: 1, rects: [{ order: 0, x0: 0.1, y0: 0.1, x1: 0.5, y1: 0.2 }] };
+  const runSelectionAssist = vi.fn().mockResolvedValue({ status: 'completed', text: '回答' });
+  const props = { paperId: 'paper-a', pages: [], activeSource: null, onSourceCleared: vi.fn(), selectedModelProfileId: 'model-a', runSelectionAssist };
+  const selection = { draft, toolbarRect: new DOMRect(20, 20, 100, 20) };
+  const { rerender } = render(<PdfReader {...props} selection={selection} />);
+  fireEvent.click(screen.getByRole('button', { name: /^解释$/ }));
+  rerender(<PdfReader {...props} selection={null} />);
+  expect(await screen.findByText('回答')).toBeVisible();
+  fireEvent.click(screen.getByText('回答'));
+  expect(screen.getByRole('region', { name: '解释选区' })).toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: '关闭' }));
+  rerender(<PdfReader {...props} selection={selection} />);
+  fireEvent.click(screen.getByRole('button', { name: /^翻译$/ }));
+  await waitFor(() => expect(runSelectionAssist).toHaveBeenCalledTimes(2));
+  expect(runSelectionAssist.mock.calls[0][3]).not.toEqual(runSelectionAssist.mock.calls[1][3]);
+  expect(runSelectionAssist.mock.calls[1][0]).toBe('translate');
+});
+
 it('keeps an aspect ratio page shell until a page enters the overscan area', async () => {
   render(
     <PdfReader paperId="paper-a" pages={manyPages} activeSource={null} onSourceCleared={vi.fn()} />,

@@ -41,8 +41,9 @@ def _json_completion(client, *, model, messages, schema_name, schema):
             term in detail for term in ("not supported", "unsupported", "does not support")
         ):
             raise
-        # Keep every source/tool message. The local schema and Citation Guard
-        # remain authoritative even when the provider only guarantees JSON syntax.
+        # Keep every source/tool message. The local schema remains the transport
+        # boundary even when the provider only guarantees JSON syntax; it does
+        # not judge whether the model's answer is substantively correct.
         response = client.chat.completions.create(
             model=model, temperature=0,
             messages=[{"role": "system", "content":

@@ -35,6 +35,15 @@ export function ChatComposer({
 }: ChatComposerProps) {
   const [content, setContent] = useState('');
   const [pending, setPending] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+  const [greeting, setGreeting] = useState(false);
+  useEffect(() => {
+    if (!pending) return;
+    const started = Date.now();
+    setElapsed(0);
+    const timer = window.setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 1000);
+    return () => window.clearInterval(timer);
+  }, [pending]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const inputId = useId();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -53,12 +62,16 @@ export function ChatComposer({
     requestVersion.current += 1;
     setContent('');
     setPending(false);
+    setGreeting(false);
     setErrorMessage(null);
   }, [paperId]);
 
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const question = content.trim();
+    if (!pending && /^(你好|您好|嗨|hello|hi)[！!。.?？\s]*$/i.test(question) && attachment === null) {
+      setGreeting(true); setContent(''); return;
+    }
     if (!question || pending || paperId === null || selectedModelProfileId === null) return;
     const requestId = ++requestVersion.current;
     const requestPaperId = paperId;
@@ -67,6 +80,7 @@ export function ChatComposer({
       requestVersion.current === requestId && currentPaperId.current === requestPaperId
     );
     setPending(true);
+    setGreeting(false);
     setErrorMessage(null);
     try {
       const response = await askAgent(question, selectedModelProfileId, sentAttachment?.draft);
@@ -119,6 +133,8 @@ export function ChatComposer({
         </button>
       </div>
       {unavailable && <p className="chat-composer__guidance">请先在当前模型中选择可用模型，再发送问题。</p>}
+      {greeting && <p role="status">你好！我可以帮你概括论文、解释方法或分析选中的段落。试试问“这篇论文讲了什么”。</p>}
+      {pending && <div role="status" aria-live="polite"><p>已收到：{content}</p><p>正在等待论文助手处理，已用时 {elapsed} 秒。回答完成后会显示。</p>{elapsed >= 20 && <p>模型处理较慢，请稍候，无需重复发送。</p>}</div>}
       {errorMessage !== null && <p className="chat-composer__error" role="alert">{errorMessage}</p>}
     </form>
   );

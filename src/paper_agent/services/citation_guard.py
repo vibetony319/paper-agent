@@ -1,4 +1,11 @@
-"""Validate final paper-agent answers against request-scoped evidence."""
+"""Parse the structured answer returned by the paper agent.
+
+The reader deliberately does not gate or replace model answers.  Citation IDs
+are treated as optional UI links and are cleaned up by the runtime only as
+needed for persistence.  The small parser here remains so malformed provider
+responses still produce a normal, sanitized service error instead of breaking
+the conversation with a raw exception.
+"""
 
 from dataclasses import dataclass
 from typing import Literal, cast
@@ -6,13 +13,8 @@ from typing import Literal, cast
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 
-_INSUFFICIENT_EVIDENCE_ANSWER = (
-    "I could not find enough evidence in this paper to answer that reliably."
-)
-
-
 class CitationGuardError(ValueError):
-    """Raised when a model final-answer payload violates the output contract."""
+    """Raised when a provider response cannot be parsed as the answer shape."""
 
 
 @dataclass(frozen=True)
@@ -34,54 +36,43 @@ class _FinalAnswerPayload(BaseModel):
 
 class CitationGuard:
     def output_schema(self) -> dict[str, object]:
-        """Return the strict JSON schema requested from the reasoning model."""
+        """Return the JSON shape used to transport the model answer."""
         return cast(dict[str, object], _FinalAnswerPayload.model_json_schema())
 
-    def validate(
+    def parse_model_answer(
         self,
         payload: dict[str, object],
-        *,
-        allowed_evidence_ids: frozenset[str],
     ) -> CitationValidatedAnswer:
+        """Return the model answer without evidence-based rejection.
+
+        ``status``, prose, optional background text, and citation IDs are all
+        kept as returned by the model.  In particular, a missing, duplicated,
+        or out-of-request citation must not replace the model's answer with a
+        fixed refusal message.
+        """
         try:
             final_answer = _FinalAnswerPayload.model_validate(payload)
         except ValidationError:
             raise CitationGuardError("invalid final answer contract") from None
 
-        if final_answer.status == "insufficient_evidence":
-            return _insufficient_evidence_answer()
-
-        paper_answer = final_answer.paper_answer.strip()
-        if not paper_answer:
-            raise CitationGuardError("invalid final answer contract")
-
-        if final_answer.background_explanation is not None:
-            return _insufficient_evidence_answer()
-
-        citation_ids = tuple(final_answer.citation_element_ids)
-        if (
-            not citation_ids
-            or len(set(citation_ids)) != len(citation_ids)
-            or any(
-                not citation_id or citation_id != citation_id.strip()
-                for citation_id in citation_ids
-            )
-            or not set(citation_ids).issubset(allowed_evidence_ids)
-        ):
-            return _insufficient_evidence_answer()
-
         return CitationValidatedAnswer(
-            status="grounded",
-            paper_answer=paper_answer,
-            citation_element_ids=citation_ids,
-            background_explanation=None,
+            status=final_answer.status,
+            paper_answer=final_answer.paper_answer.strip(),
+            citation_element_ids=tuple(final_answer.citation_element_ids),
+            background_explanation=final_answer.background_explanation,
         )
 
+    def validate(
+        self,
+        payload: dict[str, object],
+        *,
+        allowed_evidence_ids: frozenset[str] | None = None,
+    ) -> CitationValidatedAnswer:
+        """Backward-compatible alias for callers that used the old name.
 
-def _insufficient_evidence_answer() -> CitationValidatedAnswer:
-    return CitationValidatedAnswer(
-        status="insufficient_evidence",
-        paper_answer=_INSUFFICIENT_EVIDENCE_ANSWER,
-        citation_element_ids=(),
-        background_explanation=None,
-    )
+        ``allowed_evidence_ids`` is intentionally ignored.  It used to gate
+        the answer and is retained only so older integrations do not fail at
+        import or call time while they migrate to ``parse_model_answer``.
+        """
+        del allowed_evidence_ids
+        return self.parse_model_answer(payload)

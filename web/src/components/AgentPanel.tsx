@@ -9,7 +9,7 @@ export interface AgentPanelProps {
 }
 
 function statusLabel(status: AgentMessage['status']): string {
-  return status === 'grounded' ? '已基于论文证据回答' : '论文证据不足';
+  return status === 'grounded' ? '模型回答' : '模型提示证据不足';
 }
 
 export function AgentPanel({ paperId, exchanges, onSelectCitation, onSelectNoteReference }: AgentPanelProps) {

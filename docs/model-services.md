@@ -2,7 +2,7 @@
 
 ## OpenAI-compatible 接口兼容（2026-09-11）
 
-结构化生成优先请求 `json_schema`。仅当服务返回 HTTP 400 且明确表示不支持 `json_schema` 时，以 `json_object` 再请求一次，并把目标 Schema 加入系统指令；其他错误不降级。图谱抽取和 Agent 最终回答共享此路径，两种模式都必须通过本地 JSON Schema 校验，Agent 仍须通过 Citation Guard，不能把普通 JSON 等同于有效论文引用。
+结构化生成优先请求 `json_schema`。仅当服务返回 HTTP 400 且明确表示不支持 `json_schema` 时，以 `json_object` 再请求一次，并把目标 Schema 加入系统指令；其他错误不降级。图谱抽取和 Agent 最终回答共享此路径，仍通过本地 JSON Schema 做传输结构解析；Agent 不再使用 Citation Guard 拦截或改写模型回答，引用只用于可选的页面跳转。
 
 工具能力检测包含用户消息，避免部分接口拒绝只有系统消息的请求；实际工具调用仍使用 `parallel_tool_calls=False`。检测失败只表示本次未通过，可能是接口兼容、连接或响应格式问题，不直接断定模型没有该能力。更新服务后需在模型设置中重新测试，不能手动伪造能力状态。
 

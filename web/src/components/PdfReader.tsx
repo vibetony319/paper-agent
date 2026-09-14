@@ -100,7 +100,7 @@ export function PdfReader({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [visiblePages, setVisiblePages] = useState<Set<number>>(() => new Set(pageNumbers.slice(0, 1)));
   const [zoom, setZoom] = useState(1);
-  const [assistAction, setAssistAction] = useState<SelectionAssistAction | null>(null);
+  const [assistTarget, setAssistTarget] = useState<{ action: SelectionAssistAction; draft: TextAnchorDraft; rect: DOMRect; model: string; id: string } | null>(null);
   const [manualNoteTarget, setManualNoteTarget] = useState<{ draft: TextAnchorDraft; rect: DOMRect } | null>(null);
   const [sectionsOpen, setSectionsOpen] = useState(false);
   const sectionsToggleRef = useRef<HTMLButtonElement | null>(null);
@@ -427,9 +427,9 @@ export function PdfReader({
           onDismiss={clearTemporarySelection}
           actions={{
             explain: runSelectionAssist === undefined || selectedModelProfileId === null
-              ? undefined : () => setAssistAction('explain'),
+              ? undefined : () => setAssistTarget({ action: 'explain', draft: selection.draft, rect: selection.toolbarRect, model: selectedModelProfileId, id: crypto.randomUUID() }),
             translate: runSelectionAssist === undefined || selectedModelProfileId === null
-              ? undefined : () => setAssistAction('translate'),
+              ? undefined : () => setAssistTarget({ action: 'translate', draft: selection.draft, rect: selection.toolbarRect, model: selectedModelProfileId, id: crypto.randomUUID() }),
             note: onCreateSelectionNote === undefined
               ? undefined : () => setManualNoteTarget({ draft: selection.draft, rect: selection.toolbarRect }),
             ask: selectionActions?.ask === undefined
@@ -439,10 +439,11 @@ export function PdfReader({
           }}
         />
       ) : null}
-      {selection !== null && assistAction !== null && runSelectionAssist !== undefined ? <InlineAssistantPopover
-        action={assistAction} draft={selection.draft} toolbarRect={selection.toolbarRect}
-        modelProfileId={selectedModelProfileId} runSelectionAssist={runSelectionAssist}
-        onDismiss={() => setAssistAction(null)}
+      {assistTarget !== null && runSelectionAssist !== undefined ? <InlineAssistantPopover
+        key={assistTarget.id}
+        action={assistTarget.action} draft={assistTarget.draft} toolbarRect={assistTarget.rect}
+        modelProfileId={assistTarget.model} runSelectionAssist={runSelectionAssist}
+        onDismiss={() => setAssistTarget(null)}
       /> : null}
       {manualNoteTarget !== null && onCreateSelectionNote !== undefined ? <ManualNotePopover draft={manualNoteTarget.draft} toolbarRect={manualNoteTarget.rect} onSave={onCreateSelectionNote} onDismiss={() => setManualNoteTarget(null)} /> : null}
     </section>

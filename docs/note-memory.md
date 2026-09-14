@@ -1,6 +1,6 @@
 # 笔记记忆与 Agent 注入
 
-本文说明本地笔记检索、上下文预算和 Agent 使用笔记时的安全边界。选区生成笔记与 SSE 契约见 [PDF 文本批注后端契约](pdf-annotations.md)，Agent 的非流式 Citation Guard 流程见 [系统架构](architecture.md)。
+本文说明本地笔记检索、上下文预算和 Agent 使用笔记时的安全边界。选区生成笔记与 SSE 契约见 [PDF 文本批注后端契约](pdf-annotations.md)，Agent 的非流式结构化回答流程见 [系统架构](architecture.md)。
 
 ## 笔记类型与筛选
 
@@ -35,10 +35,10 @@
 ## 安全边界
 
 - 笔记检索严格限制在请求论文内，不跨论文。
-- 注入笔记不等于 Citation Guard 的原文引用；没有论文工具证据时仍返回 `insufficient_evidence`。
+- 注入笔记会作为当前对话的本地参考，不会自动生成论文引用链接；模型是否返回 `grounded` 或 `insufficient_evidence` 由模型自行决定。
 - 笔记正文先做 XML 转义，模型无法通过笔记数据逃出数据块语义。
 - 选区附件使用 `<selected_text page="N">` 包裹后加入当前模型输入，用户持久正文保持不变。
 
 ## 与论文引用的区别
 
-`citation_element_ids` 只表示经过 Citation Guard 校验、且来自本请求 Agent 工具回合的定位论文元素；`note_references` 只表示本次请求实际注入的本地笔记。删除笔记后历史仍显示引用标识，`available` 为假，二者不会互相替代。表级引用关系和论文删除语义见[数据模型与删除恢复](data-model.md)，请求与响应字段见 [HTTP API 业务语义](api.md)。
+`citation_element_ids` 是模型返回的可选论文位置链接；服务只保留当前论文中仍可定位的元素，无法定位时隐藏链接，不改写正文。`note_references` 只表示本次请求实际注入的本地笔记。删除笔记后历史仍显示引用标识，`available` 为假，二者不会互相替代。表级引用关系和论文删除语义见[数据模型与删除恢复](data-model.md)，请求与响应字段见 [HTTP API 业务语义](api.md)。

@@ -46,11 +46,6 @@ from paper_agent.services.note_memory import NoteMemoryService
 from paper_agent.storage import PaperRepository
 
 
-CANONICAL_INSUFFICIENT_EVIDENCE = (
-    "I could not find enough evidence in this paper to answer that reliably."
-)
-
-
 @pytest.fixture
 def repository(tmp_path: Path) -> PaperRepository:
     return PaperRepository(f"sqlite:///{tmp_path / 'paper-agent.db'}")
@@ -154,11 +149,11 @@ class FailingOnceGuard(CitationGuard):
     def __init__(self) -> None:
         self.remaining_failures = 1
 
-    def validate(self, *args: object, **kwargs: object):
+    def parse_model_answer(self, *args: object, **kwargs: object):
         if self.remaining_failures:
             self.remaining_failures -= 1
             raise RuntimeError("raw-guard-secret")
-        return super().validate(*args, **kwargs)
+        return super().parse_model_answer(*args, **kwargs)
 
 
 def _paper_with_stage1_document(
@@ -310,7 +305,7 @@ def _all_durable_rows(repository: PaperRepository) -> list[tuple[str, str]]:
         return [(row.role, row.content) for row in rows]
 
 
-def test_runtime_persists_user_before_model_then_only_the_guarded_answer(repository):
+def test_runtime_persists_user_before_model_then_only_the_final_answer(repository):
     """Breaks if raw model/tool text is stored or the user is not durable first."""
     paper = _paper_with_stage1_document(repository)
     observed_during_model: list[list[tuple[str, str]]] = []
@@ -590,6 +585,16 @@ def test_runtime_retries_after_unexpected_guard_failure_without_leaking_or_dupli
     assert len(repository.get_conversation_messages(paper.id, recovered.conversation.id)) == 2
 
 
+def test_chinese_overview_reads_source_before_generating_answer(repository):
+    paper = _paper_with_stage1_document(repository)
+    client = FakeAgentClient(final_payload=_grounded_payload(citations=[paper.element_id]))
+    turn = _runtime(repository, client).ask(paper_id=paper.id,
+        question=AgentQuestion(content='这篇论文讲了什么'))
+    assert turn.answer.status == 'grounded'
+    messages = client.final_requests[0]['messages']
+    assert any(m['role'] == 'tool' and paper.element_id in m['content'] for m in messages)
+
+
 def test_runtime_sends_openai_tool_result_messages_with_returned_evidence_ids(repository):
     """Breaks if the final model cannot distinguish source IDs from navigation data."""
     paper = _paper_with_stage1_document(repository)
@@ -706,8 +711,8 @@ def test_selection_is_wrapped_in_input_and_persisted_as_message_anchor(repositor
     assert anchor_ids
 
 
-def test_notes_do_not_bypass_citation_guard_without_paper_evidence(repository):
-    """Breaks if injected notes become valid paper citations by themselves."""
+def test_notes_are_injected_without_changing_the_model_answer_contract(repository):
+    """Notes remain context and do not become persisted citation links."""
     paper = _paper_with_stage1_document(repository)
     annotation_repository = PaperAnnotationRepository(engine=repository.engine)
     annotation_repository.create_note(
@@ -867,8 +872,8 @@ def test_runtime_builds_model_history_from_only_the_latest_six_durable_messages(
     assert "LIMIT" in history_reads[0].upper()
 
 
-def test_system_prompt_forbids_uncited_background_and_off_request_citations(repository):
-    """Breaks if the model is no longer told to cite only request-scoped evidence."""
+def test_system_prompt_describes_optional_citation_links(repository):
+    """The model is told that citation links are optional presentation data."""
     paper = _paper_with_stage1_document(repository)
     client = FakeAgentClient()
 
@@ -879,13 +884,13 @@ def test_system_prompt_forbids_uncited_background_and_off_request_citations(repo
 
     system_prompt = client.tool_requests[0]["messages"][0]["content"].casefold()
     assert "graph data is for navigation only" in system_prompt
-    assert "source-element ids returned by tools during this request" in system_prompt
-    assert "insufficient_evidence" in system_prompt
-    assert "background_explanation must be null" in system_prompt
+    assert "answer directly and naturally" in system_prompt
+    assert "citation_element_ids are optional links" in system_prompt
+    assert "background_explanation may contain helpful context" in system_prompt
 
 
-def test_runtime_replaces_background_bearing_answer_with_a_safe_refusal(repository):
-    """Breaks if uncited background prose reaches the user or persistence."""
+def test_runtime_keeps_background_bearing_answer(repository):
+    """Background prose is shown separately instead of replacing the answer."""
     paper = _paper_with_stage1_document(repository)
     client = FakeAgentClient(
         turns=(
@@ -902,15 +907,15 @@ def test_runtime_replaces_background_bearing_answer_with_a_safe_refusal(reposito
         question=AgentQuestion(content="Explain routing."),
     )
 
-    assert turn.answer.status == "insufficient_evidence"
-    assert turn.assistant_message.content == CANONICAL_INSUFFICIENT_EVIDENCE
+    assert turn.answer.status == "grounded"
+    assert turn.assistant_message.content == "The paper uses a router."
     durable = repository.get_conversation_messages(paper.id, turn.conversation.id)
-    assert durable[-1].background_explanation is None
-    assert "General routing background" not in durable[-1].content
+    assert durable[-1].background_explanation == "General routing background."
+    assert durable[-1].content == "The paper uses a router."
 
 
-def test_runtime_does_not_authorize_citations_from_earlier_conversation_turns(repository):
-    """Breaks if durable historical citations leak into the current request allow-list."""
+def test_runtime_keeps_answer_when_model_reuses_an_existing_paper_citation(repository):
+    """An answer is not replaced just because its citation was not tool-returned."""
     paper = _paper_with_stage1_document(repository)
     conversation = repository.create_conversation(
         Conversation(paper_id=paper.id)
@@ -938,14 +943,13 @@ def test_runtime_does_not_authorize_citations_from_earlier_conversation_turns(re
         ),
     )
 
-    assert turn.answer.status == "insufficient_evidence"
-    assert turn.assistant_message.content == CANONICAL_INSUFFICIENT_EVIDENCE
-    assert turn.assistant_message.citation_element_ids == ()
-    assert "Unsupported reuse" not in turn.assistant_message.content
+    assert turn.answer.status == "grounded"
+    assert turn.assistant_message.content == "Unsupported reuse."
+    assert turn.assistant_message.citation_element_ids == (paper.element_id,)
 
 
-def test_runtime_treats_graph_ids_as_navigation_not_answer_citations(repository):
-    """Breaks if a returned graph node ID is accepted in place of source evidence."""
+def test_runtime_keeps_answer_when_model_returns_a_graph_id(repository):
+    """Graph IDs are omitted from link rendering without hiding the answer."""
     paper = _paper_with_stage1_document(repository)
     repository.replace_graph_stage(
         paper.id,
@@ -977,9 +981,9 @@ def test_runtime_treats_graph_ids_as_navigation_not_answer_citations(repository)
         question=AgentQuestion(content="What is Router?"),
     )
 
-    assert turn.answer.status == "insufficient_evidence"
+    assert turn.answer.status == "grounded"
     assert turn.assistant_message.citation_element_ids == ()
-    assert turn.assistant_message.content == CANONICAL_INSUFFICIENT_EVIDENCE
+    assert turn.assistant_message.content == "Node IDs are citations."
 
 
 def test_runtime_stops_after_six_single_tool_turns(repository):
@@ -1067,10 +1071,10 @@ def test_runtime_executes_batched_read_tools_sequentially_with_matching_results(
     assert [m['tool_call_id'] for m in messages[-2:]] == ['one','two']
 
 
-def test_runtime_converts_malformed_final_contract_to_canonical_persisted_answer(
+def test_runtime_rejects_malformed_final_contract_without_persisting_model_content(
     repository,
 ):
-    """Breaks if malformed final model prose reaches persistence or the caller."""
+    """Only malformed transport structure remains a service error."""
     paper = _paper_with_stage1_document(repository)
     malformed = _grounded_payload(
         citations=[paper.element_id], paper_answer="raw malformed claim"
@@ -1078,20 +1082,13 @@ def test_runtime_converts_malformed_final_contract_to_canonical_persisted_answer
     malformed["unexpected"] = "raw final secret"
     client = FakeAgentClient(final_payload=malformed)
 
-    turn = _runtime(repository, client).ask(
-        paper_id=paper.id,
-        question=AgentQuestion(content="Question"),
-    )
+    with pytest.raises(AgentRuntimeResponseError):
+        _runtime(repository, client).ask(
+            paper_id=paper.id,
+            question=AgentQuestion(content="Question"),
+        )
 
-    assert turn.answer.status == "insufficient_evidence"
-    assert turn.assistant_message.content == CANONICAL_INSUFFICIENT_EVIDENCE
-    assert turn.assistant_message.citation_element_ids == ()
-    assert "raw malformed claim" not in repr(
-        repository.get_conversation_messages(paper.id, turn.conversation.id)
-    )
-    assert "raw final secret" not in repr(
-        repository.get_conversation_messages(paper.id, turn.conversation.id)
-    )
+    assert _all_durable_rows(repository) == [("user", "Question")]
 
 
 def test_runtime_sanitizes_tool_execution_failure_after_persisting_only_the_user(

@@ -19,7 +19,7 @@ flowchart LR
     MR --> DB
     S --> RP[ReasoningClientProvider]
     RP --> M[兼容 OpenAI 的推理模型]
-    S --> CG[Citation Guard]
+    S --> CG[答案结构解析]
 ```
 
 浏览器中的 PDF.js `Canvas` 与 `TextLayer` 共享 viewport；选区只接受同页、可复制的文字层，矩形以页面归一化坐标保存。具体锚点契约见 [PDF 文本批注后端契约](pdf-annotations.md)。模型调用只经 `ReasoningClientProvider` 取得与本次请求绑定的客户端；API 密钥不进入数据库快照或响应。
@@ -42,8 +42,8 @@ flowchart LR
 | `annotation_service` | 将 HTTP 锚点草稿转换为批注领域操作，执行高亮/手写笔记 CRUD，不承载模型调用。 |
 | `selection_assist_service` | 对选区做解释或翻译的 SSE 编排；完成时创建 AI 笔记并保存可重放结果。 |
 | `paper_tool_registry` | Agent 可用的严格工具定义与执行，限定在当前论文的元素、章节和图谱，并返回可引用的定位证据 ID。 |
-| `citation_guard` | 校验 Agent 最终 JSON、模式限制和引用是否属于本次工具取得的定位证据；失败时规范化为证据不足答案。 |
-| `paper_agent_runtime` | 有界 Agent 回合、同请求锁、会话/消息持久化、笔记检索注入、工具循环和 Citation Guard 前的最终回答编排。 |
+| `citation_guard` | 解析 Agent 最终 JSON 的固定字段；不再根据引用或证据替换模型回答。无法解析的结构才会作为模型响应错误处理。 |
+| `paper_agent_runtime` | 有界 Agent 回合、同请求锁、会话/消息持久化、笔记检索注入、工具循环和最终回答编排；引用只用于可选的页面跳转。 |
 | `paper_ingestion_service` | PDF 上传预检、受管源文件发布、Stage 0/1 解析、对齐、处理状态与文档读取。当前应用实际装配的子类还会补充 Stage 2/3 状态。 |
 | `graph_construction_service` | 在已完成的解析内容上构建 core/deep 图谱、校验前置阶段、记录请求状态并替换相应图谱阶段。 |
 
@@ -113,7 +113,7 @@ sequenceDiagram
 
 这是选区辅助专用的 SSE 管线，不是主 Agent 聊天管线。只有 `completed` 代表完整 AI 笔记已持久化；取消、失败或超长输出不会留下半成品笔记。
 
-### Agent 笔记检索与 Citation Guard
+### Agent 笔记检索与模型回答
 
 ```mermaid
 sequenceDiagram
@@ -122,7 +122,7 @@ sequenceDiagram
     participant N as NoteMemoryService
     participant T as PaperToolRegistry
     participant M as Tool 模型客户端
-    participant G as CitationGuard
+    participant G as 答案结构解析
     participant R as PaperRepository
     B->>A: POST agent/messages (model_profile_id, request_id)
     A->>R: 查询已完成回合/部分用户消息
@@ -135,19 +135,16 @@ sequenceDiagram
     end
     A->>M: 请求最终 JSON
     M-->>A: 候选回答与 citation_element_ids
-    A->>G: validate(候选、模式、允许证据)
-    alt 通过
-        G-->>A: grounded 回答
-    else 无效、无引用或越界引用
-        G-->>A: canonical insufficient_evidence 回答
-    end
+    A->>G: 解析候选 JSON
+    G-->>A: 保留模型回答与可选引用
+    A->>A: 清理无法定位的引用链接（不改写正文）
     A->>R: 保存助手消息、引用与笔记引用
     A-->>B: 非流式 JSON 回答
 ```
 
-主 Agent **在 Citation Guard 校验通过或被规范化为证据不足之前不会输出响应**，因此为非流式 JSON。笔记仅是标注为不可信的本地检索上下文，不能充当论文引用。`citation_element_ids` 必须来自本请求工具回合的、可定位论文元素；`background_explanation` 一律不允许（必须为 null）。笔记排序、字符预算和引用回显见 [笔记记忆与 Agent 注入](note-memory.md)。
+主 Agent 使用结构化 JSON 传输，所以仍然是非流式接口；它不会再因为没有引用、引用越界或带有背景说明而替换模型正文。笔记只是标注为不可信的本地检索上下文，会自动注入当前对话。`citation_element_ids` 是可选的页面跳转链接：能够定位到当前论文元素时才显示，无法定位时只隐藏链接，不影响回答正文。笔记排序、字符预算和引用回显见 [笔记记忆与 Agent 注入](note-memory.md)。
 
-图中的 Agent 入口合并表示路由和运行时：路由解析请求模型并进入论文操作与模型使用租约，笔记检索、消息写入、工具执行和 Guard 编排实际由 `PaperAgentRuntime` 完成。模型返回工具调用描述，运行时调用 `PaperToolRegistry` 执行工具。
+图中的 Agent 入口合并表示路由和运行时：路由解析请求模型并进入论文操作与模型使用租约，笔记检索、消息写入、工具执行和答案结构解析实际由 `PaperAgentRuntime` 完成。模型返回工具调用描述，运行时调用 `PaperToolRegistry` 执行工具。
 
 ### 可崩溃恢复的永久删除
 

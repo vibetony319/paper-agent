@@ -1,8 +1,8 @@
-"""Bounded, citation-gated orchestration for durable paper conversations."""
+"""Bounded orchestration for durable paper conversations."""
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import json
 from threading import Lock
 
@@ -199,12 +199,33 @@ class PaperAgentRuntime:
                 raise AgentRuntimeResponseError(_RESPONSE_ERROR) from None
 
             executed_calls = 0
-            for tool_turn_index in range(MAX_TOOL_TURNS):
+            # Overview questions often contain no literal terms from an English
+            # paper. Seed actual, located source excerpts rather than searching
+            # the Chinese question verbatim or weakening citation validation.
+            overview = any(term in question.content.lower() for term in (
+                '讲了什么', '主要内容', '概括', '总结', 'summarize', 'overview',
+            ))
+            if overview:
+                elements = [element for element in self.repository.get_elements(paper_id)
+                            if element.text.strip() and element.page_number is not None and element.bbox is not None]
+                candidates = elements[:3] + elements[-1:]
+                seen = set()
+                for element in candidates:
+                    if element.id in seen:
+                        continue
+                    seen.add(element.id)
+                    call = VllmToolCall(id=f'overview-{len(seen)}', name='read_element', arguments={'element_id': element.id})
+                    execution = self.tools.execute(paper_id=paper_id, name=call.name, arguments=call.arguments)
+                    messages.extend(_tool_result_messages(VllmToolTurn(content=None, tool_calls=(call,)), call, execution))
+                    allowed_evidence_ids.update(execution.evidence_element_ids)
+                    executed_calls += 1
+                messages.append({'role':'system', 'content':'请用中文概括已有论文证据中的研究问题、方法和结论。只引用已读取的元素 ID；片段不足时说明范围，不要编造。'})
+            for tool_turn_index in range(0 if overview and allowed_evidence_ids else MAX_TOOL_TURNS):
                 try:
                     turn = client.request_tool_turn(
                         messages=messages,
                         tools=tool_definitions,
-                        tool_choice="required" if tool_turn_index == 0 else "auto",
+                        tool_choice="required" if tool_turn_index == 0 and not allowed_evidence_ids else "auto",
                     )
                     if len(turn.tool_calls) > MAX_TOOL_TURNS - executed_calls:
                         raise ValueError("tool call budget exceeded")
@@ -241,19 +262,30 @@ class PaperAgentRuntime:
             except Exception:
                 raise AgentRuntimeResponseError(_RESPONSE_ERROR) from None
 
-            allowed_evidence = frozenset(allowed_evidence_ids)
             try:
-                answer = self.guard.validate(
-                    payload,
-                    allowed_evidence_ids=allowed_evidence,
-                )
+                answer = self.guard.parse_model_answer(payload)
             except CitationGuardError:
-                answer = _canonical_insufficient_answer(
-                    self.guard,
-                    allowed_evidence_ids=allowed_evidence,
-                )
+                raise AgentRuntimeResponseError(_RESPONSE_ERROR) from None
             except Exception:
                 raise AgentRuntimeResponseError(_RESPONSE_ERROR) from None
+
+            # Citation links are optional presentation data.  Keep the model
+            # prose even when it cites a graph node, an old conversation ID,
+            # or an element that no longer has a located geometry.  Only drop
+            # IDs that the repository cannot persist; never replace the answer
+            # with an evidence-refusal message.
+            candidate_citation_ids = tuple(dict.fromkeys(answer.citation_element_ids))
+            if set(candidate_citation_ids).issubset(allowed_evidence_ids):
+                persistable_citation_ids = candidate_citation_ids
+            else:
+                persistable_citation_ids = _persistable_citation_ids(
+                    self.repository,
+                    paper_id,
+                    candidate_citation_ids,
+                )
+            answer = replace(
+                answer, citation_element_ids=persistable_citation_ids
+            )
 
             assistant_message = self.repository.append_conversation_message(
                 ConversationMessage(
@@ -450,12 +482,14 @@ class PaperAgentRuntime:
 
 def _system_prompt() -> str:
     return (
-        "Use the provided paper and graph tools to answer the user's question. "
-        "Graph data is for navigation only; graph node and edge IDs are not citations. "
-        "Only source-element IDs returned by tools during this request may appear in "
-        "citation_element_ids. If returned evidence does not support a paper claim, "
-        "use status insufficient_evidence. "
-        "background_explanation must be null."
+        "Use the provided paper and graph tools when they help answer the user's "
+        "question. Answer directly and naturally, including for general questions "
+        "and short greetings. Use status grounded for a normal answer and "
+        "insufficient_evidence only when you genuinely cannot answer. "
+        "Graph data is for navigation only; graph node and edge IDs are not paper "
+        "location links. "
+        "citation_element_ids are optional links to useful paper locations; "
+        "background_explanation may contain helpful context separate from the paper."
     )
 
 
@@ -500,17 +534,15 @@ def _tool_result_messages(
     return assistant_message, tool_message
 
 
-def _canonical_insufficient_answer(
-    guard: CitationGuard,
-    *,
-    allowed_evidence_ids: frozenset[str],
-) -> CitationValidatedAnswer:
-    return guard.validate(
-        {
-            "status": "insufficient_evidence",
-            "paper_answer": "",
-            "citation_element_ids": [],
-            "background_explanation": None,
-        },
-        allowed_evidence_ids=allowed_evidence_ids,
-    )
+def _persistable_citation_ids(
+    repository: PaperRepository,
+    paper_id: str,
+    citation_ids: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Keep only IDs that can be rendered and stored as optional links."""
+    unique_ids = tuple(dict.fromkeys(citation_ids))
+    located_ids = {
+        element.id
+        for element in repository.get_located_elements_by_ids(paper_id, unique_ids)
+    }
+    return tuple(element_id for element_id in unique_ids if element_id in located_ids)

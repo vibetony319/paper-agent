@@ -1,7 +1,7 @@
 """Offline E2E app. Run from the repo root with uvicorn tests.e2e.server:app.
 
 Only the OpenAI transport is replaced: parsing, profiles, graph construction,
-tool execution, Citation Guard, notes and deletion use production code.
+tool execution, model-answer parsing, notes and deletion use production code.
 """
 
 from contextlib import asynccontextmanager
