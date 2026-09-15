@@ -1,6 +1,5 @@
 import json
 from pathlib import Path
-from types import SimpleNamespace
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -10,7 +9,7 @@ import paper_agent.services.reasoning_clients as reasoning_clients
 from paper_agent.database import conversations
 from paper_agent.app import create_app
 from paper_agent.config import Settings
-from paper_agent.models.vllm import VllmModelConfig
+from paper_agent.models.vllm import VllmModelConfig, VllmToolCall, VllmToolTurn
 from paper_agent.services.reasoning_clients import ENVIRONMENT_FALLBACK_PROFILE_ID
 
 
@@ -21,19 +20,20 @@ class FakeToolClient:
     def request_tool_turn(self, **_kwargs):
         self.turns += 1
         if self.turns == 1:
-            return SimpleNamespace(
+            return VllmToolTurn(
                 content=None,
                 tool_calls=(
-                    SimpleNamespace(
+                    VllmToolCall(
                         id="call-1",
                         name="search_paper",
                         arguments={"query": "sample body", "limit": 5},
                     ),
                 ),
+                reasoning_content="先检索正文，再回答。",
             )
-        return SimpleNamespace(content=None, tool_calls=())
+        return VllmToolTurn(content=None, tool_calls=())
 
-    def generate_json_messages(self, *, messages, **_kwargs):
+    def complete_markdown_messages(self, *, messages, **_kwargs):
         tool_result = json.loads(
             next(
                 message["content"]
@@ -42,12 +42,7 @@ class FakeToolClient:
             )
         )
         evidence_ids = tool_result["evidence_element_ids"]
-        return {
-            "status": "grounded",
-            "paper_answer": "The paper introduces its method.",
-            "citation_element_ids": [evidence_ids[0]],
-            "background_explanation": None,
-        }
+        return f"The paper introduces its method. [[{evidence_ids[0]}]]"
 
 
 def _configured_client(tmp_path: Path, monkeypatch) -> TestClient:

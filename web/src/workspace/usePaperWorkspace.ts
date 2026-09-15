@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react';
 
-import { paperApi, publicApiMessage } from '../api/client';
-import { streamSelectionAssist } from '../api/sse';
-import type { Citation, HighlightColor, SelectionAssistAction, TextAnchorDraft } from '../api/types';
+import { ApiError, paperApi, publicApiMessage } from '../api/client';
+import { streamAgentMessage, streamSelectionAssist } from '../api/sse';
+import type { AgentMessage, Citation, HighlightColor, SelectionAssistAction, TextAnchorDraft } from '../api/types';
 import {
   initialWorkspaceState,
   toSourceTarget,
@@ -32,6 +32,7 @@ export function usePaperWorkspace(
   const notesMutationGeneration = useRef(0);
   const anchorsMutationGeneration = useRef(0);
   const workspaceLifetimeController = useRef(new AbortController());
+  const agentStreamController = useRef<AbortController | null>(null);
 
   const reportApiError = useCallback((
     paperId: string,
@@ -76,7 +77,6 @@ export function usePaperWorkspace(
           paperId: activePaperId,
           loadRevision: loadGeneration,
           document,
-          graph: { nodes: [], edges: [] },
         });
       })
       .catch((error: unknown) => {
@@ -150,14 +150,40 @@ export function usePaperWorkspace(
     const paperId = state.activePaperId;
     const requestLoadRevision = state.loadRevision;
     const conversationId = state.conversationId;
+    const controller = new AbortController();
+    agentStreamController.current?.abort();
+    agentStreamController.current = controller;
+    dispatch({
+      type: 'conversation/stream-started',
+      paperId,
+      loadRevision: requestLoadRevision,
+      question: content,
+    });
     try {
-      const message = await paperApi.askAgent(paperId, {
+      let message: AgentMessage | null = null;
+      for await (const event of streamAgentMessage(paperId, {
         content,
         conversation_id: conversationId ?? undefined,
         model_profile_id: modelProfileId,
         request_id: crypto.randomUUID(),
         ...(selection === undefined ? {} : { selection }),
-      });
+      }, controller.signal)) {
+        if (event.event === 'delta') {
+          dispatch({
+            type: 'conversation/stream-delta',
+            paperId,
+            loadRevision: requestLoadRevision,
+            text: event.data.text,
+          });
+        } else if (event.event === 'completed') {
+          message = event.data.message;
+        } else if (event.event === 'error') {
+          throw new ApiError(0, '助手回答失败。', event.data.code, event.data.detail);
+        }
+      }
+      if (message === null) {
+        throw new ApiError(0, '助手回答为空。', 'empty_answer');
+      }
       dispatch({
         type: 'conversation/set',
         paperId,
@@ -168,6 +194,11 @@ export function usePaperWorkspace(
       });
       return message;
     } catch (error) {
+      dispatch({
+        type: 'conversation/stream-failed',
+        paperId,
+        loadRevision: requestLoadRevision,
+      });
       reportApiError(
         paperId,
         requestLoadRevision,
@@ -175,6 +206,10 @@ export function usePaperWorkspace(
         '暂时无法获取助手回答。',
       );
       return null;
+    } finally {
+      if (agentStreamController.current === controller) {
+        agentStreamController.current = null;
+      }
     }
   }, [
     reportApiError,
@@ -276,7 +311,7 @@ export function usePaperWorkspace(
     dispatch({ type: 'source/selected', source: element === undefined ? null : toSourceTarget(element) });
   }, [state.document]);
 
-  const selectGraphEvidenceElement = useCallback((elementId: string) => {
+  const selectElementSource = useCallback((elementId: string) => {
     const element = state.document?.elements.find(({ id }) => id === elementId);
     dispatch({ type: 'source/selected', source: element === undefined ? null : toSourceTarget(element) });
   }, [state.document]);
@@ -399,7 +434,7 @@ export function usePaperWorkspace(
     askAgent,
     saveNote,
     selectCitation,
-    selectGraphEvidenceElement,
+    selectElementSource,
     selectAnchorSource,
     updateNote,
     deleteNote,

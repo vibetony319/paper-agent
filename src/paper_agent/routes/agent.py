@@ -1,6 +1,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
 
 from paper_agent.annotation_storage import PaperAnnotationRepository
 from paper_agent.domain import AgentMessageRole, ConversationMessage, DocumentElement
@@ -22,6 +23,7 @@ from paper_agent.services.agent_runtime import (
     AgentRuntimePrerequisiteError,
     AgentRuntimeResponseError,
     AgentRuntimeUnavailableError,
+    AgentStreamEvent,
     AgentTurn,
     PaperAgentRuntime,
 )
@@ -35,6 +37,7 @@ from paper_agent.services.reasoning_clients import (
     ReasoningClientProvider,
     ResolvedReasoningClients,
 )
+from paper_agent.services.sse import sse_frame
 from paper_agent.storage import PaperRepository
 
 
@@ -104,12 +107,12 @@ def _resolve_agent_model(
     if expected_snapshot is not None and resolved.snapshot != expected_snapshot:
         raise _request_conflict()
     capabilities = resolved.profile.capabilities
-    if not provider.is_read_only_profile(resolved.profile.id) and not (
-        capabilities.structured_output and capabilities.tool_calling
-    ):
+    # The Markdown answer needs no structured response format, so tool calling
+    # is the only capability the agent turn actually depends on.
+    if not provider.is_read_only_profile(resolved.profile.id) and not capabilities.tool_calling:
         raise HTTPException(
             status_code=409,
-            detail="当前模型的结构化输出或工具调用检测未通过，请在模型设置中重新测试；仍失败时检查服务接口兼容性。",
+            detail="当前模型的工具调用检测未通过，请在模型设置中重新测试；仍失败时检查服务接口兼容性。",
         )
     return resolved
 
@@ -334,6 +337,103 @@ def _agent_message_response(
             NoteReferenceResponse.from_reference(reference)
             for reference in turn.note_references
         ],
+    )
+
+
+_STREAM_ERROR_DETAILS: dict[str, str] = {
+    "agent_not_ready": "论文尚未完成解析，暂时无法提问。",
+    "model_unavailable": "模型档案不可用。",
+    "request_conflict": "该请求已有不同的处理状态，请使用新的请求重试。",
+    "invalid_selection": "选区无效。",
+    "answer_too_long": "模型输出过长，请缩小问题范围后重试。",
+    "paper_busy": "论文正在删除。",
+    "agent_failed": "模型未能完成有效回答，请重试或在模型设置中重新测试。",
+}
+
+
+def _stream_error_payload(code: str | None) -> dict[str, object]:
+    resolved = code if code in _STREAM_ERROR_DETAILS else "agent_failed"
+    return {"code": resolved, "detail": _STREAM_ERROR_DETAILS[resolved]}
+
+
+@router.post("/papers/{paper_id}/agent/messages/stream")
+def stream_paper_agent(
+    paper_id: UUID, payload: AgentMessageRequest, request: Request
+) -> StreamingResponse:
+    """Stream one answered turn as it is generated.
+
+    Request validation fails before the stream opens so the client still sees a
+    normal JSON error; failures after that arrive as an ``error`` event.
+    """
+    paper_id_text = str(paper_id)
+    repository = _repository(request)
+    _require_paper(repository, paper_id_text)
+    try:
+        selection = (
+            None
+            if payload.selection is None
+            else draft_from_request(payload.selection)
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail="Selected text is invalid.") from error
+
+    request_id = str(payload.request_id)
+    profile_id = str(payload.model_profile_id)
+    if (
+        repository.get_agent_user_message_by_request(paper_id_text, request_id) is None
+        and payload.conversation_id is not None
+    ):
+        _require_conversation(repository, paper_id_text, str(payload.conversation_id))
+    resolved = _resolve_agent_model(_provider(request), profile_id)
+    headers = {"Cache-Control": "no-store", "X-Accel-Buffering": "no"}
+
+    def event_stream():
+        try:
+            with request.app.state.paper_operation_coordinator.operation(
+                paper_id_text
+            ):
+                with _model_profile_service(request).usage_lease(profile_id):
+                    for event in _runtime(request).stream_ask(
+                        paper_id=paper_id_text,
+                        question=AgentQuestion(
+                            content=payload.content,
+                            conversation_id=(
+                                None
+                                if payload.conversation_id is None
+                                else str(payload.conversation_id)
+                            ),
+                        ),
+                        client=resolved.tools,
+                        model_snapshot=resolved.snapshot,
+                        request_id=request_id,
+                        selection=selection,
+                    ):
+                        if event.event == "completed" and event.turn is not None:
+                            yield sse_frame(
+                                "completed",
+                                {
+                                    "message": _agent_message_response(
+                                        repository, paper_id_text, event.turn
+                                    ).model_dump(mode="json")
+                                },
+                            )
+                        elif event.event == "error":
+                            yield sse_frame(
+                                "error", _stream_error_payload(event.code)
+                            )
+                        elif event.event == "delta":
+                            yield sse_frame("delta", {"text": event.text})
+                        else:
+                            yield sse_frame("started", {"request_id": request_id})
+        except PaperDeletingError:
+            yield sse_frame("error", _stream_error_payload("paper_busy"))
+        except ModelProfileNotFoundError:
+            yield sse_frame("error", _stream_error_payload("model_unavailable"))
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers=headers,
     )
 
 

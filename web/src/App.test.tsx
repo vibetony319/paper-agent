@@ -39,8 +39,6 @@ const readyPaper: PaperSummary = {
   status: 'completed',
   stage0_status: 'completed',
   stage1_status: 'completed',
-  stage2_status: 'queued',
-  stage3_status: null,
   error: null,
 };
 
@@ -63,6 +61,24 @@ const modelProfileFixture = (overrides: Partial<ModelProfile> = {}): ModelProfil
   read_only: false,
   ...overrides,
 });
+
+function agentStreamResponse(frames: Array<[string, unknown]>): Response {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const [event, data] of frames) {
+        controller.enqueue(
+          encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`),
+        );
+      }
+      controller.close();
+    },
+  });
+  return new Response(stream, {
+    status: 200,
+    headers: { 'Content-Type': 'text/event-stream' },
+  });
+}
 
 const locatedElement: DocumentElement = {
   id: 'element-2',
@@ -247,7 +263,6 @@ it('opens an uploaded paper, inserts it once, and prevents a second in-flight up
     ...readyPaper,
     id: 'paper-uploaded',
     original_filename: 'uploaded-paper.pdf',
-    stage2_status: null,
   };
   const earlierSummary: PaperSummary = {
     ...uploadedPaper,
@@ -345,7 +360,11 @@ it('routes Agent citations and note sources through one workspace selection', as
       bbox: locatedElement.bbox!,
     }],
   };
-  server.use(http.post('/api/papers/paper-a/agent/messages', () => HttpResponse.json(answer)));
+  server.use(http.post('/api/papers/paper-a/agent/messages/stream', () => agentStreamResponse([
+    ['started', { request_id: 'request-1' }],
+    ['delta', { text: 'The router selects experts sparsely.' }],
+    ['completed', { message: answer }],
+  ])));
 
   render(<App />);
   await user.click(await screen.findByRole('button', { name: '打开 routing-paper.pdf' }));

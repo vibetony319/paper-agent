@@ -111,10 +111,6 @@ export interface PaperSummary {
   status: ProcessingStatus;
   stage0_status: ProcessingStatus;
   stage1_status: ProcessingStatus;
-  stage2_status: ProcessingStatus | null;
-  stage3_status: ProcessingStatus | null;
-  stage2_model?: ModelSnapshot | null;
-  stage3_model?: ModelSnapshot | null;
   error: string | null;
 }
 
@@ -178,29 +174,6 @@ export interface PaperDocument {
   notes: Note[];
 }
 
-export interface GraphNode {
-  id: string;
-  node_type: string;
-  name: string;
-  summary: string;
-  stage: 'stage2' | 'stage3';
-  evidence_element_ids: string[];
-}
-
-export interface GraphEdge {
-  id: string;
-  source_node_id: string;
-  target_node_id: string;
-  relation_type: string;
-  stage: 'stage2' | 'stage3';
-  evidence_element_ids: string[];
-}
-
-export interface PaperGraph {
-  nodes: GraphNode[];
-  edges: GraphEdge[];
-}
-
 export interface Citation {
   id: string;
   kind: string;
@@ -253,7 +226,8 @@ export interface AskAgentInput {
   selection?: TextAnchorDraft;
 }
 
-export interface GraphBuildInput {
-  model_profile_id: string;
-  request_id: string;
-}
+export type AgentStreamEvent =
+  | { event: 'started'; data: { request_id: string } }
+  | { event: 'delta'; data: { text: string } }
+  | { event: 'completed'; data: { message: AgentMessage } }
+  | { event: 'error'; data: { code: string; detail: string } };

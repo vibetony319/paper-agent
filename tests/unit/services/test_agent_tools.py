@@ -5,9 +5,6 @@ import pytest
 from paper_agent.domain import (
     BoundingBox,
     DocumentElement,
-    GraphEdge,
-    GraphNode,
-    GraphStage,
     Page,
     Section,
 )
@@ -50,40 +47,6 @@ def _paper_with_document(repository: PaperRepository, name: str):
     return paper, section, located, unlocated
 
 
-def _paper_with_graph(repository: PaperRepository):
-    paper, section, located, unlocated = _paper_with_document(repository, "graph")
-    nodes = (
-        GraphNode(
-            id="router-node",
-            node_type="method",
-            name="Caf\u00e9 Router",
-            summary="Routes tokens to experts.",
-            stage=GraphStage.core,
-            evidence_element_ids=(located.id,),
-        ),
-        GraphNode(
-            id="coverage-node",
-            node_type="claim",
-            name="Coverage",
-            summary="The router improves expert coverage.",
-            stage=GraphStage.core,
-            evidence_element_ids=(located.id,),
-        ),
-    )
-    edges = (
-        GraphEdge(
-            id="router-supports-coverage",
-            source_node_id=nodes[0].id,
-            target_node_id=nodes[1].id,
-            relation_type="supports",
-            stage=GraphStage.core,
-            evidence_element_ids=(located.id,),
-        ),
-    )
-    repository.replace_graph_stage(paper.id, GraphStage.core, nodes, edges)
-    return paper, section, located, unlocated, nodes, edges
-
-
 def test_definitions_expose_only_strict_openai_function_schemas(repository):
     """Breaks if a model can call an unbounded tool or send undeclared fields."""
     from paper_agent.services.agent_tools import PaperToolRegistry
@@ -94,10 +57,6 @@ def test_definitions_expose_only_strict_openai_function_schemas(repository):
         "search_paper",
         "read_element",
         "read_section",
-        "search_graph",
-        "inspect_node",
-        "expand_graph",
-        "find_graph_paths",
     ]
     assert all(definition["type"] == "function" for definition in definitions)
     assert all(definition["function"]["strict"] is True for definition in definitions)
@@ -141,11 +100,6 @@ def test_read_element_rejects_cross_paper_ids_and_returns_only_located_evidence(
         ("search_paper", {"query": "   "}),
         ("search_paper", {"query": "router", "limit": 0}),
         ("search_paper", {"query": "router", "limit": 11}),
-        ("expand_graph", {"node_id": "router-node", "depth": 4}),
-        (
-            "find_graph_paths",
-            {"source_node_id": "router-node", "target_node_id": "coverage-node", "max_depth": -1},
-        ),
     ],
 )
 def test_execution_rejects_unknown_blank_and_out_of_range_arguments(
@@ -154,7 +108,7 @@ def test_execution_rejects_unknown_blank_and_out_of_range_arguments(
     """Breaks if malformed tool calls reach repository reads with weakened bounds."""
     from paper_agent.services.agent_tools import AgentToolError, PaperToolRegistry
 
-    paper, _, _, _, _, _ = _paper_with_graph(repository)
+    paper, _, _, _ = _paper_with_document(repository, "reject")
 
     with pytest.raises(AgentToolError, match="arguments"):
         PaperToolRegistry(repository).execute(
@@ -188,57 +142,3 @@ def test_search_paper_uses_unicode_normalized_substrings_and_filters_unlocated_e
     ]
     assert unlocated_result.evidence_element_ids == ()
 
-
-def test_section_and_graph_tools_return_public_navigation_with_source_evidence(repository):
-    """Breaks if graph identifiers are treated as citations or graph reads leak private paper fields."""
-    from paper_agent.services.agent_tools import PaperToolRegistry
-
-    paper, section, located, _, nodes, edges = _paper_with_graph(repository)
-    tools = PaperToolRegistry(repository)
-
-    section_result = tools.execute(
-        paper_id=paper.id,
-        name="read_section",
-        arguments={"section_id": section.id},
-    )
-    graph_result = tools.execute(
-        paper_id=paper.id,
-        name="search_graph",
-        arguments={"query": "cafe\u0301", "limit": 5},
-    )
-    node_result = tools.execute(
-        paper_id=paper.id,
-        name="inspect_node",
-        arguments={"node_id": nodes[0].id},
-    )
-    subgraph_result = tools.execute(
-        paper_id=paper.id,
-        name="expand_graph",
-        arguments={"node_id": nodes[0].id, "depth": 1},
-    )
-    paths_result = tools.execute(
-        paper_id=paper.id,
-        name="find_graph_paths",
-        arguments={
-            "source_node_id": nodes[0].id,
-            "target_node_id": nodes[1].id,
-            "max_depth": 3,
-        },
-    )
-
-    assert section_result.evidence_element_ids == (located.id,)
-    assert [node["id"] for node in graph_result.content["nodes"]] == [nodes[0].id]
-    assert node_result.evidence_element_ids == (located.id,)
-    assert [node["id"] for node in subgraph_result.content["nodes"]] == [
-        "coverage-node",
-        "router-node",
-    ]
-    assert [edge["id"] for edge in subgraph_result.content["edges"]] == [edges[0].id]
-    assert paths_result.content["paths"] == [[nodes[0].id, nodes[1].id]]
-    assert paths_result.evidence_element_ids == (located.id,)
-    assert set(paths_result.evidence_element_ids).isdisjoint(
-        {nodes[0].id, nodes[1].id, edges[0].id}
-    )
-    assert "private-graph.pdf" not in repr(
-        (section_result.content, graph_result.content, node_result.content, subgraph_result.content)
-    )

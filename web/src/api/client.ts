@@ -1,18 +1,14 @@
 import type {
-  AgentMessage,
   AnnotationBundle,
-  AskAgentInput,
   Conversation,
   CreateHighlightInput,
   CreateNoteInput,
-  GraphBuildInput,
   Highlight,
   ModelProfile,
   ModelProfileCreateInput,
   ModelProfileUpdateInput,
   Note,
   PaperDocument,
-  PaperGraph,
   PaperSummary,
   UpdateHighlightInput,
   UpdateNoteInput,
@@ -115,28 +111,6 @@ export const paperApi = {
   getSourceUrl: (paperId: string) =>
     `/api/papers/${encodeURIComponent(paperId)}/source`,
 
-  getGraph: (paperId: string, init?: Pick<RequestInit, 'signal'>) =>
-    request<PaperGraph>(`/api/papers/${encodeURIComponent(paperId)}/graph`, init),
-
-  getGraphSubgraph: (paperId: string, nodeId: string, depth = 1) => {
-    const params = new URLSearchParams({ node_id: nodeId, depth: String(depth) });
-    return request<PaperGraph>(
-      `/api/papers/${encodeURIComponent(paperId)}/graph/subgraph?${params}`,
-    );
-  },
-
-  buildCoreGraph: (paperId: string, input: GraphBuildInput) =>
-    request<PaperGraph>(
-      `/api/papers/${encodeURIComponent(paperId)}/graph/core`,
-      jsonRequest('POST', input),
-    ),
-
-  buildDeepGraph: (paperId: string, input: GraphBuildInput) =>
-    request<PaperGraph>(
-      `/api/papers/${encodeURIComponent(paperId)}/graph/deep`,
-      jsonRequest('POST', input),
-    ),
-
   getAnnotations: (paperId: string, init?: Pick<RequestInit, 'signal'>) =>
     request<AnnotationBundle>(`/api/papers/${encodeURIComponent(paperId)}/annotations`, init),
 
@@ -182,12 +156,6 @@ export const paperApi = {
     request<void>(
       `/api/papers/${encodeURIComponent(paperId)}/notes/${encodeURIComponent(noteId)}`,
       { ...jsonRequest('DELETE'), ...init },
-    ),
-
-  askAgent: (paperId: string, input: AskAgentInput) =>
-    request<AgentMessage>(
-      `/api/papers/${encodeURIComponent(paperId)}/agent/messages`,
-      jsonRequest('POST', input),
     ),
 
   getConversation: (paperId: string, conversationId: string) =>

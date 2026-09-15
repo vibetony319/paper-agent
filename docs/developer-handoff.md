@@ -1,8 +1,18 @@
 # paper-agent 开发交接
 
-更新时间：2026-09-14（Asia/Shanghai）
+更新时间：2026-09-15（Asia/Shanghai）
 
 ## 最新进度（接手先读）
+
+### 图谱移除与 Markdown 流式回答（2026-09-15）
+
+- **图谱功能整体删除**：路由、`GraphConstructionService`、图谱抽取、`storage`/`database`/`domain` 里的节点边与证据表、Agent 的四个图谱工具、`PaperSummary` 的 stage2/3 字段，以及前端的图谱状态、`@xyflow/react` 与 `elkjs` 依赖全部移除。`PAPER_DELETE_ORDER` 不再包含图谱表，旧库里的这些表会保留但不再被读写。
+- **Agent 回答改为 Markdown 并支持流式**：新增 `POST /api/papers/{paper_id}/agent/messages/stream`（事件 `started`/`delta`/`completed`/`error`），与原有非流式端点共用 `_prepare_turn`，差别只在回答怎么返回。格式约定集中在 `services/answer_format.py`：`[[element_id]]` 内联引用、可选首行 `[[status:insufficient_evidence]]`、单独一行 `---` 之后是背景知识。整段回答到达前不写库，中断的流不会留下半条助手消息。
+- **前端**：流式文本先显示在消息挂载点，完成后进入 exchanges；新增无依赖的 Markdown 渲染器 `MarkdownText.tsx`，把已知的 `[[element_id]]` 渲染成可点击的页码标记，未知 ID 保持纯文本。
+- **门禁调整**：Agent 回合现在只要求 `tool_calling`（Markdown 回答不再需要 `response_format`），`structured output` 只作为档案页的能力展示。
+- **真实模型联调发现并修复的三个问题**：思考模式模型要求把 assistant 工具轮的 `reasoning_content` 回传，否则 400（现已保存并回传）；provider 可能忽略 `parallel_tool_calls=False` 一次返回多个调用，超预算批次现在截断到上限并基于已有证据作答，不再整轮失败；模型给出无效工具参数（例如不存在的 `section_id`）现在作为工具结果反馈给它自我纠正，而不是 502。
+- 验证：后端 **398 项通过**、前端 **208 项通过**；真实 DeepSeek（`deepseek-flash`）四轮连续流式对话通过——事件顺序、增量分片、内联引用落库、`---` 背景分段、重复请求重放、与非流式端点一致性均符合预期；另有本地真实 HTTP（uvicorn + 兼容桩）验证分片确实是增量到达。上文“主 Agent 仍使用非流式 JSON / 等待完整回答”的描述由本条取代。
+- 已知质量项（本轮未改行为）：概览类问题（“这篇论文讲了什么”）只预读开头三个与末尾一个有定位元素，模型常因此答复证据不足；要更好的概览需要改选取策略或允许概览路径继续检索。
 
 ### 聊天布局调整（2026-09-14）
 

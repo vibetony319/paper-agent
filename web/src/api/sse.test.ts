@@ -2,7 +2,7 @@ import { HttpResponse, http } from 'msw';
 import { expect, it } from 'vitest';
 
 import { ApiError } from './client';
-import { parseSse, streamSelectionAssist } from './sse';
+import { parseSse, streamAgentMessage, streamSelectionAssist } from './sse';
 import { server } from '../test/server';
 import type { SelectionAssistInput } from './types';
 
@@ -159,4 +159,63 @@ it('stops reading and throws AbortError when the caller aborts', async () => {
   const pending = events.next();
   controller.abort();
   await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+});
+
+const agentInput = {
+  content: '论文讲了什么？',
+  model_profile_id: 'profile-a',
+  request_id: 'request-a',
+};
+
+it('streams paper agent events from the stream endpoint', async () => {
+  let receivedPath = '';
+  let receivedBody: unknown;
+  server.use(http.post('/api/papers/paper-a/agent/messages/stream', async ({ request }) => {
+    receivedPath = new URL(request.url).pathname;
+    receivedBody = await request.json();
+    return sseResponse([
+      ['started', { request_id: 'request-a' }],
+      ['delta', { text: '论文提出' }],
+      ['delta', { text: '路由损失。' }],
+      ['completed', { message: { conversation_id: 'conversation-a' } }],
+    ]);
+  }));
+
+  const controller = new AbortController();
+  const events = await collect(streamAgentMessage('paper-a', agentInput, controller.signal));
+
+  expect(receivedPath).toBe('/api/papers/paper-a/agent/messages/stream');
+  expect(receivedBody).toEqual(agentInput);
+  expect(events).toEqual([
+    { event: 'started', data: { request_id: 'request-a' } },
+    { event: 'delta', data: { text: '论文提出' } },
+    { event: 'delta', data: { text: '路由损失。' } },
+    { event: 'completed', data: { message: { conversation_id: 'conversation-a' } } },
+  ]);
+});
+
+it('surfaces a paper agent stream error event to the caller', async () => {
+  server.use(http.post('/api/papers/paper-a/agent/messages/stream', () => sseResponse([
+    ['started', { request_id: 'request-a' }],
+    ['error', { code: 'agent_failed', detail: '模型未能完成有效回答。' }],
+  ])));
+
+  const controller = new AbortController();
+  const events = await collect(streamAgentMessage('paper-a', agentInput, controller.signal));
+
+  expect(events).toEqual([
+    { event: 'started', data: { request_id: 'request-a' } },
+    { event: 'error', data: { code: 'agent_failed', detail: '模型未能完成有效回答。' } },
+  ]);
+});
+
+it('keeps the api error code for a rejected paper agent stream request', async () => {
+  server.use(http.post('/api/papers/paper-a/agent/messages/stream', () => HttpResponse.json(
+    { detail: 'Reasoning model is not configured.' },
+    { status: 503 },
+  )));
+
+  const controller = new AbortController();
+  await expect(collect(streamAgentMessage('paper-a', agentInput, controller.signal)))
+    .rejects.toMatchObject({ status: 503, message: '请求失败，请稍后重试。' });
 });

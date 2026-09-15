@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 import type { AgentMessage, ModelProfile, TextAnchorDraft } from '../api/types';
+import { MarkdownText } from './MarkdownText';
 import { ModelSelector } from './ModelSelector';
 
 export type ComposerAttachment = {
@@ -24,6 +25,7 @@ export interface ChatComposerProps {
   focusRequest?: number;
   messageTarget?: HTMLDivElement | null;
   onSendStart?: () => void;
+  streamingText?: string;
 }
 
 export function ChatComposer({
@@ -37,6 +39,7 @@ export function ChatComposer({
   focusRequest = 0,
   messageTarget = null,
   onSendStart,
+  streamingText = '',
 }: ChatComposerProps) {
   const [content, setContent] = useState('');
   const [pending, setPending] = useState(false);
@@ -122,7 +125,7 @@ export function ChatComposer({
     <p className="agent-panel__question">{sentQuestion}</p>
     <div className="chat-feedback__assistant" role="status">
       <span className="chat-feedback__name">论文助手</span>
-      {greeting ? <p>你好！我可以帮你概括论文、解释方法或分析选中的段落。试试问“这篇论文讲了什么”。</p> : <p className="chat-feedback__waiting"><span className="chat-typing" aria-hidden="true"><i /><i /><i /></span>{elapsed >= 20 ? '模型还在处理，请稍候…' : '正在生成回答…'}</p>}
+      {greeting ? <p>你好！我可以帮你概括论文、解释方法或分析选中的段落。试试问“这篇论文讲了什么”。</p> : streamingText === '' ? <p className="chat-feedback__waiting"><span className="chat-typing" aria-hidden="true"><i /><i /><i /></span>{elapsed >= 20 ? '模型还在处理，请稍候…' : '正在生成回答…'}</p> : <div className="agent-panel__answer"><MarkdownText text={streamingText} /></div>}
     </div>
   </div>;
 

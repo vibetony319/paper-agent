@@ -223,7 +223,7 @@ export function WorkspaceShell({
                     const anchor = note?.anchor_ids?.map((id) => workspace.anchors.find((item) => item.id === id)).find(Boolean);
                     const source = anchor === undefined ? null : toAnchorSourceTarget(anchor);
                     if (source !== null) workspace.selectAnchorSource(source);
-                    else if (note?.element_id !== null && note?.element_id !== undefined) workspace.selectGraphEvidenceElement(note.element_id);
+                    else if (note?.element_id !== null && note?.element_id !== undefined) workspace.selectElementSource(note.element_id);
                   },
                 }}
                 notes={{
@@ -232,7 +232,7 @@ export function WorkspaceShell({
                   anchors: workspace.anchors,
                   documentElements: document.elements,
                   saveNote: workspace.saveNote,
-                  onSelectSource: workspace.selectGraphEvidenceElement,
+                  onSelectSource: workspace.selectElementSource,
                   onSelectAnchor: workspace.selectAnchorSource,
                   updateNote: workspace.updateNote,
                   deleteNote: workspace.deleteNote,
@@ -242,6 +242,7 @@ export function WorkspaceShell({
                   selectedModelProfileId,
                   onSelectedModelProfileIdChange,
                   askAgent: workspace.askAgent,
+                  streamingText: workspace.streaming?.text ?? '',
                   attachment: currentComposerAttachment,
                   onAttachmentClear: (token) => setComposerAttachment((current) => (
                     current?.paperId === paper.id && current.token === token ? null : current

@@ -11,13 +11,6 @@ erDiagram
     papers ||--o{ sections : "paper_id"
     papers ||--o{ document_elements : "paper_id"
     sections ||--o{ document_elements : "(paper_id, section_id)"
-    papers ||--o{ graph_nodes : "paper_id"
-    papers ||--o{ graph_edges : "paper_id"
-    graph_nodes ||--o{ graph_edges : "(paper_id, source/target_node_id)"
-    graph_nodes ||--o{ graph_node_evidence : "(paper_id, node_id)"
-    graph_edges ||--o{ graph_edge_evidence : "(paper_id, edge_id)"
-    document_elements ||--o{ graph_node_evidence : "(paper_id, element_id)"
-    document_elements ||--o{ graph_edge_evidence : "(paper_id, element_id)"
     papers ||--o{ text_anchors : "paper_id"
     document_elements ||--o{ text_anchors : "(paper_id, element_id)"
     text_anchors ||--o{ text_anchor_rects : "anchor_id"
@@ -53,15 +46,6 @@ erDiagram
 | `pages` | `id` | `paper_id → papers.id` | `(paper_id, number)` 唯一 |
 | `sections` | `id` | `paper_id → papers.id` | `(paper_id, order_index)` 唯一 |
 | `document_elements` | `id` | `paper_id → papers.id`；`(paper_id, section_id) → sections` | bbox 归一化与 `location_status` 一致性检查 |
-
-### 知识图谱
-
-| 表 | 主键 | 外键 | 关键约束 |
-|---|---|---|---|
-| `graph_nodes` | `id` | `paper_id → papers.id` | `(paper_id, node_type, normalized_name)` 唯一 |
-| `graph_edges` | `id` | `paper_id → papers.id`；两端节点 → `graph_nodes` | — |
-| `graph_node_evidence` | `(paper_id, node_id, element_id)` | 节点与元素复合外键 | 纯连接表 |
-| `graph_edge_evidence` | `(paper_id, edge_id, element_id)` | 边与元素复合外键 | 纯连接表 |
 
 ### 批注与锚点
 
@@ -136,8 +120,7 @@ sequenceDiagram
 conversation_message_note_citations → conversation_message_anchors
 → conversation_message_citations → conversation_messages → conversations
 → selection_assist_requests → note_anchors → notes → highlights
-→ text_anchor_rects → text_anchors → graph_edge_evidence
-→ graph_node_evidence → graph_edges → graph_nodes → document_elements
+→ text_anchor_rects → text_anchors → document_elements
 → sections → pages → processing_runs → papers
 ```
 

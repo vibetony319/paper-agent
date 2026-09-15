@@ -1,4 +1,3 @@
-from dataclasses import replace
 
 from fastapi import FastAPI, Request
 from fastapi.exception_handlers import request_validation_exception_handler
@@ -11,7 +10,6 @@ from paper_agent.model_profile_storage import ModelProfileRepository
 from paper_agent.routes import (
     agent_router,
     annotations_router,
-    graph_router,
     health_router,
     model_profiles_router,
     papers_router,
@@ -23,7 +21,6 @@ from paper_agent.services.agent_runtime import PaperAgentRuntime
 from paper_agent.services.agent_tools import PaperToolRegistry
 from paper_agent.services.annotations import AnnotationService
 from paper_agent.services.citation_guard import CitationGuard
-from paper_agent.services.graph_construction import GraphConstructionService
 from paper_agent.services.ingestion import PaperIngestionService
 from paper_agent.services.model_profiles import ModelProfileService
 from paper_agent.services.model_secrets import ModelSecretStore
@@ -33,16 +30,6 @@ from paper_agent.services.paper_operations import PaperOperationCoordinator
 from paper_agent.services.reasoning_clients import ReasoningClientProvider
 from paper_agent.services.selection_assists import SelectionAssistService
 from paper_agent.storage import PaperRepository
-
-
-class _GraphAwarePaperIngestionService(PaperIngestionService):
-    def get_summary(self, paper_id: str):
-        summary = super().get_summary(paper_id)
-        return replace(
-            summary,
-            stage2_status=self.repository.get_latest_stage_status(paper_id, "stage2"),
-            stage3_status=self.repository.get_latest_stage_status(paper_id, "stage3"),
-        )
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -90,14 +77,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         annotation_repository=app.state.annotation_repository,
         note_memory=NoteMemoryService(app.state.annotation_repository),
     )
-    app.state.paper_ingestion_service = _GraphAwarePaperIngestionService(
+    app.state.paper_ingestion_service = PaperIngestionService(
         settings=app.state.settings,
         repository=repository,
     )
-    app.state.graph_construction_service = GraphConstructionService(
-        repository=repository
-    )
-
     @app.exception_handler(ModelProfileHttpError)
     async def model_profile_http_error(
         _request: Request, error: ModelProfileHttpError
@@ -143,7 +126,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(health_router)
     app.include_router(papers_router)
-    app.include_router(graph_router)
     app.include_router(agent_router)
     app.include_router(annotations_router)
     app.include_router(model_profiles_router)

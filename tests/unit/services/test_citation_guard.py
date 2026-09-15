@@ -1,133 +1,95 @@
 import pytest
 
-
-def _grounded_payload(
-    *, citations: list[str], background: str | None = None
-) -> dict[str, object]:
-    return {
-        "status": "grounded",
-        "paper_answer": "The paper reports the measured result.",
-        "citation_element_ids": citations,
-        "background_explanation": background,
-    }
+ANSWER = "The method improves accuracy. [[e1]]"
 
 
-def test_parser_keeps_model_answer_when_citations_are_not_request_scoped():
-    """Citations are optional links and must not replace the model prose."""
+def _parse(markdown: str):
     from paper_agent.services.citation_guard import CitationGuard
 
-    answer = CitationGuard().parse_model_answer(
-        {
-            "status": "grounded",
-            "paper_answer": "The method improves accuracy.",
-            "citation_element_ids": ["invented-element"],
-            "background_explanation": None,
-        }
-    )
+    return CitationGuard().parse_markdown_answer(markdown)
+
+
+def test_parser_keeps_model_answer_with_its_inline_citation_markers():
+    """Citations are optional links and must not replace the model prose."""
+    answer = _parse("The method improves accuracy. [[invented-element]]")
 
     assert answer.status == "grounded"
-    assert answer.paper_answer == "The method improves accuracy."
+    assert answer.paper_answer == "The method improves accuracy. [[invented-element]]"
     assert answer.citation_element_ids == ("invented-element",)
     assert answer.background_explanation is None
 
 
-def test_parser_keeps_grounded_answer_and_citation_order():
-    from paper_agent.services.citation_guard import CitationGuard
+def test_parser_keeps_citation_order_and_drops_duplicates():
+    answer = _parse("First [[e2]] then [[e1]] and [[e2]] again.")
 
-    answer = CitationGuard().parse_model_answer(
-        _grounded_payload(citations=["e2", "e1"])
-    )
-
-    assert answer.status == "grounded"
-    assert answer.paper_answer == "The paper reports the measured result."
     assert answer.citation_element_ids == ("e2", "e1")
-    assert answer.background_explanation is None
 
 
-@pytest.mark.parametrize("citations", [[], ["e1", "e1"], ["   "]])
-def test_parser_keeps_answer_without_clean_citations(citations: list[str]):
-    from paper_agent.services.citation_guard import CitationGuard
+def test_parser_keeps_markdown_formatting():
+    answer = _parse("## 方法\n\n- 使用路由损失 [[e1]]\n- 结果更好")
 
-    answer = CitationGuard().parse_model_answer(
-        _grounded_payload(citations=citations)
-    )
+    assert answer.paper_answer == "## 方法\n\n- 使用路由损失 [[e1]]\n- 结果更好"
+    assert answer.citation_element_ids == ("e1",)
+
+
+def test_parser_keeps_answer_without_any_citation_marker():
+    answer = _parse(ANSWER.replace(" [[e1]]", ""))
 
     assert answer.status == "grounded"
-    assert answer.paper_answer == "The paper reports the measured result."
-    assert answer.citation_element_ids == tuple(citations)
-
-
-def test_parser_keeps_background_explanation():
-    from paper_agent.services.citation_guard import CitationGuard
-
-    answer = CitationGuard().parse_model_answer(
-        _grounded_payload(citations=["e1"], background="Outside the paper.")
-    )
-
-    assert answer.status == "grounded"
-    assert answer.paper_answer == "The paper reports the measured result."
-    assert answer.citation_element_ids == ("e1",)
-    assert answer.background_explanation == "Outside the paper."
-
-
-def test_parser_keeps_model_content_for_insufficient_evidence_status():
-    from paper_agent.services.citation_guard import CitationGuard
-
-    answer = CitationGuard().parse_model_answer(
-        {
-            "status": "insufficient_evidence",
-            "paper_answer": "I need more context before answering.",
-            "citation_element_ids": ["e1"],
-            "background_explanation": "Try selecting the relevant paragraph.",
-        }
-    )
-
-    assert answer.status == "insufficient_evidence"
-    assert answer.paper_answer == "I need more context before answering."
-    assert answer.citation_element_ids == ("e1",)
-    assert answer.background_explanation == "Try selecting the relevant paragraph."
-
-
-def test_parser_does_not_reject_blank_model_content():
-    from paper_agent.services.citation_guard import CitationGuard
-
-    answer = CitationGuard().parse_model_answer(
-        {
-            "status": "insufficient_evidence",
-            "paper_answer": "",
-            "citation_element_ids": [],
-            "background_explanation": "   ",
-        }
-    )
-
-    assert answer.status == "insufficient_evidence"
-    assert answer.paper_answer == ""
     assert answer.citation_element_ids == ()
-    assert answer.background_explanation == "   "
 
 
-def test_invalid_contract_raises_a_sanitized_error_without_model_content():
-    """Only malformed transport structure remains an error boundary."""
-    from paper_agent.services.citation_guard import CitationGuard, CitationGuardError
+def test_parser_splits_background_explanation_after_the_separator():
+    answer = _parse(f"{ANSWER}\n\n---\n\nMoE 路由是常见做法。")
 
-    payload = _grounded_payload(citations=["e1"])
-    payload["unexpected"] = "secret model content"
+    assert answer.paper_answer == ANSWER
+    assert answer.citation_element_ids == ("e1",)
+    assert answer.background_explanation == "MoE 路由是常见做法。"
+
+
+def test_parser_keeps_a_decorative_rule_that_separates_nothing():
+    """A horizontal rule mid-answer must not be read as a background separator."""
+    answer = _parse(f"{ANSWER}\n\n---\n")
+
+    assert answer.background_explanation is None
+    assert answer.paper_answer == f"{ANSWER}\n\n---"
+
+
+def test_parser_reads_the_insufficient_evidence_directive_from_the_first_line():
+    answer = _parse("[[status:insufficient_evidence]]\n\n论文没有给出该结论。")
+
+    assert answer.status == "insufficient_evidence"
+    assert answer.paper_answer == "论文没有给出该结论。"
+    assert answer.citation_element_ids == ()
+
+
+def test_parser_ignores_the_directive_outside_the_first_line():
+    answer = _parse(f"{ANSWER}\n\n[[status:insufficient_evidence]]")
+
+    assert answer.status == "grounded"
+    assert answer.citation_element_ids == ("e1", "status:insufficient_evidence")
+
+
+def test_parser_rejects_an_empty_answer():
+    from paper_agent.services.citation_guard import CitationGuardError
 
     with pytest.raises(CitationGuardError) as error:
-        CitationGuard().parse_model_answer(payload)
+        _parse("   \n\n  ")
 
     assert str(error.value) == "invalid final answer contract"
-    assert "secret model content" not in str(error.value)
-    assert error.value.__cause__ is None
 
 
-def test_legacy_validate_alias_no_longer_applies_an_evidence_allow_list():
-    from paper_agent.services.citation_guard import CitationGuard
+def test_parser_rejects_a_non_text_transport_value():
+    from paper_agent.services.citation_guard import CitationGuardError
 
-    answer = CitationGuard().validate(
-        _grounded_payload(citations=["outside-request"]),
-        allowed_evidence_ids=frozenset(),
-    )
+    with pytest.raises(CitationGuardError):
+        _parse(None)  # type: ignore[arg-type]
 
-    assert answer.paper_answer == "The paper reports the measured result."
-    assert answer.citation_element_ids == ("outside-request",)
+
+def test_parser_requires_content_on_both_sides_of_the_background_separator():
+    """A separator with no paper answer keeps the text as the answer itself."""
+    answer = _parse("---\n\nOnly background text.")
+
+    assert answer.status == "grounded"
+    assert answer.paper_answer == "---\n\nOnly background text."
+    assert answer.background_explanation is None

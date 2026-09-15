@@ -7,7 +7,7 @@
 - 所有 `{paper_id}`、`{profile_id}`、`{conversation_id}`、`request_id` 均为 UUID（文档元素、图节点和高亮/笔记 ID 的类型以 OpenAPI schema 为准）。
 - `model_profile_id` 是模型型请求必填的**请求作用域**选择，不隐式使用默认档案。服务会保存不含密钥的 `ModelSnapshotResponse`（档案 ID、显示名、URL、模型名、修订号）。
 - 除单独列出的稳定 `{code, detail}` 错误外，FastAPI 的验证与资源错误以 OpenAPI/路由当前响应为准。`model-profiles` 的请求验证固定为 `422 {code:"validation_error", detail:"模型档案请求无效。"}`。
-- `request_id` 不是全局去重键，必须连同论文（图谱还连同阶段）理解。相同标识只能重试同一业务请求；若请求体与已保存身份不一致，应生成新的标识，而不能要求服务器猜测意图。
+- `request_id` 不是全局去重键，必须连同论文理解。相同标识只能重试同一业务请求；若请求体与已保存身份不一致，应生成新的标识，而不能要求服务器猜测意图。
 
 ## 健康检查（1 个操作）
 
@@ -70,38 +70,32 @@
 | `POST /api/model-profiles/{profile_id}/default` | 有 `If-Match`；将启用档案设为默认，返回档案。 | `404 profile_not_found`、`409 profile_read_only` / `revision_conflict`、`422 validation_error`。compare-and-swap 语义。 |
 | `POST /api/model-profiles/{profile_id}/test` | 有 `If-Match`；探测 basic chat、structured output、tool calling，并在可写档案上保存能力结果及新 revision。 | `404 profile_not_found`、`409 revision_conflict` / `profile_read_only`、`503 model_unavailable`、`422 validation_error`。会探测外部模型，不能当作无副作用重试。 |
 
-## 图谱（7 个操作）
+## Agent 与会话（4 个操作）
 
-构建请求统一使用 [`GraphBuildRequest`](#schema-索引)：`model_profile_id` 和 `request_id`。core 要求 Stage 1 完成；deep 还要求 core（Stage 2）完成。两条构建路由均持有模型 usage lease，模型必须支持 structured output。
+主 Agent 的最终回答是 Markdown，不再使用结构化 JSON：服务完成工具循环后流式生成正文，再从正文里解析出可选的页面链接。两种传输共用同一套回合准备（前置校验、用户消息落库、笔记注入、工具循环、引用清洗），差别只在回答怎么返回。
 
-| 方法与路径 | 用途与重要请求/响应字段 | 稳定错误 / 幂等 |
-| --- | --- | --- |
-| `POST /api/papers/{paper_id}/graph/core` | 构建/替换 core 阶段，返回 [`PaperGraphResponse`](#schema-索引)。 | `409` 前置条件、能力不足、同 request_id 正在运行或删除活跃；`503` 模型未配置；`500` 构建失败。相同论文、stage、request_id 完成后重放当前图谱，不再调用模型。 |
-| `POST /api/papers/{paper_id}/graph/deep` | 在 core 成功后构建/替换 deep 阶段，返回图谱。 | 同 core；幂等键同样包含 deep 阶段。 |
-| `GET /api/papers/{paper_id}/graph` | 取得图谱的 `nodes` 和 `edges`。 | `404 Paper resource not found.`；只读。 |
-| `GET /api/papers/{paper_id}/graph/nodes/{node_id}` | 取得一个 [`GraphNodeResponse`](#schema-索引)。 | 论文或节点不存在均 `404`；只读。 |
-| `GET /api/papers/{paper_id}/graph/nodes/{node_id}/neighbors` | 返回以该节点为中心的 `PaperGraphResponse`。 | 论文或节点不存在 `404`；只读。 |
-| `GET /api/papers/{paper_id}/graph/paths` | 查询参数 `source_id`、`target_id`（非空）与 `max_depth`（默认 3、≥0）；返回 `GraphPathsResponse.paths`。 | 论文或任一节点不存在 `404`；参数验证遵从 OpenAPI；只读。 |
-| `GET /api/papers/{paper_id}/graph/subgraph` | 查询参数 `node_id`（非空）、`depth`（默认 1、≥0）；返回子图。 | 论文或节点不存在 `404`；只读。 |
+答案格式约定（提示词与解析器同源，见 `services/answer_format.py`）：
 
-## Agent 与会话（3 个操作）
-
-主 Agent 是非流式 JSON：服务完成工具循环后解析模型返回的结构化答案，再保存并返回模型回答；不可将它与 selection-assists SSE 混用。引用只影响可选的页面跳转，不会把模型正文替换成固定拒答。
+- 正文里的 `[[element_id]]` 是内联引用标记；能被定位到当前论文的 ID 会保存为可选页面链接，其余忽略，且不影响正文。
+- 首行可选的 `[[status:insufficient_evidence]]` 表示证据不足；缺省为 `grounded`。
+- 单独一行的 `---` 之后是背景知识（非论文证据），解析后单独存进 `background_explanation`。
+- 只有正文为空（解析不出任何答案）才返回 `502`。
 
 | 方法与路径 | 用途与重要请求/响应字段 | 稳定错误 / 幂等 |
 | --- | --- | --- |
-| `POST /api/papers/{paper_id}/agent/messages` | [`AgentMessageRequest`](#schema-索引)：`content`、`mode`、可选 `conversation_id`/`selection`、必填 `model_profile_id` 和 `request_id`。返回 [`AgentMessageResponse`](#schema-索引)：会话/消息 ID、`grounded|insufficient_evidence`、答案、引用、模型快照和实际注入笔记引用。 | `404` 论文/会话不存在；`409` 前置阶段不完整、模型能力不足、删除活跃或 request_id 与已存重试不一致；`422` 无效选区；`503` 模型未配置；`502` 模型或最终输出不能完成。相同论文和完全相同 request_id 已完成时重放保存的回合；部分用户消息的重试还必须匹配内容、会话、模式、档案及不可变快照。 |
+| `POST /api/papers/{paper_id}/agent/messages` | [`AgentMessageRequest`](#schema-索引)：`content`、可选 `conversation_id`/`selection`、必填 `model_profile_id` 和 `request_id`。返回 [`AgentMessageResponse`](#schema-索引)：会话/消息 ID、`grounded|insufficient_evidence`、答案、引用、模型快照和实际注入笔记引用。 | `404` 论文/会话不存在；`409` 前置阶段不完整、工具调用能力不足、删除活跃或 request_id 与已存重试不一致；`422` 无效选区；`503` 模型未配置；`502` 模型或最终输出不能完成。相同论文和完全相同 request_id 已完成时重放保存的回合；部分用户消息的重试还必须匹配内容、会话、档案及不可变快照。 |
+| `POST /api/papers/{paper_id}/agent/messages/stream` | 同一请求体，`text/event-stream` 响应：`started`（`request_id`）、`delta`（`text`，增量 Markdown）、`completed`（`message`，与 `AgentMessageResponse` 同构）、`error`（`code`、`detail`）。 | 请求校验（`404`/`409`/`422`/`503`）仍在开流前以普通 JSON 错误返回，开流后的失败是 `error` 事件。整段回答到达前不写库，中断的流不会留下半条助手消息；已完成回合重放只发 `started` + `completed`。 |
 | `GET /api/papers/{paper_id}/agent/conversations/{conversation_id}` | 返回 [`ConversationResponse`](#schema-索引)，含用户/助手消息、历史模型快照、引用和笔记引用可用性。 | 论文或会话不存在 `404`；只读。 |
 | `POST /api/agent/health` | 校验默认/环境回退模型的工具调用能力，返回 `AgentHealthResponse`（默认 `status: "ok"`）。 | `503` 工具调用不可用；只做能力探测，不写业务数据，可安全重复。 |
 
-模型返回的 `paper_answer`、`status` 和 `background_explanation` 会直接保存并返回。`citation_element_ids` 仅作为可选页面跳转：重复或无法定位到当前论文的 ID 会被去重/忽略，但不会改写模型回答。只有无法解析为约定 JSON 结构的响应才会返回 `502`。
+模型正文会直接保存并返回；内联引用标记只是可选页面跳转，重复或无法定位的 ID 会被去重/忽略，不会改写回答。工具调用是 Agent 回合唯一必须通过的能力检测——`structured output` 现在只是模型档案里的展示信息，不再门禁聊天（Markdown 回答不需要 `response_format`）。
 
 ## Schema 索引
 
-以下 schema 均以运行时 OpenAPI 为准：`PaperSummaryResponse`、`PaperDocumentResponse`、`PaperDeleteRequest`、`TextAnchorDraftRequest`、`AnnotationBundleResponse`、`HighlightCreateRequest`、`HighlightResponse`、`NoteRequest`、`NoteUpdateRequest`、`NoteResponse`、`SelectionAssistRequest`、`ModelProfileCreateRequest`、`ModelProfilePatchRequest`、`ModelProfileResponse`、`ModelProfileErrorResponse`、`GraphBuildRequest`、`PaperGraphResponse`、`GraphNodeResponse`、`GraphPathsResponse`、`AgentMessageRequest`、`AgentMessageResponse`、`ConversationResponse`、`AgentHealthResponse`。
+以下 schema 均以运行时 OpenAPI 为准：`PaperSummaryResponse`、`PaperDocumentResponse`、`PaperDeleteRequest`、`TextAnchorDraftRequest`、`AnnotationBundleResponse`、`HighlightCreateRequest`、`HighlightResponse`、`NoteRequest`、`NoteUpdateRequest`、`NoteResponse`、`SelectionAssistRequest`、`ModelProfileCreateRequest`、`ModelProfilePatchRequest`、`ModelProfileResponse`、`ModelProfileErrorResponse`、`AgentMessageRequest`、`AgentMessageResponse`、`ConversationResponse`、`AgentHealthResponse`。
 
 重点响应字段：
 
-- `NoteResponse.model`、Agent 消息的 `model`、论文摘要的 Stage 2/3 模型均是无密钥快照；`NoteResponse` 还标明 `note_type`、`ai_generated`、`user_edited`、锚点和时间。
-- `PaperGraphResponse` 的节点/边都带 `evidence_element_ids`；图谱证据可用于模型上下文，但不会自动变成聊天引用链接。
+- `NoteResponse.model`、Agent 消息的 `model`、论文摘要的模型快照均是无密钥快照；`NoteResponse` 还标明 `note_type`、`ai_generated`、`user_edited`、锚点和时间。
+- `AgentMessageResponse.paper_answer` 是模型返回的 Markdown 正文（含内联 `[[element_id]]` 标记），`background_explanation` 是 `---` 之后的背景段落。
 - `AgentMessageResponse.citations` 的每一项包含元素 ID、类型、页码与归一化 `bbox`；`note_references` 仅说明本次检索到的笔记，不是论文证据。

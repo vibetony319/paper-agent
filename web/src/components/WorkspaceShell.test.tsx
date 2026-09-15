@@ -24,7 +24,7 @@ const profile: ModelProfile = {
 };
 
 const paper: PaperSummary = {
-  id: 'paper-a', original_filename: 'paper.pdf', status: 'completed', stage0_status: 'completed', stage1_status: 'completed', stage2_status: 'completed', stage3_status: null, error: null,
+  id: 'paper-a', original_filename: 'paper.pdf', status: 'completed', stage0_status: 'completed', stage1_status: 'completed', error: null,
 };
 
 const paperB: PaperSummary = { ...paper, id: 'paper-b', original_filename: 'paper-b.pdf' };
@@ -33,10 +33,10 @@ function workspaceFixture() {
   return {
     activePaperId: 'paper-a', loadRevision: 1,
     document: { paper: { id: 'paper-a', original_filename: 'paper.pdf', status: 'completed' as const }, pages: [], sections: [], elements: [], notes: [] },
-    graph: { nodes: [], edges: [] }, notes: [] as Note[], anchors: [] as TextAnchor[], highlights: [], selection: null, activeSource: null, messages: [] as AgentMessage[], exchanges: [] as Array<{ question: string; message: AgentMessage }>, errorMessage: null as string | null, notesErrorMessage: null as string | null,
+    notes: [] as Note[], anchors: [] as TextAnchor[], highlights: [], selection: null, activeSource: null, messages: [] as AgentMessage[], exchanges: [] as Array<{ question: string; message: AgentMessage }>, errorMessage: null as string | null, notesErrorMessage: null as string | null,
     clearActiveSource: vi.fn(), setSelection: vi.fn(), clearSelection: vi.fn(), createHighlight: vi.fn(), deleteHighlight: vi.fn(), runSelectionAssist: vi.fn(), saveNote: vi.fn(),
-    selectCitation: vi.fn(), selectGraphEvidenceElement: vi.fn(), selectAnchorSource: vi.fn(), updateNote: vi.fn(), deleteNote: vi.fn(),
-    askAgent: vi.fn(), buildCoreGraph: vi.fn(), buildDeepGraph: vi.fn(),
+    selectCitation: vi.fn(), selectElementSource: vi.fn(), selectAnchorSource: vi.fn(), updateNote: vi.fn(), deleteNote: vi.fn(),
+    askAgent: vi.fn(),
   };
 }
 

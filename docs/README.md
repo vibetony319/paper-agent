@@ -18,7 +18,7 @@
 - [数据模型与删除恢复](data-model.md)：SQLite、迁移、所有权与永久删除。
 - [PDF 文本批注后端契约](pdf-annotations.md)：TextLayer、单页归一化锚点、SSE 与笔记。
 - [笔记记忆与 Agent 注入](note-memory.md)：6,000 字符预算、检索和模型回答/引用链接边界。
-- [后续路线图](roadmap.md)：尚未实现的 OCR、协作、跨页选区和可编辑图谱。
+- [后续路线图](roadmap.md)：尚未实现的 OCR、协作与跨页选区。
 
 ## 当前实施计划
 
@@ -36,7 +36,7 @@
 
 - [MVP 设计](superpowers/specs/2026-08-08-paper-agent-design.md)
 - [解析与持久化](superpowers/plans/2026-08-08-parsing-persistence.md)
-- [知识图谱](superpowers/plans/2026-08-08-knowledge-graph.md)
+- [知识图谱（功能已于 2026-09-15 移除，仅作历史记录）](superpowers/plans/2026-08-08-knowledge-graph.md)
 - [Agent Runtime](superpowers/plans/2026-08-09-agent-runtime.md)
 - [旧版 Web UI](superpowers/plans/2026-08-13-web-ui.md)
 

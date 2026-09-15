@@ -1,6 +1,7 @@
 import type { AgentMessage, Citation } from '../api/types';
 import { useEffect, useRef } from 'react';
 import type { AgentExchange } from '../workspace/types';
+import { MarkdownText } from './MarkdownText';
 
 export interface AgentPanelProps {
   paperId: string | null;
@@ -30,8 +31,8 @@ export function AgentPanel({ paperId, exchanges, onSelectCitation, onSelectNoteR
               <span className="chat-feedback__name">论文助手</span>
               <span className="agent-panel__model-badge" title={statusLabel(message.status)}>{message.model?.display_name ?? ''}</span>
             </div>
-            {message.paper_answer !== '' && <p className="agent-panel__answer">{message.paper_answer}</p>}
-            {message.background_explanation !== null && <section className="agent-panel__background" aria-label="背景知识说明"><h3>背景知识</h3><p>{message.background_explanation}</p></section>}
+            {message.paper_answer !== '' && <div className="agent-panel__answer"><MarkdownText text={message.paper_answer} citations={message.citations} onSelectCitation={onSelectCitation} /></div>}
+            {message.background_explanation !== null && <section className="agent-panel__background" aria-label="背景知识说明"><h3>背景知识</h3><MarkdownText text={message.background_explanation} /></section>}
             {message.citations.length > 0 && <div className="agent-panel__citations" aria-label="论文引用">{message.citations.map((citation) => <button key={`${message.message_id}-${citation.id}`} type="button" onClick={() => onSelectCitation(citation)}>论文：第 {citation.page_number} 页 {citation.kind}</button>)}</div>}
             {message.note_references !== undefined && message.note_references.length > 0 && <div className="agent-panel__note-references" aria-label="笔记引用">{message.note_references.map((reference) => <button key={`${message.message_id}-${reference.note_id}`} type="button" disabled={!reference.available} onClick={() => onSelectNoteReference?.(reference.note_id)}>笔记：{reference.page_number === null ? '原文位置不可用' : `第 ${reference.page_number} 页`}</button>)}</div>}
           </article>

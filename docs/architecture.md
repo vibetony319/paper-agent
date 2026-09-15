@@ -7,7 +7,7 @@
 ```mermaid
 flowchart LR
     U[浏览器阅读器\nPDF.js Canvas + TextLayer] -->|HTTP / SSE| A[FastAPI create_app]
-    A --> R[路由层\npapers / annotations / graph / agent / model-profiles]
+    A --> R[路由层\npapers / annotations / agent / model-profiles]
     R --> S[应用服务]
     S --> PR[PaperRepository]
     S --> AR[PaperAnnotationRepository]
@@ -35,19 +35,18 @@ flowchart LR
 | `model_secret_store` | 保存本地档案密钥并供后端按 `secret_ref` 读写；数据库只保存引用，API 只返回密钥存在状态与掩码。 |
 | `reasoning_client_provider` | 解析启用的档案或只读环境回退，按 `(profile_id, revision)` 缓存 chat、structured、tool 三类客户端，并生成不含密钥的模型快照。 |
 | `model_profile_service` | 档案输入约束、密钥与数据库变更的补偿、能力探测、`If-Match` 所需的并发语义，以及请求期间的 usage lease。 |
-| `paper_repository` | 论文、解析阶段、页面/章节/元素、图谱、会话与消息的持久化和所有权校验；也保存图谱和 Agent 的请求重试记录。 |
+| `paper_repository` | 论文、解析阶段、页面/章节/元素、会话与消息的持久化和所有权校验；也保存 Agent 的请求重试记录。 |
 | `annotation_repository` | 锚点、高亮、笔记和选区辅助请求的持久化、同论文范围的校验、批注请求幂等和选区辅助状态。 |
 | `paper_operation_coordinator` | 单进程内论文操作与永久删除的互斥：普通写操作不能与删除并发。 |
 | `paper_deletion_service` | 受管 PDF 的暂存、删除标记、调用仓储执行显式逆序事务清理和启动时恢复；不参与其他论文操作。 |
 | `annotation_service` | 将 HTTP 锚点草稿转换为批注领域操作，执行高亮/手写笔记 CRUD，不承载模型调用。 |
 | `selection_assist_service` | 对选区做解释或翻译的 SSE 编排；完成时创建 AI 笔记并保存可重放结果。 |
-| `paper_tool_registry` | Agent 可用的严格工具定义与执行，限定在当前论文的元素、章节和图谱，并返回可引用的定位证据 ID。 |
-| `citation_guard` | 解析 Agent 最终 JSON 的固定字段；不再根据引用或证据替换模型回答。无法解析的结构才会作为模型响应错误处理。 |
+| `paper_tool_registry` | Agent 可用的严格工具定义与执行，限定在当前论文的元素与章节，并返回可引用的定位证据 ID。 |
+| `citation_guard` | 解析 Agent 最终 Markdown 回答：可选的首行状态指令、`[[element_id]]` 内联引用标记和 `---` 之后的背景段落；不再根据引用或证据替换模型回答。无法解析出正文才会作为模型响应错误处理。 |
 | `paper_agent_runtime` | 有界 Agent 回合、同请求锁、会话/消息持久化、笔记检索注入、工具循环和最终回答编排；引用只用于可选的页面跳转。 |
-| `paper_ingestion_service` | PDF 上传预检、受管源文件发布、Stage 0/1 解析、对齐、处理状态与文档读取。当前应用实际装配的子类还会补充 Stage 2/3 状态。 |
-| `graph_construction_service` | 在已完成的解析内容上构建 core/deep 图谱、校验前置阶段、记录请求状态并替换相应图谱阶段。 |
+| `paper_ingestion_service` | PDF 上传预检、受管源文件发布、Stage 0/1 解析、对齐、处理状态与文档读取。 |
 
-`PaperRepository` 是论文主体与会话/图谱事实的唯一持久化边界；`PaperAnnotationRepository` 共享其数据库引擎，但只拥有批注、锚点、笔记和选区辅助记录；`ModelProfileRepository` 只拥有模型档案元数据。服务不得把密钥写进模型快照：快照只含 `profile_id`、显示名、`base_url`、模型名和修订号，故历史消息、笔记与处理记录在档案变更或删除后仍可追溯。
+`PaperRepository` 是论文主体与会话事实的唯一持久化边界；`PaperAnnotationRepository` 共享其数据库引擎，但只拥有批注、锚点、笔记和选区辅助记录；`ModelProfileRepository` 只拥有模型档案元数据。服务不得把密钥写进模型快照：快照只含 `profile_id`、显示名、`base_url`、模型名和修订号，故历史消息、笔记与处理记录在档案变更或删除后仍可追溯。
 
 ## 关键时序
 
@@ -133,16 +132,17 @@ sequenceDiagram
         M->>T: 一个论文范围工具
         T-->>A: 内容 + 定位证据 IDs
     end
-    A->>M: 请求最终 JSON
-    M-->>A: 候选回答与 citation_element_ids
-    A->>G: 解析候选 JSON
+    A->>M: 请求最终 Markdown 回答
+    M-->>A: 增量 Markdown 分片
+    A-->>B: 转发 delta 事件（未落库）
+    A->>G: 解析完整 Markdown
     G-->>A: 保留模型回答与可选引用
     A->>A: 清理无法定位的引用链接（不改写正文）
     A->>R: 保存助手消息、引用与笔记引用
-    A-->>B: 非流式 JSON 回答
+    A-->>B: completed 事件（与保存内容一致）
 ```
 
-主 Agent 使用结构化 JSON 传输，所以仍然是非流式接口；它不会再因为没有引用、引用越界或带有背景说明而替换模型正文。笔记只是标注为不可信的本地检索上下文，会自动注入当前对话。`citation_element_ids` 是可选的页面跳转链接：能够定位到当前论文元素时才显示，无法定位时只隐藏链接，不影响回答正文。笔记排序、字符预算和引用回显见 [笔记记忆与 Agent 注入](note-memory.md)。
+主 Agent 的回答是 Markdown：`POST /api/papers/{id}/agent/messages/stream` 把 `delta` 分片直接转发给浏览器，整段回答到达后才解析、落库并发送 `completed`，所以中断的流不会留下半条助手消息；`POST .../agent/messages` 走同一套回合准备，只是把回答一次性返回。它不会再因为没有引用、引用越界或带有背景说明而替换模型正文。内联 `[[element_id]]` 标记是可选的页面跳转链接：能够定位到当前论文元素时才可点击，无法定位时按纯文本显示，不影响回答正文。笔记只是标注为不可信的本地检索上下文，会自动注入当前对话。笔记排序、字符预算和引用回显见 [笔记记忆与 Agent 注入](note-memory.md)。
 
 图中的 Agent 入口合并表示路由和运行时：路由解析请求模型并进入论文操作与模型使用租约，笔记检索、消息写入、工具执行和答案结构解析实际由 `PaperAgentRuntime` 完成。模型返回工具调用描述，运行时调用 `PaperToolRegistry` 执行工具。
 
@@ -177,9 +177,9 @@ sequenceDiagram
 
 ## 并发、请求身份与模型边界
 
-- `request_id` 是论文内请求身份。Agent 使用它重放已完成回合；若已存在仅用户消息，重试必须保持内容、会话、模式、模型档案和模型快照一致，否则为冲突。图谱以 `stage + request_id` 识别：已完成重放，运行中冲突。高亮、带请求标识的手写笔记和选区辅助也各自保存幂等记录。
+- `request_id` 是论文内请求身份。Agent 使用它重放已完成回合；若已存在仅用户消息，重试必须保持内容、会话、模式、模型档案和模型快照一致，否则为冲突。高亮、带请求标识的手写笔记和选区辅助也各自保存幂等记录。
 - 所有模型型请求显式接收 `model_profile_id`，而非在路由里悄悄改用默认档案。服务在调用期间持有 usage lease，正在被使用的可写档案不能删除。
-- Agent、图谱和 AI 笔记保存请求时的不可变、无密钥模型快照；后续更新档案不会改写历史。
+- Agent 和 AI 笔记保存请求时的不可变、无密钥模型快照；后续更新档案不会改写历史。
 - `PaperOperationCoordinator` 只提供单进程互斥，不是分布式锁。永久删除与论文写操作冲突时返回 busy；调用方应在取得 `PAPER_BUSY` 后稍后以原删除确认重试。
 
 ## 关键决策

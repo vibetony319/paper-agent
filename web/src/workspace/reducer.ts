@@ -5,7 +5,6 @@ import type {
   Note,
   TextAnchor,
   PaperDocument,
-  PaperGraph,
 } from '../api/types';
 import type { SourceTarget, WorkspaceState } from './types';
 import { hasValidSourceLocation } from './sourceTarget';
@@ -14,7 +13,6 @@ export const initialWorkspaceState: WorkspaceState = {
   activePaperId: null,
   loadRevision: 0,
   document: null,
-  graph: null,
   notes: [],
   highlights: [],
   anchors: [],
@@ -23,10 +21,10 @@ export const initialWorkspaceState: WorkspaceState = {
   anchorsMutationGeneration: 0,
   selection: null,
   activeSource: null,
-  graphFocusNodeId: null,
   conversationId: null,
   messages: [],
   exchanges: [],
+  streaming: null,
   errorMessage: null,
   notesErrorMessage: null,
 };
@@ -38,7 +36,6 @@ export type WorkspaceAction =
     paperId: string;
     loadRevision: number;
     document: PaperDocument;
-    graph: PaperGraph;
   }
   | { type: 'workspace/failed'; paperId: string; loadRevision: number; message: string }
   | { type: 'notes/loaded'; paperId: string; loadRevision: number; mutationGeneration?: number; notes: Note[] }
@@ -52,9 +49,7 @@ export type WorkspaceAction =
   | { type: 'anchors/loaded'; paperId: string; loadRevision: number; mutationGeneration?: number; anchors: TextAnchor[] }
   | { type: 'anchor/created'; paperId: string; loadRevision: number; mutationGeneration?: number; anchor: TextAnchor }
   | { type: 'notes/failed'; paperId: string; loadRevision: number; message: string }
-  | { type: 'graph/loaded'; paperId: string; loadRevision: number; graph: PaperGraph }
   | { type: 'source/selected'; source: SourceTarget | null }
-  | { type: 'graph/focused'; nodeId: string | null }
   | {
     type: 'conversation/set';
     paperId: string;
@@ -63,6 +58,19 @@ export type WorkspaceAction =
     question: string;
     message: AgentMessage;
   }
+  | {
+    type: 'conversation/stream-started';
+    paperId: string;
+    loadRevision: number;
+    question: string;
+  }
+  | {
+    type: 'conversation/stream-delta';
+    paperId: string;
+    loadRevision: number;
+    text: string;
+  }
+  | { type: 'conversation/stream-failed'; paperId: string; loadRevision: number }
   | { type: 'notes/created'; paperId: string; loadRevision: number; mutationGeneration?: number; note: Note }
   | { type: 'notes/updated'; paperId: string; loadRevision: number; mutationGeneration?: number; note: Note }
   | { type: 'notes/deleted'; paperId: string; loadRevision: number; mutationGeneration?: number; noteId: string }
@@ -139,7 +147,6 @@ export function workspaceReducer(
         ? {
           ...state,
           document: action.document,
-          graph: action.graph,
           errorMessage: null,
         }
         : state;
@@ -169,14 +176,8 @@ export function workspaceReducer(
       return isCurrentLoad(state, action.paperId, action.loadRevision)
         ? { ...state, notesErrorMessage: action.message }
         : state;
-    case 'graph/loaded':
-      return isCurrentLoad(state, action.paperId, action.loadRevision)
-        ? { ...state, graph: action.graph, errorMessage: null }
-        : state;
     case 'source/selected':
       return { ...state, activeSource: action.source };
-    case 'graph/focused':
-      return { ...state, graphFocusNodeId: action.nodeId };
     case 'conversation/set':
       return isCurrentLoad(state, action.paperId, action.loadRevision)
         ? {
@@ -184,8 +185,26 @@ export function workspaceReducer(
           conversationId: action.conversationId,
           messages: [...state.messages, action.message],
           exchanges: [...state.exchanges, { question: action.question, message: action.message }],
+          streaming: null,
           errorMessage: null,
         }
+        : state;
+    case 'conversation/stream-started':
+      return isCurrentLoad(state, action.paperId, action.loadRevision)
+        ? {
+          ...state,
+          streaming: { question: action.question, text: '' },
+          errorMessage: null,
+        }
+        : state;
+    case 'conversation/stream-delta':
+      return isCurrentLoad(state, action.paperId, action.loadRevision)
+        && state.streaming !== null
+        ? { ...state, streaming: { ...state.streaming, text: state.streaming.text + action.text } }
+        : state;
+    case 'conversation/stream-failed':
+      return isCurrentLoad(state, action.paperId, action.loadRevision)
+        ? { ...state, streaming: null }
         : state;
     case 'notes/created':
       return isCurrentLoad(state, action.paperId, action.loadRevision)

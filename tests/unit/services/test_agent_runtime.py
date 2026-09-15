@@ -19,8 +19,6 @@ from paper_agent.domain import (
     Conversation,
     ConversationMessage,
     DocumentElement,
-    GraphNode,
-    GraphStage,
     Page,
     ProcessingStatus,
     Note,
@@ -37,6 +35,7 @@ from paper_agent.services.agent_runtime import (
     AgentRuntimePrerequisiteError,
     AgentRuntimeResponseError,
     AgentRuntimeUnavailableError,
+    AgentStreamEvent,
     AgentTurn,
     PaperAgentRuntime,
 )
@@ -57,16 +56,25 @@ class PreparedPaper:
     element_id: str
 
 
+_INSUFFICIENT_MARKDOWN = "[[status:insufficient_evidence]]\n\nraw model refusal"
+
+
 class FakeAgentClient:
     def __init__(
         self,
         *,
         turns: tuple[VllmToolTurn | Exception, ...] = (),
-        final_payload: dict[str, object] | Exception | None = None,
+        final_answer: str = _INSUFFICIENT_MARKDOWN,
+        stream_chunks: tuple[str, ...] | None = None,
+        final_error: Exception | None = None,
+        stream_error_at: int | None = None,
         on_tool_turn: Callable[[], None] | None = None,
     ) -> None:
         self.remaining_turns = list(turns)
-        self.final_payload = final_payload or _insufficient_payload()
+        self.final_answer = final_answer
+        self.stream_chunks = None if stream_chunks is None else list(stream_chunks)
+        self.final_error = final_error
+        self.stream_error_at = stream_error_at
         self.on_tool_turn = on_tool_turn
         self.tool_requests: list[dict[str, object]] = []
         self.final_requests: list[dict[str, object]] = []
@@ -102,23 +110,23 @@ class FakeAgentClient:
             raise turn
         return turn
 
-    def generate_json_messages(
-        self,
-        *,
-        messages: list[dict[str, object]],
-        schema_name: str,
-        schema: dict[str, object],
-    ) -> dict[str, object]:
-        self.final_requests.append(
-            {
-                "messages": deepcopy(messages),
-                "schema_name": schema_name,
-                "schema": deepcopy(schema),
-            }
+    def complete_markdown_messages(self, *, messages: list[dict[str, object]]) -> str:
+        self.final_requests.append({"messages": deepcopy(messages)})
+        if self.final_error is not None:
+            raise self.final_error
+        return self.final_answer
+
+    def stream_final_answer(self, *, messages: list[dict[str, object]]):
+        self.final_requests.append({"messages": deepcopy(messages)})
+        if self.final_error is not None:
+            raise self.final_error
+        chunks = (
+            [self.final_answer] if self.stream_chunks is None else self.stream_chunks
         )
-        if isinstance(self.final_payload, Exception):
-            raise self.final_payload
-        return deepcopy(self.final_payload)
+        for index, chunk in enumerate(chunks):
+            if self.stream_error_at == index:
+                raise VllmToolCallingError("raw-stream-secret")
+            yield chunk
 
     def validate_tool_calling(self) -> None:
         self.health_calls += 1
@@ -149,11 +157,11 @@ class FailingOnceGuard(CitationGuard):
     def __init__(self) -> None:
         self.remaining_failures = 1
 
-    def parse_model_answer(self, *args: object, **kwargs: object):
+    def parse_markdown_answer(self, *args: object, **kwargs: object):
         if self.remaining_failures:
             self.remaining_failures -= 1
             raise RuntimeError("raw-guard-secret")
-        return super().parse_model_answer(*args, **kwargs)
+        return super().parse_markdown_answer(*args, **kwargs)
 
 
 def _paper_with_stage1_document(
@@ -213,6 +221,23 @@ class RuntimeHarness:
             request_id=str(uuid4()),
         )
 
+    def stream_ask(
+        self,
+        *,
+        paper_id: str,
+        question: AgentQuestion,
+        request_id: str | None = None,
+    ) -> list[AgentStreamEvent]:
+        return list(
+            self.runtime.stream_ask(
+                paper_id=paper_id,
+                question=question,
+                client=self.client,
+                model_snapshot=_model_snapshot(),
+                request_id=request_id or str(uuid4()),
+            )
+        )
+
     def validate_tool_calling(self) -> None:
         self.runtime.validate_tool_calling(client=self.client)
 
@@ -258,27 +283,15 @@ def _tool_turn(
     )
 
 
-def _grounded_payload(
+def _grounded_markdown(
     *,
     citations: list[str],
     paper_answer: str = "The paper uses a router.",
     background: str | None = None,
-) -> dict[str, object]:
-    return {
-        "status": "grounded",
-        "paper_answer": paper_answer,
-        "citation_element_ids": citations,
-        "background_explanation": background,
-    }
-
-
-def _insufficient_payload() -> dict[str, object]:
-    return {
-        "status": "insufficient_evidence",
-        "paper_answer": "raw model refusal",
-        "citation_element_ids": [],
-        "background_explanation": None,
-    }
+) -> str:
+    markers = "".join(f" [[{element_id}]]" for element_id in citations)
+    answer = f"{paper_answer}{markers}"
+    return answer if background is None else f"{answer}\n\n---\n\n{background}"
 
 
 def _chat_row_counts(repository: PaperRepository) -> tuple[int, int, int]:
@@ -318,7 +331,7 @@ def test_runtime_persists_user_before_model_then_only_the_final_answer(repositor
             ),
             VllmToolTurn(content="raw unguarded draft", tool_calls=()),
         ),
-        final_payload=_grounded_payload(citations=[paper.element_id]),
+        final_answer=_grounded_markdown(citations=[paper.element_id]),
         on_tool_turn=lambda: observed_during_model.append(
             _all_durable_rows(repository)
         ),
@@ -337,14 +350,16 @@ def test_runtime_persists_user_before_model_then_only_the_final_answer(repositor
         [("user", "How does routing work?")],
     ]
     assert turn.answer.status == "grounded"
-    assert turn.assistant_message.content == "The paper uses a router."
+    assert turn.assistant_message.content == (
+        f"The paper uses a router. [[{paper.element_id}]]"
+    )
     assert turn.assistant_message.citation_element_ids == (paper.element_id,)
     assert repository.get_conversation_messages(paper.id, turn.conversation.id) == (
         turn.user_message,
         turn.assistant_message,
     )
     assert client.tool_choices == ["auto", "auto"]
-    assert client.final_requests[0]["schema"] == CitationGuard().output_schema()
+    assert set(client.final_requests[0]) == {"messages"}
     assert _chat_row_counts(repository)[2] == before_processing_rows
     assert "raw tool-planning prose" not in repr(
         repository.get_conversation_messages(paper.id, turn.conversation.id)
@@ -587,12 +602,66 @@ def test_runtime_retries_after_unexpected_guard_failure_without_leaking_or_dupli
 
 def test_chinese_overview_reads_source_before_generating_answer(repository):
     paper = _paper_with_stage1_document(repository)
-    client = FakeAgentClient(final_payload=_grounded_payload(citations=[paper.element_id]))
+    client = FakeAgentClient(final_answer=_grounded_markdown(citations=[paper.element_id]))
     turn = _runtime(repository, client).ask(paper_id=paper.id,
         question=AgentQuestion(content='这篇论文讲了什么'))
     assert turn.answer.status == 'grounded'
     messages = client.final_requests[0]['messages']
-    assert any(m['role'] == 'tool' and paper.element_id in m['content'] for m in messages)
+    assert any(
+        message['role'] == 'system' and paper.element_id in message['content']
+        for message in messages
+    )
+    # Pre-read excerpts must not be replayed as a tool turn the model never made.
+    assert not any(message['role'] == 'tool' for message in messages)
+    assert not any(message.get('tool_calls') for message in messages)
+
+
+def test_tool_turn_replays_the_providers_reasoning_content(repository):
+    """Thinking-mode providers reject a replayed tool turn without its reasoning."""
+    paper = _paper_with_stage1_document(repository)
+    client = FakeAgentClient(
+        turns=(
+            VllmToolTurn(
+                content=None,
+                tool_calls=(
+                    _tool_call("search_paper", {"query": "router", "limit": 5}),
+                ),
+                reasoning_content="I should search the paper first.",
+            ),
+            VllmToolTurn(content=None, tool_calls=()),
+        ),
+        final_answer=_grounded_markdown(citations=[paper.element_id]),
+    )
+
+    _runtime(repository, client).ask(
+        paper_id=paper.id,
+        question=AgentQuestion(content="Explain it."),
+    )
+
+    replayed = client.final_requests[0]["messages"][2]
+    assert replayed["role"] == "assistant"
+    assert replayed["reasoning_content"] == "I should search the paper first."
+
+
+def test_tool_turn_omits_reasoning_content_when_the_provider_sends_none(repository):
+    """Providers without thinking mode must not receive an invented field."""
+    paper = _paper_with_stage1_document(repository)
+    client = FakeAgentClient(
+        turns=(
+            _tool_turn("search_paper", {"query": "router", "limit": 5}),
+            VllmToolTurn(content=None, tool_calls=()),
+        ),
+        final_answer=_grounded_markdown(citations=[paper.element_id]),
+    )
+
+    _runtime(repository, client).ask(
+        paper_id=paper.id,
+        question=AgentQuestion(content="Explain it."),
+    )
+
+    replayed = client.final_requests[0]["messages"][2]
+    assert replayed["role"] == "assistant"
+    assert "reasoning_content" not in replayed
 
 
 def test_runtime_sends_openai_tool_result_messages_with_returned_evidence_ids(repository):
@@ -603,7 +672,7 @@ def test_runtime_sends_openai_tool_result_messages_with_returned_evidence_ids(re
             _tool_turn("search_paper", {"query": "router", "limit": 5}),
             VllmToolTurn(content=None, tool_calls=()),
         ),
-        final_payload=_grounded_payload(citations=[paper.element_id]),
+        final_answer=_grounded_markdown(citations=[paper.element_id]),
     )
 
     _runtime(repository, client).ask(
@@ -624,17 +693,17 @@ def test_runtime_sends_openai_tool_result_messages_with_returned_evidence_ids(re
     assert result_payload["content"]["elements"][0]["id"] == paper.element_id
 
 
-def test_final_json_request_is_closed_with_a_wrap_up_instruction_after_tools(
+def test_final_answer_request_is_closed_with_a_wrap_up_instruction_after_tools(
     repository,
 ):
-    """Breaks if the final JSON request ends on tool results and tool-trained models keep tool-calling."""
+    """Breaks if the final request ends on tool results and tool-trained models keep tool-calling."""
     paper = _paper_with_stage1_document(repository)
     client = FakeAgentClient(
         turns=(
             _tool_turn("search_paper", {"query": "router", "limit": 5}),
             VllmToolTurn(content=None, tool_calls=()),
         ),
-        final_payload=_grounded_payload(citations=[paper.element_id]),
+        final_answer=_grounded_markdown(citations=[paper.element_id]),
     )
 
     _runtime(repository, client).ask(
@@ -644,7 +713,8 @@ def test_final_json_request_is_closed_with_a_wrap_up_instruction_after_tools(
 
     final_messages = client.final_requests[0]["messages"]
     assert final_messages[-1]["role"] == "system"
-    assert "final JSON answer" in final_messages[-1]["content"]
+    assert "write the final answer now" in final_messages[-1]["content"]
+    assert "Markdown" in final_messages[-1]["content"]
     assert final_messages[-2]["role"] == "tool"
     assert final_messages[-3]["role"] == "assistant"
 
@@ -662,7 +732,7 @@ def test_wrap_up_instruction_follows_budget_exhausted_tool_results(repository):
     )
     client = FakeAgentClient(
         turns=turns,
-        final_payload=_grounded_payload(citations=[paper.element_id]),
+        final_answer=_grounded_markdown(citations=[paper.element_id]),
     )
 
     _runtime(repository, client).ask(
@@ -675,11 +745,11 @@ def test_wrap_up_instruction_follows_budget_exhausted_tool_results(repository):
     assert final_messages[-2]["role"] == "tool"
 
 
-def test_final_json_request_keeps_user_ending_when_no_tool_ran(repository):
+def test_final_answer_request_keeps_user_ending_when_no_tool_ran(repository):
     """The wrap-up instruction must not be appended without preceding tool results."""
     paper = _paper_with_stage1_document(repository)
     client = FakeAgentClient(
-        final_payload=_grounded_payload(citations=[paper.element_id])
+        final_answer=_grounded_markdown(citations=[paper.element_id])
     )
 
     _runtime(repository, client).ask(
@@ -703,7 +773,7 @@ def test_agent_injects_relevant_notes_and_returns_note_references(repository):
             _tool_turn("search_paper", {"query": "router", "limit": 5}),
             VllmToolTurn(content=None, tool_calls=()),
         ),
-        final_payload=_grounded_payload(citations=[paper.element_id]),
+        final_answer=_grounded_markdown(citations=[paper.element_id]),
     )
     runtime = PaperAgentRuntime(
         repository=repository,
@@ -743,7 +813,7 @@ def test_selection_is_wrapped_in_input_and_persisted_as_message_anchor(repositor
             _tool_turn("search_paper", {"query": "router", "limit": 5}),
             VllmToolTurn(content=None, tool_calls=()),
         ),
-        final_payload=_grounded_payload(citations=[paper.element_id]),
+        final_answer=_grounded_markdown(citations=[paper.element_id]),
     )
     runtime = PaperAgentRuntime(
         repository=repository,
@@ -940,8 +1010,8 @@ def test_runtime_builds_model_history_from_only_the_latest_six_durable_messages(
     assert "LIMIT" in history_reads[0].upper()
 
 
-def test_system_prompt_describes_optional_citation_links(repository):
-    """The model is told that citation links are optional presentation data."""
+def test_system_prompt_describes_the_markdown_answer_contract(repository):
+    """The model is told how to mark citations and background context."""
     paper = _paper_with_stage1_document(repository)
     client = FakeAgentClient()
 
@@ -950,11 +1020,12 @@ def test_system_prompt_describes_optional_citation_links(repository):
         question=AgentQuestion(content="Question"),
     )
 
-    system_prompt = client.tool_requests[0]["messages"][0]["content"].casefold()
-    assert "graph data is for navigation only" in system_prompt
-    assert "answer directly and naturally" in system_prompt
-    assert "citation_element_ids are optional links" in system_prompt
-    assert "background_explanation may contain helpful context" in system_prompt
+    system_prompt = client.tool_requests[0]["messages"][0]["content"]
+    assert "answer directly and naturally" in system_prompt.casefold()
+    assert "Answer in Markdown" in system_prompt
+    assert "Cite paper locations inline as [[element_id]]" in system_prompt
+    assert "[[status:insufficient_evidence]]" in system_prompt
+    assert "Do not return JSON" in system_prompt
 
 
 def test_runtime_keeps_background_bearing_answer(repository):
@@ -965,7 +1036,7 @@ def test_runtime_keeps_background_bearing_answer(repository):
             _tool_turn("search_paper", {"query": "router", "limit": 5}),
             VllmToolTurn(content=None, tool_calls=()),
         ),
-        final_payload=_grounded_payload(
+        final_answer=_grounded_markdown(
             citations=[paper.element_id], background="General routing background."
         ),
     )
@@ -976,10 +1047,12 @@ def test_runtime_keeps_background_bearing_answer(repository):
     )
 
     assert turn.answer.status == "grounded"
-    assert turn.assistant_message.content == "The paper uses a router."
+    assert turn.assistant_message.content == (
+        f"The paper uses a router. [[{paper.element_id}]]"
+    )
     durable = repository.get_conversation_messages(paper.id, turn.conversation.id)
     assert durable[-1].background_explanation == "General routing background."
-    assert durable[-1].content == "The paper uses a router."
+    assert durable[-1].content == turn.assistant_message.content
 
 
 def test_runtime_keeps_answer_when_model_reuses_an_existing_paper_citation(repository):
@@ -998,7 +1071,7 @@ def test_runtime_keeps_answer_when_model_reuses_an_existing_paper_citation(repos
         )
     )
     client = FakeAgentClient(
-        final_payload=_grounded_payload(
+        final_answer=_grounded_markdown(
             citations=[paper.element_id], paper_answer="Unsupported reuse."
         )
     )
@@ -1012,46 +1085,10 @@ def test_runtime_keeps_answer_when_model_reuses_an_existing_paper_citation(repos
     )
 
     assert turn.answer.status == "grounded"
-    assert turn.assistant_message.content == "Unsupported reuse."
+    assert turn.assistant_message.content == (
+        f"Unsupported reuse. [[{paper.element_id}]]"
+    )
     assert turn.assistant_message.citation_element_ids == (paper.element_id,)
-
-
-def test_runtime_keeps_answer_when_model_returns_a_graph_id(repository):
-    """Graph IDs are omitted from link rendering without hiding the answer."""
-    paper = _paper_with_stage1_document(repository)
-    repository.replace_graph_stage(
-        paper.id,
-        GraphStage.core,
-        (
-            GraphNode(
-                id="router-node",
-                node_type="method",
-                name="Router",
-                summary="Routes tokens.",
-                stage=GraphStage.core,
-                evidence_element_ids=(paper.element_id,),
-            ),
-        ),
-        (),
-    )
-    client = FakeAgentClient(
-        turns=(
-            _tool_turn("search_graph", {"query": "router", "limit": 5}),
-            VllmToolTurn(content=None, tool_calls=()),
-        ),
-        final_payload=_grounded_payload(
-            citations=["router-node"], paper_answer="Node IDs are citations."
-        ),
-    )
-
-    turn = _runtime(repository, client).ask(
-        paper_id=paper.id,
-        question=AgentQuestion(content="What is Router?"),
-    )
-
-    assert turn.answer.status == "grounded"
-    assert turn.assistant_message.citation_element_ids == ()
-    assert turn.assistant_message.content == "Node IDs are citations."
 
 
 def test_runtime_stops_after_six_single_tool_turns(repository):
@@ -1067,7 +1104,7 @@ def test_runtime_stops_after_six_single_tool_turns(repository):
     )
     client = FakeAgentClient(
         turns=turns,
-        final_payload=_grounded_payload(citations=[paper.element_id]),
+        final_answer=_grounded_markdown(citations=[paper.element_id]),
     )
 
     turn = _runtime(repository, client).ask(
@@ -1113,16 +1150,58 @@ def test_runtime_rejects_duplicate_tool_ids_without_assistant_write(
     assert _all_durable_rows(repository) == [("user", "Question")]
 
 
-def test_runtime_rejects_batches_over_the_total_call_budget(repository):
+def test_runtime_reports_a_rejected_tool_argument_to_the_model(repository):
+    """A model argument the tools reject must come back as feedback, not a 502."""
+    paper = _paper_with_stage1_document(repository)
+    client = FakeAgentClient(
+        turns=(
+            _tool_turn("read_section", {"section_id": "missing-section"}),
+            VllmToolTurn(content=None, tool_calls=()),
+        ),
+        final_answer=_grounded_markdown(citations=[paper.element_id]),
+    )
+
+    turn = _runtime(repository, client).ask(
+        paper_id=paper.id,
+        question=AgentQuestion(content="Explain the section."),
+    )
+
+    assert turn.answer.status == "grounded"
+    assert len(client.tool_requests) == 2
+    followed_up = client.tool_requests[1]["messages"]
+    rejected = followed_up[-1]
+    assert rejected["role"] == "tool"
+    assert rejected["tool_call_id"] == "call-1"
+    payload = json.loads(rejected["content"])
+    assert payload["content"] == {"error": "requested section is unavailable"}
+    assert payload["evidence_element_ids"] == []
+    assert _all_durable_rows(repository) == [
+        ("user", "Explain the section."),
+        ("assistant", turn.assistant_message.content),
+    ]
+
+
+def test_runtime_caps_a_wide_tool_batch_and_still_answers(repository):
+    """A provider that batches more calls than the budget must not fail the turn."""
     paper = _paper_with_stage1_document(repository)
     client = FakeAgentClient(turns=(VllmToolTurn(content=None, tool_calls=tuple(
         _tool_call('search_paper', {'query':'router','limit':5}, call_id=str(i))
         for i in range(7)
-    )),))
-    with pytest.raises(AgentRuntimeResponseError):
-        _runtime(repository, client).ask(paper_id=paper.id,
-            question=AgentQuestion(content='Question'))
-    assert _all_durable_rows(repository) == [('user','Question')]
+    )),), final_answer=_grounded_markdown(citations=[paper.element_id]))
+
+    turn = _runtime(repository, client).ask(paper_id=paper.id,
+        question=AgentQuestion(content='Question'))
+
+    assert turn.answer.status == 'grounded'
+    assert len(client.tool_requests) == 1
+    messages = client.final_requests[0]['messages']
+    executed = [
+        call['id'] for message in messages if message.get('tool_calls')
+        for call in message['tool_calls']
+    ]
+    assert executed == [str(index) for index in range(6)]
+    assert [message['tool_call_id'] for message in messages if message['role'] == 'tool'] == executed
+    assert messages[-1]['role'] == 'system'
 
 
 def test_runtime_executes_batched_read_tools_sequentially_with_matching_results(repository):
@@ -1130,7 +1209,7 @@ def test_runtime_executes_batched_read_tools_sequentially_with_matching_results(
     client = FakeAgentClient(turns=(VllmToolTurn(content=None, tool_calls=(
         _tool_call('search_paper', {'query':'router','limit':5}, call_id='one'),
         _tool_call('search_paper', {'query':'router','limit':5}, call_id='two'),
-    )),), final_payload=_grounded_payload(citations=[paper.element_id]))
+    )),), final_answer=_grounded_markdown(citations=[paper.element_id]))
     turn = _runtime(repository, client).ask(paper_id=paper.id,
         question=AgentQuestion(content='Explain'))
     assert turn.answer.status == 'grounded'
@@ -1145,11 +1224,7 @@ def test_runtime_rejects_malformed_final_contract_without_persisting_model_conte
 ):
     """Only malformed transport structure remains a service error."""
     paper = _paper_with_stage1_document(repository)
-    malformed = _grounded_payload(
-        citations=[paper.element_id], paper_answer="raw malformed claim"
-    )
-    malformed["unexpected"] = "raw final secret"
-    client = FakeAgentClient(final_payload=malformed)
+    client = FakeAgentClient(final_answer="   \n\n   ")
 
     with pytest.raises(AgentRuntimeResponseError):
         _runtime(repository, client).ask(
@@ -1225,7 +1300,7 @@ def test_runtime_sanitizes_final_transport_failure_after_user_persistence(reposi
     """Breaks if a vLLM final-JSON failure leaks content or writes an assistant reply."""
     paper = _paper_with_stage1_document(repository)
     client = FakeAgentClient(
-        final_payload=VllmToolCallingError("raw-provider-final-secret")
+        final_answer=VllmToolCallingError("raw-provider-final-secret")
     )
 
     with pytest.raises(AgentRuntimeResponseError) as error:
@@ -1265,3 +1340,180 @@ def test_validate_tool_calling_sanitizes_failure_and_delegates_success(repositor
     healthy = FakeAgentClient()
     _runtime(repository, healthy).validate_tool_calling()
     assert healthy.health_calls == 1
+
+
+def test_stream_ask_yields_deltas_then_persists_exactly_one_answer(repository):
+    """Breaks if a streamed answer is stored twice or loses its citation links."""
+    paper = _paper_with_stage1_document(repository)
+    answer = _grounded_markdown(citations=[paper.element_id])
+    client = FakeAgentClient(
+        turns=(
+            _tool_turn("search_paper", {"query": "router", "limit": 5}),
+            VllmToolTurn(content=None, tool_calls=()),
+        ),
+        stream_chunks=(answer[:12], answer[12:]),
+    )
+
+    events = _runtime(repository, client).stream_ask(
+        paper_id=paper.id,
+        question=AgentQuestion(content="Explain routing."),
+    )
+
+    assert [event.event for event in events] == [
+        "started",
+        "delta",
+        "delta",
+        "completed",
+    ]
+    assert "".join(event.text for event in events if event.event == "delta") == answer
+    turn = events[-1].turn
+    assert turn is not None
+    assert turn.assistant_message.citation_element_ids == (paper.element_id,)
+    assert turn.assistant_message.content == answer
+    assert repository.get_conversation_messages(paper.id, turn.conversation.id) == (
+        turn.user_message,
+        turn.assistant_message,
+    )
+    assert len(client.final_requests) == 1
+
+
+def test_stream_ask_persists_nothing_when_the_stream_breaks_mid_answer(repository):
+    """Breaks if an interrupted stream leaves a half-written assistant message."""
+    paper = _paper_with_stage1_document(repository)
+    client = FakeAgentClient(
+        stream_chunks=("partial answer", "never-sent"),
+        stream_error_at=1,
+    )
+    request_id = "30000000-0000-0000-0000-000000000001"
+
+    events = _runtime(repository, client).stream_ask(
+        paper_id=paper.id,
+        question=AgentQuestion(content="Explain routing."),
+        request_id=request_id,
+    )
+
+    assert [event.event for event in events] == ["started", "delta", "error"]
+    assert events[-1].code == "agent_failed"
+    assert _all_durable_rows(repository) == [("user", "Explain routing.")]
+
+    recovered = _runtime(repository, FakeAgentClient()).stream_ask(
+        paper_id=paper.id,
+        question=AgentQuestion(content="Explain routing."),
+        request_id=request_id,
+    )
+
+    assert recovered[-1].event == "completed"
+    assert len(_all_durable_rows(repository)) == 2
+
+
+def test_stream_ask_does_not_expose_raw_provider_text_on_failure(repository):
+    """Breaks if a provider message reaches the client through a stream error."""
+    paper = _paper_with_stage1_document(repository)
+    client = FakeAgentClient(final_error=VllmToolCallingError("raw-provider-secret"))
+
+    events = _runtime(repository, client).stream_ask(
+        paper_id=paper.id,
+        question=AgentQuestion(content="Explain routing."),
+    )
+
+    assert [event.event for event in events] == ["started", "error"]
+    assert events[-1].code == "agent_failed"
+    assert "raw-provider-secret" not in repr(events)
+    assert _all_durable_rows(repository) == [("user", "Explain routing.")]
+
+
+def test_stream_ask_replays_a_completed_request_without_calling_the_model(repository):
+    """Breaks if a duplicate stream re-runs the model instead of replaying the turn."""
+    paper = _paper_with_stage1_document(repository)
+    request_id = "30000000-0000-0000-0000-000000000002"
+    first = _runtime(repository, FakeAgentClient()).ask(
+        paper_id=paper.id,
+        question=AgentQuestion(content="Explain routing."),
+    )
+    replay_client = FakeAgentClient(
+        turns=(AssertionError("duplicate model call"),),
+        final_error=AssertionError("duplicate final answer call"),
+    )
+
+    events = list(
+        _runtime_core(repository).stream_ask(
+            paper_id=paper.id,
+            question=AgentQuestion(content="Conflicting duplicate"),
+            client=replay_client,
+            model_snapshot=_model_snapshot(
+                profile_id="10000000-0000-0000-0000-000000000009"
+            ),
+            request_id=first.user_message.request_id,
+        )
+    )
+
+    assert [event.event for event in events] == ["started", "completed"]
+    assert events[-1].turn is not None
+    assert events[-1].turn.assistant_message == first.assistant_message
+    assert replay_client.tool_requests == []
+    assert replay_client.final_requests == []
+    assert len(repository.get_conversation_messages(paper.id, first.conversation.id)) == 2
+
+
+def test_stream_ask_reports_prerequisites_as_a_stable_error_code(repository):
+    """Breaks if an unknown paper is reported as a provider failure."""
+    before = _chat_row_counts(repository)
+
+    events = _runtime(repository, FakeAgentClient()).stream_ask(
+        paper_id="missing-paper",
+        question=AgentQuestion(content="Question"),
+    )
+
+    assert [event.event for event in events] == ["started", "error"]
+    assert events[-1].code == "agent_not_ready"
+    assert _chat_row_counts(repository) == before
+
+
+def test_stream_ask_reports_a_missing_client_without_creating_chat_rows(repository):
+    """Breaks if an unconfigured model leaves conversation state behind."""
+    paper = _paper_with_stage1_document(repository)
+    before = _chat_row_counts(repository)
+
+    events = _runtime(repository, None).stream_ask(
+        paper_id=paper.id,
+        question=AgentQuestion(content="Question"),
+    )
+
+    assert [event.event for event in events] == ["started", "error"]
+    assert events[-1].code == "model_unavailable"
+    assert _chat_row_counts(repository) == before
+
+
+def test_stream_ask_stops_an_over_long_answer_without_persisting_it(repository):
+    """Breaks if a runaway generation is streamed and stored without a bound."""
+    paper = _paper_with_stage1_document(repository)
+    client = FakeAgentClient(stream_chunks=("x" * 64_001,))
+
+    events = _runtime(repository, client).stream_ask(
+        paper_id=paper.id,
+        question=AgentQuestion(content="Question"),
+    )
+
+    assert [event.event for event in events] == ["started", "error"]
+    assert events[-1].code == "answer_too_long"
+    assert _all_durable_rows(repository) == [("user", "Question")]
+
+
+def test_stream_ask_keeps_the_directive_status_and_background_split(repository):
+    """Breaks if streamed answers bypass the Markdown answer contract."""
+    paper = _paper_with_stage1_document(repository)
+    answer = (
+        "[[status:insufficient_evidence]]\n\n"
+        "论文没有给出该结论。\n\n---\n\n上下文说明。"
+    )
+    events = _runtime(repository, FakeAgentClient(final_answer=answer)).stream_ask(
+        paper_id=paper.id,
+        question=AgentQuestion(content="Question"),
+    )
+
+    turn = events[-1].turn
+    assert turn is not None
+    assert turn.answer.status == "insufficient_evidence"
+    assert turn.answer.background_explanation == "上下文说明。"
+    assert turn.assistant_message.content == "论文没有给出该结论。"
+    assert turn.assistant_message.background_explanation == "上下文说明。"

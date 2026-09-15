@@ -2,13 +2,12 @@ import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 import { ApiError, paperApi } from '../api/client';
-import { streamSelectionAssist } from '../api/sse';
-import type { AgentMessage, Highlight, Note, PaperDocument, PaperGraph, SelectionAssistEvent, TextAnchorDraft } from '../api/types';
+import { streamAgentMessage, streamSelectionAssist } from '../api/sse';
+import type { AgentMessage, Highlight, Note, PaperDocument, SelectionAssistEvent, TextAnchorDraft } from '../api/types';
 import { usePaperWorkspace } from './usePaperWorkspace';
 
-vi.mock('../api/sse', () => ({ streamSelectionAssist: vi.fn() }));
+vi.mock('../api/sse', () => ({ streamSelectionAssist: vi.fn(), streamAgentMessage: vi.fn() }));
 
-const emptyGraph: PaperGraph = { nodes: [], edges: [] };
 const selectionDraft: TextAnchorDraft = {
   quote: '选中的原文', page_number: 1, rects: [{ order: 0, x0: 0.1, y0: 0.2, x1: 0.5, y1: 0.3 }],
 };
@@ -36,7 +35,6 @@ function deferred<T>() {
 beforeEach(() => {
   vi.restoreAllMocks();
   vi.spyOn(paperApi, 'getDocument').mockImplementation(async (paperId) => documentFor(paperId));
-  vi.spyOn(paperApi, 'getGraph').mockResolvedValue(emptyGraph);
   vi.spyOn(paperApi, 'getNotes').mockResolvedValue([]);
   vi.spyOn(paperApi, 'getAnnotations').mockResolvedValue({ highlights: [], notes: [] });
 });
@@ -101,7 +99,16 @@ it('reports an unfinished translate stream as a translate-specific failure', asy
 it('uses a fresh current-model payload for Agent calls without resetting the conversation', async () => {
   const first: AgentMessage = { conversation_id: 'conversation-a', message_id: 'message-a', status: 'grounded', paper_answer: '回答一', background_explanation: null, citations: [] };
   const second: AgentMessage = { ...first, message_id: 'message-b', paper_answer: '回答二' };
-  const agent = vi.spyOn(paperApi, 'askAgent').mockResolvedValueOnce(first).mockResolvedValueOnce(second);
+  const agent = vi.mocked(streamAgentMessage)
+    .mockImplementationOnce(async function* () {
+      yield { event: 'started', data: { request_id: 'agent-request-a' } };
+      yield { event: 'delta', data: { text: '回答一' } };
+      yield { event: 'completed', data: { message: first } };
+    })
+    .mockImplementationOnce(async function* () {
+      yield { event: 'started', data: { request_id: 'agent-request-b' } };
+      yield { event: 'completed', data: { message: second } };
+    });
   vi.stubGlobal('crypto', { randomUUID: vi.fn().mockReturnValueOnce('agent-request-a').mockReturnValueOnce('agent-request-b') });
   const { result } = renderHook(() => usePaperWorkspace('paper-a'));
   await waitFor(() => expect(result.current.document).not.toBeNull());
@@ -109,14 +116,62 @@ it('uses a fresh current-model payload for Agent calls without resetting the con
   await act(async () => { await result.current.askAgent('第一个问题', 'qwen'); });
   await act(async () => { await result.current.askAgent('第二个问题', 'deepseek', { quote: '选择原文', page_number: 2, rects: [] }); });
 
-  expect(agent).toHaveBeenNthCalledWith(1, 'paper-a', { content: '第一个问题', conversation_id: undefined, model_profile_id: 'qwen', request_id: 'agent-request-a' });
-  expect(agent).toHaveBeenNthCalledWith(2, 'paper-a', { content: '第二个问题', conversation_id: 'conversation-a', model_profile_id: 'deepseek', request_id: 'agent-request-b', selection: { quote: '选择原文', page_number: 2, rects: [] } });
+  expect(agent).toHaveBeenNthCalledWith(1, 'paper-a', { content: '第一个问题', conversation_id: undefined, model_profile_id: 'qwen', request_id: 'agent-request-a' }, expect.any(AbortSignal));
+  expect(agent).toHaveBeenNthCalledWith(2, 'paper-a', { content: '第二个问题', conversation_id: 'conversation-a', model_profile_id: 'deepseek', request_id: 'agent-request-b', selection: { quote: '选择原文', page_number: 2, rects: [] } }, expect.any(AbortSignal));
   expect(result.current.conversationId).toBe('conversation-a');
   expect(result.current.messages.map(({ message_id }) => message_id)).toEqual(['message-a', 'message-b']);
   expect(result.current.exchanges).toEqual([
     { question: '第一个问题', message: first },
     { question: '第二个问题', message: second },
   ]);
+  expect(result.current.streaming).toBeNull();
+});
+
+it('exposes streamed answer text until the turn is completed', async () => {
+  const answer: AgentMessage = { conversation_id: 'conversation-a', message_id: 'message-a', status: 'grounded', paper_answer: '完整回答', background_explanation: null, citations: [] };
+  let release: (() => void) | null = null;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  vi.mocked(streamAgentMessage).mockImplementationOnce(async function* () {
+    yield { event: 'started', data: { request_id: 'agent-request-a' } };
+    yield { event: 'delta', data: { text: '完整' } };
+    await gate;
+    yield { event: 'delta', data: { text: '回答' } };
+    yield { event: 'completed', data: { message: answer } };
+  });
+  const { result } = renderHook(() => usePaperWorkspace('paper-a'));
+  await waitFor(() => expect(result.current.document).not.toBeNull());
+
+  let pending: Promise<AgentMessage | null> = Promise.resolve(null);
+  await act(async () => {
+    pending = result.current.askAgent('问题', 'qwen');
+  });
+
+  expect(result.current.streaming).toEqual({ question: '问题', text: '完整' });
+  expect(result.current.exchanges).toEqual([]);
+
+  await act(async () => {
+    release?.();
+    await pending;
+  });
+
+  expect(result.current.streaming).toBeNull();
+  expect(result.current.exchanges).toEqual([{ question: '问题', message: answer }]);
+});
+
+it('clears the streamed answer and reports a local failure when the stream errors', async () => {
+  vi.mocked(streamAgentMessage).mockImplementationOnce(async function* () {
+    yield { event: 'started', data: { request_id: 'agent-request-a' } };
+    yield { event: 'delta', data: { text: '半截回答' } };
+    yield { event: 'error', data: { code: 'agent_failed', detail: '模型未能完成有效回答。' } };
+  });
+  const { result } = renderHook(() => usePaperWorkspace('paper-a'));
+  await waitFor(() => expect(result.current.document).not.toBeNull());
+
+  await act(async () => { await result.current.askAgent('问题', 'qwen'); });
+
+  expect(result.current.streaming).toBeNull();
+  expect(result.current.exchanges).toEqual([]);
+  expect(result.current.errorMessage).toBe('暂时无法获取助手回答。');
 });
 
 it('loads highlights independently from the existing notes request', async () => {
@@ -284,7 +339,7 @@ it('updates a highlight color and reports a failed color change safely', async (
   expect(result.current.errorMessage).toBe('修改高亮颜色失败：请稍后重试。');
 });
 
-it('mounts required document and graph state when notes fail independently', async () => {
+it('mounts required document state when notes fail independently', async () => {
   vi.mocked(paperApi.getNotes).mockRejectedValue(
     new ApiError(503, 'Notes are temporarily unavailable.'),
   );
@@ -292,19 +347,17 @@ it('mounts required document and graph state when notes fail independently', asy
   const { result } = renderHook(() => usePaperWorkspace('paper-a'));
 
   await waitFor(() => expect(result.current.document).not.toBeNull());
-  expect(result.current.graph).toEqual(emptyGraph);
   expect(result.current.errorMessage).toBeNull();
   expect(result.current.notesErrorMessage).toBe('论文笔记暂时无法加载。');
 });
 
-it('mounts required document and graph state while notes remain unresolved', async () => {
+it('mounts required document state while notes remain unresolved', async () => {
   const pendingNotes = deferred<Note[]>();
   vi.mocked(paperApi.getNotes).mockReturnValue(pendingNotes.promise);
 
   const { result } = renderHook(() => usePaperWorkspace('paper-a'));
 
   await waitFor(() => expect(result.current.document).not.toBeNull());
-  expect(result.current.graph).toEqual(emptyGraph);
   expect(result.current.notes).toEqual([]);
 });
 
@@ -364,9 +417,21 @@ it('ignores a stale notes response after switching papers', async () => {
 });
 
 it('ignores old Agent and note completions after retrying the same paper', async () => {
-  const oldAgentMessage = deferred<AgentMessage>();
+  const staleMessage: AgentMessage = {
+    conversation_id: 'stale-conversation',
+    message_id: 'stale-message',
+    status: 'grounded',
+    paper_answer: 'Old answer.',
+    background_explanation: null,
+    citations: [],
+  };
+  const gate = deferred<void>();
   const oldNote = deferred<Note>();
-  vi.spyOn(paperApi, 'askAgent').mockReturnValue(oldAgentMessage.promise);
+  vi.mocked(streamAgentMessage).mockImplementationOnce(async function* () {
+    yield { event: 'started', data: { request_id: 'agent-request-a' } };
+    await gate.promise;
+    yield { event: 'completed', data: { message: staleMessage } };
+  });
   vi.spyOn(paperApi, 'createNote').mockReturnValue(oldNote.promise);
 
   const { result, rerender } = renderHook(
@@ -382,20 +447,12 @@ it('ignores old Agent and note completions after retrying the same paper', async
   await waitFor(() => expect(result.current.loadRevision).toBe(1));
   await waitFor(() => expect(result.current.document).not.toBeNull());
 
-  const staleMessage: AgentMessage = {
-    conversation_id: 'stale-conversation',
-    message_id: 'stale-message',
-    status: 'grounded',
-    paper_answer: 'Old answer.',
-    background_explanation: null,
-    citations: [],
-  };
   const staleNote: Note = {
     id: 'stale-note', body: 'Old note.', element_id: null, page_number: null,
   };
 
   await act(async () => {
-    oldAgentMessage.resolve(staleMessage);
+    gate.resolve(undefined);
     oldNote.resolve(staleNote);
     await Promise.all([agentRequest, noteRequest]);
   });
@@ -406,9 +463,13 @@ it('ignores old Agent and note completions after retrying the same paper', async
 });
 
 it('ignores an old mutation failure after retrying the same paper', async () => {
-  const oldAgentMessage = deferred<AgentMessage>();
   const apiError = new ApiError(503, 'Old agent failure.');
-  vi.spyOn(paperApi, 'askAgent').mockReturnValue(oldAgentMessage.promise);
+  const gate = deferred<void>();
+  vi.mocked(streamAgentMessage).mockImplementationOnce(async function* () {
+    yield { event: 'started', data: { request_id: 'agent-request-a' } };
+    await gate.promise;
+    throw apiError;
+  });
 
   const { result, rerender } = renderHook(
     ({ revision }) => usePaperWorkspace('paper-a', revision),
@@ -421,7 +482,7 @@ it('ignores an old mutation failure after retrying the same paper', async () => 
   rerender({ revision: 1 });
   await waitFor(() => expect(result.current.loadRevision).toBe(1));
   await act(async () => {
-    oldAgentMessage.reject(apiError);
+    gate.resolve(undefined);
     await settledOldRequest;
   });
 

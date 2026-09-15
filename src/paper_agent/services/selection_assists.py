@@ -3,7 +3,6 @@
 from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import StrEnum
-import json
 from typing import Literal
 
 from paper_agent.annotation_storage import PaperAnnotationRepository
@@ -12,6 +11,7 @@ from paper_agent.domain import Note
 from paper_agent.model_profiles import ModelSnapshot
 from paper_agent.models.vllm import VllmChatClient, VllmResponseError
 from paper_agent.schemas import NoteResponse
+from paper_agent.services.sse import sse_frame
 
 
 class SelectionAssistAction(StrEnum):
@@ -192,7 +192,4 @@ class SelectionAssistService:
 
 
 def encode_sse(event: SelectionAssistEvent) -> bytes:
-    payload = json.dumps(
-        event.payload, ensure_ascii=False, separators=(",", ":")
-    )
-    return f"event: {event.event}\ndata: {payload}\n\n".encode("utf-8")
+    return sse_frame(event.event, event.payload)

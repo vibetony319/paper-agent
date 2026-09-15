@@ -45,7 +45,6 @@ function readyWorkspace({
       elements: [locatedElement],
       notes: [],
     },
-    graph: { nodes: [], edges: [] },
     notes: [{ id: 'note-a', body: 'Old note.', element_id: 'element-a', page_number: 2 }],
     activeSource: {
       id: 'element-a',
@@ -53,7 +52,6 @@ function readyWorkspace({
       pageNumber: 2,
       bbox: { x0: 0.1, y0: 0.2, x1: 0.8, y1: 0.3 },
     },
-    graphFocusNodeId: 'node-a',
     conversationId,
     messages: [{
       conversation_id: conversationId,
@@ -79,10 +77,8 @@ it('clears paper-specific workspace data when a different paper opens', () => {
   expect(next).toMatchObject({
     activePaperId: 'paper-b',
     document: null,
-    graph: null,
     notes: [],
     activeSource: null,
-    graphFocusNodeId: null,
     conversationId: null,
     messages: [],
     exchanges: [],
@@ -164,22 +160,6 @@ it('ignores an Agent response that belongs to a paper that is no longer open', (
 });
 
 it.each([
-  ['graph build', {
-    type: 'graph/loaded',
-    paperId: 'paper-a',
-    loadRevision: 1,
-    graph: {
-      nodes: [{
-        id: 'stale-node',
-        node_type: 'claim',
-        name: 'Stale graph',
-        summary: 'Built before retry.',
-        stage: 'stage2',
-        evidence_element_ids: [],
-      }],
-      edges: [],
-    },
-  }],
   ['Agent response', {
     type: 'conversation/set',
     paperId: 'paper-a',
@@ -243,10 +223,8 @@ it('resets paper-specific state when the same paper opens with a new load revisi
     activePaperId: 'paper-a',
     loadRevision: 1,
     document: null,
-    graph: null,
     notes: [],
     activeSource: null,
-    graphFocusNodeId: null,
     conversationId: null,
     messages: [],
     exchanges: [],
@@ -269,12 +247,10 @@ it('keeps a notes-only error when the required workspace finishes loading', () =
     paperId: 'paper-a',
     loadRevision: 2,
     document: ready.document!,
-    graph: ready.graph!,
   });
 
   expect(next).toMatchObject({
     document: ready.document,
-    graph: ready.graph,
     errorMessage: null,
     notesErrorMessage: 'Notes are temporarily unavailable.',
   });
@@ -323,7 +299,7 @@ it('clears the notes error when notes load for the current generation', () => {
 it('clears a notes-only error when a note is created', () => {
   const state: WorkspaceState = {
     ...readyWorkspace({ paperId: 'paper-a', conversationId: 'chat-a' }),
-    errorMessage: 'Graph service is unavailable.',
+    errorMessage: 'Paper service is unavailable.',
     notesErrorMessage: 'Unable to save this note.',
   };
   const note = { id: 'note-new', body: 'New note.', element_id: null, page_number: null };
@@ -337,7 +313,7 @@ it('clears a notes-only error when a note is created', () => {
 
   expect(next.notes).toContainEqual(note);
   expect(next.notesErrorMessage).toBeNull();
-  expect(next.errorMessage).toBe('Graph service is unavailable.');
+  expect(next.errorMessage).toBe('Paper service is unavailable.');
 });
 
 it('rejects an unlocated element as an active source target', () => {

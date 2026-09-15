@@ -5,7 +5,6 @@ import type {
   Note,
   TextAnchor,
   PaperDocument,
-  PaperGraph,
   TextAnchorDraft,
 } from '../api/types';
 
@@ -20,7 +19,6 @@ export type WorkspaceState = {
   activePaperId: string | null;
   loadRevision: number;
   document: PaperDocument | null;
-  graph: PaperGraph | null;
   notes: Note[];
   highlights: Highlight[];
   anchors: TextAnchor[];
@@ -29,10 +27,10 @@ export type WorkspaceState = {
   anchorsMutationGeneration: number;
   selection: { draft: TextAnchorDraft; toolbarRect: DOMRect } | null;
   activeSource: SourceTarget | null;
-  graphFocusNodeId: string | null;
   conversationId: string | null;
   messages: AgentMessage[];
   exchanges: AgentExchange[];
+  streaming: AgentStream | null;
   errorMessage: string | null;
   notesErrorMessage: string | null;
 };
@@ -40,4 +38,9 @@ export type WorkspaceState = {
 export type AgentExchange = {
   question: string;
   message: AgentMessage;
+};
+
+export type AgentStream = {
+  question: string;
+  text: string;
 };

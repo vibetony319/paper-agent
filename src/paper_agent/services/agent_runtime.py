@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 import json
 from threading import Lock
+from typing import Literal
 
 from paper_agent.domain import (
     AgentMessageRole,
@@ -16,7 +17,8 @@ from paper_agent.annotation_storage import PaperAnnotationRepository
 from paper_agent.annotations import NoteType, TextAnchorDraft
 from paper_agent.models import VllmToolCall, VllmToolCallingClient, VllmToolTurn
 from paper_agent.model_profiles import ModelSnapshot
-from paper_agent.services.agent_tools import PaperToolRegistry, ToolExecution
+from paper_agent.services.agent_tools import AgentToolError, PaperToolRegistry
+from paper_agent.services.answer_format import ANSWER_FORMAT_INSTRUCTIONS
 from paper_agent.services.citation_guard import (
     CitationGuard,
     CitationGuardError,
@@ -27,12 +29,12 @@ from paper_agent.storage import PaperRepository
 
 MAX_TOOL_TURNS = 6
 HISTORY_MESSAGE_LIMIT = 6
-_FINAL_SCHEMA_NAME = "paper_agent_final_answer"
-# Some tool-trained models keep emitting tool-call text when the final JSON
-# request follows tool results directly, which fails the structured parse.
+MAX_ANSWER_CHARS = 64_000
+# Some tool-trained models keep emitting tool-call text when the final answer
+# request follows tool results directly, which fails the answer parse.
 _FINAL_ANSWER_INSTRUCTION = (
-    "Tool calling is complete. Based on the evidence above, respond with the "
-    "final JSON answer now; do not call any more tools."
+    "Tool calling is complete. Based on the evidence above, write the final "
+    "answer now; do not call any more tools. " + ANSWER_FORMAT_INSTRUCTIONS
 )
 _PREREQUISITE_ERROR = "Paper agent prerequisites are not complete."
 _UNAVAILABLE_ERROR = "Reasoning model is not configured."
@@ -82,6 +84,33 @@ class AgentTurn:
     note_references: tuple[NoteMemoryReference, ...] = ()
 
 
+@dataclass(frozen=True)
+class AgentStreamEvent:
+    """One step of a streamed answer.
+
+    Errors carry a stable ``code`` so the transport can decide the user-facing
+    wording instead of leaking provider text.
+    """
+
+    event: Literal["started", "delta", "completed", "error"]
+    text: str = ""
+    turn: AgentTurn | None = None
+    code: str | None = None
+
+
+@dataclass(frozen=True)
+class _PreparedTurn:
+    """A user turn that is persisted and ready for its final answer."""
+
+    conversation: Conversation
+    user_message: ConversationMessage
+    messages: list[dict[str, object]]
+    allowed_evidence_ids: set[str]
+    note_context: NoteMemoryContext
+    model_snapshot: ModelSnapshot
+    request_id: str
+
+
 @dataclass
 class _RequestLockEntry:
     lock: Lock = field(default_factory=Lock)
@@ -117,215 +146,342 @@ class PaperAgentRuntime:
         selection: TextAnchorDraft | None = None,
     ) -> AgentTurn:
         with self._request_lock(paper_id, request_id):
-            existing = self.repository.get_agent_turn_by_request(
-                paper_id, request_id
-            )
-            if existing is not None:
-                return self.turn_from_messages(
-                    paper_id=paper_id,
-                    messages=existing,
-                    note_references=self._note_references_for_message(
-                        paper_id, existing[1]
-                    ),
-                )
+            replay = self._replay_turn(paper_id, request_id)
+            if replay is not None:
+                return replay
 
-            partial_user = self.repository.get_agent_user_message_by_request(
-                paper_id, request_id
-            )
-            if partial_user is not None:
-                self._require_matching_partial_retry(
-                    partial_user,
-                    question=question,
-                    model_snapshot=model_snapshot,
-                )
-                conversation_id = partial_user.conversation_id
-            else:
-                conversation_id = question.conversation_id
-
-            note_context = (
-                self.note_memory.retrieve(
-                    paper_id, question.content, selection
-                )
-                if self.note_memory is not None
-                else NoteMemoryContext("", ())
-            )
-            selection_anchor = None
-            if selection is not None and self.annotation_repository is not None:
-                try:
-                    selection_anchor = self.annotation_repository.create_anchor(
-                        paper_id, selection
-                    )
-                except Exception as error:
-                    raise AgentRuntimeInvalidSelectionError(
-                        "Selected text is invalid."
-                    ) from error
-
-            conversation = self._preflight(
+            prepared = self._prepare_turn(
                 paper_id=paper_id,
-                conversation_id=conversation_id,
-            )
-            if client is None:
-                raise AgentRuntimeUnavailableError(_UNAVAILABLE_ERROR)
-            if conversation is None:
-                conversation = self.repository.create_conversation(
-                    Conversation(paper_id=paper_id)
-                )
-
-            if partial_user is None:
-                user_message = self.repository.append_conversation_message(
-                    ConversationMessage(
-                        conversation_id=conversation.id,
-                        paper_id=paper_id,
-                        role=AgentMessageRole.user,
-                        content=question.content,
-                        model_profile_id=model_snapshot.profile_id,
-                        model_snapshot=model_snapshot,
-                        request_id=request_id,
-                    )
-                )
-            else:
-                user_message = partial_user
-
-            if selection_anchor is not None:
-                self.repository.link_message_anchor(
-                    paper_id, user_message.id, selection_anchor.id
-                )
-
-            messages = self._model_history(
-                paper_id=paper_id,
-                conversation=conversation,
-                current_user_message_id=user_message.id,
+                question=question,
+                client=client,
+                model_snapshot=model_snapshot,
+                request_id=request_id,
                 selection=selection,
-                note_context=note_context,
             )
-            allowed_evidence_ids: set[str] = set()
             try:
-                tool_definitions = self.tools.definitions()
-            except Exception:
-                raise AgentRuntimeResponseError(_RESPONSE_ERROR) from None
-
-            executed_calls = 0
-            # Overview questions often contain no literal terms from an English
-            # paper. Seed actual, located source excerpts rather than searching
-            # the Chinese question verbatim or weakening citation validation.
-            overview = any(term in question.content.lower() for term in (
-                '讲了什么', '主要内容', '概括', '总结', 'summarize', 'overview',
-            ))
-            if overview:
-                elements = [element for element in self.repository.get_elements(paper_id)
-                            if element.text.strip() and element.page_number is not None and element.bbox is not None]
-                candidates = elements[:3] + elements[-1:]
-                seen = set()
-                for element in candidates:
-                    if element.id in seen:
-                        continue
-                    seen.add(element.id)
-                    call = VllmToolCall(id=f'overview-{len(seen)}', name='read_element', arguments={'element_id': element.id})
-                    execution = self.tools.execute(paper_id=paper_id, name=call.name, arguments=call.arguments)
-                    messages.extend(_tool_result_messages(VllmToolTurn(content=None, tool_calls=(call,)), call, execution))
-                    allowed_evidence_ids.update(execution.evidence_element_ids)
-                    executed_calls += 1
-                messages.append({'role':'system', 'content':'请用中文概括已有论文证据中的研究问题、方法和结论。只引用已读取的元素 ID；片段不足时说明范围，不要编造。'})
-            for _ in range(0 if overview and allowed_evidence_ids else MAX_TOOL_TURNS):
-                try:
-                    turn = client.request_tool_turn(
-                        messages=messages,
-                        tools=tool_definitions,
-                        tool_choice="auto",
-                    )
-                    if len(turn.tool_calls) > MAX_TOOL_TURNS - executed_calls:
-                        raise ValueError("tool call budget exceeded")
-                    if not turn.tool_calls:
-                        break
-                    if len({call.id for call in turn.tool_calls}) != len(turn.tool_calls):
-                        raise ValueError("duplicate tool call IDs")
-                    assistant_message = None
-                    tool_messages = []
-                    for call in turn.tool_calls:
-                        execution = self.tools.execute(
-                            paper_id=paper_id, name=call.name, arguments=call.arguments,
-                        )
-                        assistant, tool_message = _tool_result_messages(turn, call, execution)
-                        if assistant_message is None:
-                            assistant_message = assistant
-                        else:
-                            assistant_message['tool_calls'].extend(assistant['tool_calls'])
-                        tool_messages.append(tool_message)
-                        allowed_evidence_ids.update(execution.evidence_element_ids)
-                        executed_calls += 1
-                    messages.extend([assistant_message, *tool_messages])
-                    if executed_calls == MAX_TOOL_TURNS:
-                        break
-                except Exception:
-                    raise AgentRuntimeResponseError(_RESPONSE_ERROR) from None
-
-            if messages[-1].get("role") == "tool":
-                messages.append(
-                    {"role": "system", "content": _FINAL_ANSWER_INSTRUCTION}
-                )
-
-            try:
-                payload = client.generate_json_messages(
-                    messages=messages,
-                    schema_name=_FINAL_SCHEMA_NAME,
-                    schema=self.guard.output_schema(),
+                text = client.complete_markdown_messages(
+                    messages=prepared.messages
                 )
             except Exception:
                 raise AgentRuntimeResponseError(_RESPONSE_ERROR) from None
+            return self._finalize(prepared, text)
+
+    def stream_ask(
+        self,
+        *,
+        paper_id: str,
+        question: AgentQuestion,
+        client: VllmToolCallingClient,
+        model_snapshot: ModelSnapshot,
+        request_id: str,
+        selection: TextAnchorDraft | None = None,
+    ) -> Iterator[AgentStreamEvent]:
+        """Yield the answer as it streams, then persist it exactly once.
+
+        Nothing is stored until the whole answer arrives, so a stream that
+        fails or is abandoned never leaves a half-written assistant message.
+        """
+        with self._request_lock(paper_id, request_id):
+            try:
+                replay = self._replay_turn(paper_id, request_id)
+            except Exception:
+                yield AgentStreamEvent("error", code="agent_failed")
+                return
+            if replay is not None:
+                yield AgentStreamEvent("started")
+                yield AgentStreamEvent("completed", turn=replay)
+                return
+
+            yield AgentStreamEvent("started")
+            try:
+                prepared = self._prepare_turn(
+                    paper_id=paper_id,
+                    question=question,
+                    client=client,
+                    model_snapshot=model_snapshot,
+                    request_id=request_id,
+                    selection=selection,
+                )
+            except AgentRuntimeConflictError:
+                yield AgentStreamEvent("error", code="request_conflict")
+                return
+            except AgentRuntimeInvalidSelectionError:
+                yield AgentStreamEvent("error", code="invalid_selection")
+                return
+            except AgentRuntimePrerequisiteError:
+                yield AgentStreamEvent("error", code="agent_not_ready")
+                return
+            except AgentRuntimeUnavailableError:
+                yield AgentStreamEvent("error", code="model_unavailable")
+                return
+            except Exception:
+                yield AgentStreamEvent("error", code="agent_failed")
+                return
+
+            parts: list[str] = []
+            generated_chars = 0
+            try:
+                for chunk in client.stream_final_answer(
+                    messages=prepared.messages
+                ):
+                    generated_chars += len(chunk)
+                    if generated_chars > MAX_ANSWER_CHARS:
+                        yield AgentStreamEvent("error", code="answer_too_long")
+                        return
+                    parts.append(chunk)
+                    yield AgentStreamEvent("delta", text=chunk)
+            except Exception:
+                yield AgentStreamEvent("error", code="agent_failed")
+                return
 
             try:
-                answer = self.guard.parse_model_answer(payload)
-            except CitationGuardError:
-                raise AgentRuntimeResponseError(_RESPONSE_ERROR) from None
+                turn = self._finalize(prepared, "".join(parts))
             except Exception:
-                raise AgentRuntimeResponseError(_RESPONSE_ERROR) from None
+                yield AgentStreamEvent("error", code="agent_failed")
+                return
+            yield AgentStreamEvent("completed", turn=turn)
 
-            # Citation links are optional presentation data.  Keep the model
-            # prose even when it cites a graph node, an old conversation ID,
-            # or an element that no longer has a located geometry.  Only drop
-            # IDs that the repository cannot persist; never replace the answer
-            # with an evidence-refusal message.
-            candidate_citation_ids = tuple(dict.fromkeys(answer.citation_element_ids))
-            if set(candidate_citation_ids).issubset(allowed_evidence_ids):
-                persistable_citation_ids = candidate_citation_ids
-            else:
-                persistable_citation_ids = _persistable_citation_ids(
-                    self.repository,
-                    paper_id,
-                    candidate_citation_ids,
+    def _replay_turn(self, paper_id: str, request_id: str) -> AgentTurn | None:
+        """Return the stored turn for an already answered request, if any."""
+        existing = self.repository.get_agent_turn_by_request(paper_id, request_id)
+        if existing is None:
+            return None
+        return self.turn_from_messages(
+            paper_id=paper_id,
+            messages=existing,
+            note_references=self._note_references_for_message(
+                paper_id, existing[1]
+            ),
+        )
+
+    def _prepare_turn(
+        self,
+        *,
+        paper_id: str,
+        question: AgentQuestion,
+        client: VllmToolCallingClient,
+        model_snapshot: ModelSnapshot,
+        request_id: str,
+        selection: TextAnchorDraft | None,
+    ) -> _PreparedTurn:
+        """Persist the user turn, run the tool loop, and collect the evidence."""
+        partial_user = self.repository.get_agent_user_message_by_request(
+            paper_id, request_id
+        )
+        if partial_user is not None:
+            self._require_matching_partial_retry(
+                partial_user,
+                question=question,
+                model_snapshot=model_snapshot,
+            )
+            conversation_id = partial_user.conversation_id
+        else:
+            conversation_id = question.conversation_id
+
+        note_context = (
+            self.note_memory.retrieve(paper_id, question.content, selection)
+            if self.note_memory is not None
+            else NoteMemoryContext("", ())
+        )
+        selection_anchor = None
+        if selection is not None and self.annotation_repository is not None:
+            try:
+                selection_anchor = self.annotation_repository.create_anchor(
+                    paper_id, selection
                 )
-            answer = replace(
-                answer, citation_element_ids=persistable_citation_ids
+            except Exception as error:
+                raise AgentRuntimeInvalidSelectionError(
+                    "Selected text is invalid."
+                ) from error
+
+        conversation = self._preflight(
+            paper_id=paper_id,
+            conversation_id=conversation_id,
+        )
+        if client is None:
+            raise AgentRuntimeUnavailableError(_UNAVAILABLE_ERROR)
+        if conversation is None:
+            conversation = self.repository.create_conversation(
+                Conversation(paper_id=paper_id)
             )
 
-            assistant_message = self.repository.append_conversation_message(
+        if partial_user is None:
+            user_message = self.repository.append_conversation_message(
                 ConversationMessage(
                     conversation_id=conversation.id,
                     paper_id=paper_id,
-                    role=AgentMessageRole.assistant,
-                    content=answer.paper_answer,
-                    citation_element_ids=answer.citation_element_ids,
+                    role=AgentMessageRole.user,
+                    content=question.content,
                     model_profile_id=model_snapshot.profile_id,
                     model_snapshot=model_snapshot,
                     request_id=request_id,
-                    background_explanation=answer.background_explanation,
                 )
             )
-            self.repository.link_message_notes(
-                paper_id,
-                assistant_message.id,
-                tuple(
-                    reference.note_id
-                    for reference in note_context.references
-                ),
+        else:
+            user_message = partial_user
+
+        if selection_anchor is not None:
+            self.repository.link_message_anchor(
+                paper_id, user_message.id, selection_anchor.id
             )
-            return AgentTurn(
-                conversation=conversation,
-                user_message=user_message,
-                assistant_message=assistant_message,
-                answer=answer,
-                note_references=note_context.references,
+
+        messages = self._model_history(
+            paper_id=paper_id,
+            conversation=conversation,
+            current_user_message_id=user_message.id,
+            selection=selection,
+            note_context=note_context,
+        )
+        allowed_evidence_ids: set[str] = set()
+        try:
+            tool_definitions = self.tools.definitions()
+        except Exception:
+            raise AgentRuntimeResponseError(_RESPONSE_ERROR) from None
+
+        executed_calls = 0
+        # Overview questions often contain no literal terms from an English
+        # paper. Seed actual, located source excerpts rather than searching
+        # the Chinese question verbatim or weakening citation validation.
+        overview = any(term in question.content.lower() for term in (
+            '讲了什么', '主要内容', '概括', '总结', 'summarize', 'overview',
+        ))
+        if overview:
+            elements = [element for element in self.repository.get_elements(paper_id)
+                        if element.text.strip() and element.page_number is not None and element.bbox is not None]
+            candidates = elements[:3] + elements[-1:]
+            seen = set()
+            seeded_elements: list[dict[str, object]] = []
+            for element in candidates:
+                if element.id in seen:
+                    continue
+                seen.add(element.id)
+                execution = self.tools.execute(
+                    paper_id=paper_id, name='read_element', arguments={'element_id': element.id}
+                )
+                allowed_evidence_ids.update(execution.evidence_element_ids)
+                executed_calls += 1
+                seeded_elements.append(execution.content['element'])
+            if seeded_elements:
+                messages.append(
+                    {'role': 'system', 'content': _seeded_evidence_message(seeded_elements, allowed_evidence_ids)}
+                )
+                messages.append({'role':'system', 'content':'请用中文概括上方论文证据中的研究问题、方法和结论。只引用已给出的元素 ID；片段不足时说明范围，不要编造。'})
+        for _ in range(0 if overview and allowed_evidence_ids else MAX_TOOL_TURNS):
+            try:
+                turn = client.request_tool_turn(
+                    messages=messages,
+                    tools=tool_definitions,
+                    tool_choice="auto",
+                )
+                if not turn.tool_calls:
+                    break
+                if len({call.id for call in turn.tool_calls}) != len(turn.tool_calls):
+                    raise ValueError("duplicate tool call IDs")
+                # Providers may ignore parallel_tool_calls=False and batch several
+                # calls at once. Keep the hard ceiling but answer from the evidence
+                # already gathered instead of failing the whole turn.
+                calls = turn.tool_calls[: MAX_TOOL_TURNS - executed_calls]
+                assistant_message = None
+                tool_messages = []
+                for call in calls:
+                    try:
+                        execution = self.tools.execute(
+                            paper_id=paper_id, name=call.name, arguments=call.arguments,
+                        )
+                    except AgentToolError as error:
+                        # A rejected argument (for example an unknown section ID)
+                        # is feedback for the model, not a failed turn.
+                        content: dict[str, object] = {"error": str(error)}
+                        evidence_ids: tuple[str, ...] = ()
+                    else:
+                        content = execution.content
+                        evidence_ids = execution.evidence_element_ids
+                        allowed_evidence_ids.update(evidence_ids)
+                    assistant, tool_message = _tool_result_messages(
+                        turn, call, content, evidence_ids
+                    )
+                    if assistant_message is None:
+                        assistant_message = assistant
+                    else:
+                        assistant_message['tool_calls'].extend(assistant['tool_calls'])
+                    tool_messages.append(tool_message)
+                    executed_calls += 1
+                if assistant_message is not None:
+                    messages.extend([assistant_message, *tool_messages])
+                if executed_calls >= MAX_TOOL_TURNS or len(calls) < len(turn.tool_calls):
+                    break
+            except Exception:
+                raise AgentRuntimeResponseError(_RESPONSE_ERROR) from None
+
+        if messages[-1].get("role") == "tool":
+            messages.append(
+                {"role": "system", "content": _FINAL_ANSWER_INSTRUCTION}
             )
+        return _PreparedTurn(
+            conversation=conversation,
+            user_message=user_message,
+            messages=messages,
+            allowed_evidence_ids=allowed_evidence_ids,
+            note_context=note_context,
+            model_snapshot=model_snapshot,
+            request_id=request_id,
+        )
+
+    def _finalize(self, prepared: _PreparedTurn, text: str) -> AgentTurn:
+        """Parse the Markdown answer, persist it, and link its note memory."""
+        try:
+            answer = self.guard.parse_markdown_answer(text)
+        except CitationGuardError:
+            raise AgentRuntimeResponseError(_RESPONSE_ERROR) from None
+        except Exception:
+            raise AgentRuntimeResponseError(_RESPONSE_ERROR) from None
+
+        # Citation links are optional presentation data.  Keep the model
+        # prose even when it cites an old conversation ID,
+        # or an element that no longer has a located geometry.  Only drop
+        # IDs that the repository cannot persist; never replace the answer
+        # with an evidence-refusal message.
+        candidate_citation_ids = tuple(dict.fromkeys(answer.citation_element_ids))
+        if set(candidate_citation_ids).issubset(prepared.allowed_evidence_ids):
+            persistable_citation_ids = candidate_citation_ids
+        else:
+            persistable_citation_ids = _persistable_citation_ids(
+                self.repository,
+                prepared.conversation.paper_id,
+                candidate_citation_ids,
+            )
+        answer = replace(
+            answer, citation_element_ids=persistable_citation_ids
+        )
+
+        assistant_message = self.repository.append_conversation_message(
+            ConversationMessage(
+                conversation_id=prepared.conversation.id,
+                paper_id=prepared.conversation.paper_id,
+                role=AgentMessageRole.assistant,
+                content=answer.paper_answer,
+                citation_element_ids=answer.citation_element_ids,
+                model_profile_id=prepared.model_snapshot.profile_id,
+                model_snapshot=prepared.model_snapshot,
+                request_id=prepared.request_id,
+                background_explanation=answer.background_explanation,
+            )
+        )
+        self.repository.link_message_notes(
+            prepared.conversation.paper_id,
+            assistant_message.id,
+            tuple(
+                reference.note_id
+                for reference in prepared.note_context.references
+            ),
+        )
+        return AgentTurn(
+            conversation=prepared.conversation,
+            user_message=prepared.user_message,
+            assistant_message=assistant_message,
+            answer=answer,
+            note_references=prepared.note_context.references,
+        )
 
     def turn_from_messages(
         self,
@@ -493,21 +649,38 @@ class PaperAgentRuntime:
 
 def _system_prompt() -> str:
     return (
-        "Use the provided paper and graph tools when they help answer the user's "
+        "Use the provided paper tools when they help answer the user's "
         "question. Answer directly and naturally, including for general questions "
-        "and short greetings. Use status grounded for a normal answer and "
-        "insufficient_evidence only when you genuinely cannot answer. "
-        "Graph data is for navigation only; graph node and edge IDs are not paper "
-        "location links. "
-        "citation_element_ids are optional links to useful paper locations; "
-        "background_explanation may contain helpful context separate from the paper."
+        "and short greetings. "
+        "Tool evidence element IDs identify paper locations. "
+        + ANSWER_FORMAT_INSTRUCTIONS
+    )
+
+
+def _seeded_evidence_message(
+    elements: list[dict[str, object]], allowed_evidence_ids: set[str]
+) -> str:
+    """Present pre-read excerpts as evidence without faking a model tool turn.
+
+    Thinking-mode providers reject replayed tool-call messages that the model
+    never produced, so the seeded reads travel as plain evidence text.
+    """
+    return json.dumps(
+        {
+            "content": {"elements": elements},
+            "evidence_element_ids": list(dict.fromkeys(allowed_evidence_ids)),
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
     )
 
 
 def _tool_result_messages(
     turn: VllmToolTurn,
     call: VllmToolCall,
-    execution: ToolExecution,
+    content: dict[str, object],
+    evidence_element_ids: tuple[str, ...],
 ) -> tuple[dict[str, object], dict[str, object]]:
     assistant_message: dict[str, object] = {
         "role": "assistant",
@@ -528,14 +701,16 @@ def _tool_result_messages(
             }
         ],
     }
+    if turn.reasoning_content is not None:
+        assistant_message["reasoning_content"] = turn.reasoning_content
     tool_message: dict[str, object] = {
         "role": "tool",
         "tool_call_id": call.id,
-        "name": execution.name,
+        "name": call.name,
         "content": json.dumps(
             {
-                "content": execution.content,
-                "evidence_element_ids": execution.evidence_element_ids,
+                "content": content,
+                "evidence_element_ids": evidence_element_ids,
             },
             ensure_ascii=False,
             separators=(",", ":"),

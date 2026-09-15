@@ -13,8 +13,6 @@ from paper_agent.database import (
     conversation_messages,
     conversations,
     document_elements,
-    graph_edge_evidence,
-    graph_nodes,
     highlights,
     model_profiles,
     note_anchors,
@@ -33,18 +31,14 @@ from paper_agent.domain import (
     Conversation,
     ConversationMessage,
     DocumentElement,
-    GraphEdge,
-    GraphNode,
-    GraphStage,
     Note,
     Page,
     Paper,
-    PaperGraph,
     ProcessingStatus,
     Section,
 )
 from paper_agent.model_profiles import ModelSnapshot
-from paper_agent.storage import ConversationReferenceError, GraphReferenceError, PaperRepository
+from paper_agent.storage import ConversationReferenceError, PaperRepository
 
 
 @pytest.fixture
@@ -129,40 +123,6 @@ def test_repository_persists_bbox_as_four_real_columns(repository):
         ).one()
 
     assert tuple(row) == pytest.approx((0.1, 0.2, 0.7, 0.8))
-
-
-def test_stage1_batch_write_rolls_back_sections_and_paragraphs_on_persistence_error(repository):
-    """Breaks if one Stage 1 transaction leaves earlier semantic rows durable."""
-    paper = repository.create_paper(
-        original_filename="example.pdf", stored_filename="paper.pdf"
-    )
-    repository.save_page(paper.id, Page(number=1, width=200, height=300))
-    section = Section(title="Introduction", order=0)
-    duplicate_id = "duplicate-stage1-paragraph"
-    elements = (
-        DocumentElement(
-            kind="paragraph",
-            text="First paragraph",
-            page_number=1,
-            bbox=BoundingBox(0, 0, 1, 0.1),
-            section_id=section.id,
-            id=duplicate_id,
-        ),
-        DocumentElement(
-            kind="paragraph",
-            text="Second paragraph",
-            page_number=1,
-            bbox=BoundingBox(0, 0.2, 1, 0.3),
-            section_id=section.id,
-            id=duplicate_id,
-        ),
-    )
-
-    with pytest.raises(IntegrityError):
-        repository.save_stage1_document(paper.id, (section,), elements)
-
-    assert repository.get_sections(paper.id) == ()
-    assert repository.get_elements(paper.id) == ()
 
 
 def test_stage0_batch_write_rolls_back_pages_and_elements_on_second_element_failure(
@@ -1269,287 +1229,6 @@ def test_repository_rejects_duplicate_assistant_citations_before_persistence(
     assert repository.get_conversation_messages(paper.id, conversation.id) == ()
 
 
-def _deep_nodes(element_id: str) -> tuple[GraphNode, ...]:
-    return (
-        GraphNode(
-            id="old-deep-node",
-            node_type="component",
-            name="Encoder",
-            summary="Encodes inputs.",
-            stage=GraphStage.deep,
-            evidence_element_ids=(element_id,),
-        ),
-    )
-
-
-def _duplicate_nodes(element_id: str) -> tuple[GraphNode, ...]:
-    return (
-        GraphNode(
-            id="duplicate-one",
-            node_type="method",
-            name="Router",
-            summary="Routes tokens.",
-            stage=GraphStage.core,
-            evidence_element_ids=(element_id,),
-        ),
-        GraphNode(
-            id="duplicate-two",
-            node_type="method",
-            name="router",
-            summary="Routes inputs.",
-            stage=GraphStage.core,
-            evidence_element_ids=(element_id,),
-        ),
-    )
-
-
-def test_repository_rejects_graph_evidence_from_another_paper(repository):
-    """Breaks if graph claims can cite a source element from another paper."""
-    first, _ = _paper_with_located_element(repository, "first")
-    _, second_element = _paper_with_located_element(repository, "second")
-    node = GraphNode(
-        node_type="method",
-        name="Router",
-        summary="Routes tokens.",
-        stage=GraphStage.core,
-        evidence_element_ids=(second_element.id,),
-    )
-
-    with pytest.raises(GraphReferenceError, match="evidence"):
-        repository.replace_graph_stage(first.id, GraphStage.core, (node,), ())
-
-
-def test_repository_rejects_unlocated_graph_evidence(repository):
-    """Breaks if a graph can cite semantic content without a source location."""
-    paper = repository.create_paper(
-        original_filename="paper.pdf", stored_filename="paper.pdf"
-    )
-    element = repository.save_element(
-        paper.id, DocumentElement.paragraph("semantic only", location_status="unlocated")
-    )
-    node = GraphNode(
-        node_type="method",
-        name="Router",
-        summary="Routes tokens.",
-        stage=GraphStage.core,
-        evidence_element_ids=(element.id,),
-    )
-
-    with pytest.raises(GraphReferenceError, match="evidence"):
-        repository.replace_graph_stage(paper.id, GraphStage.core, (node,), ())
-
-
-def test_repository_rejects_edge_evidence_from_another_paper(repository):
-    """Breaks if a graph relation can cite source evidence from another paper."""
-    first, first_element = _paper_with_located_element(repository, "first")
-    _, second_element = _paper_with_located_element(repository, "second")
-    nodes = (
-        GraphNode(
-            id="first-node",
-            node_type="method",
-            name="Router",
-            summary="Routes tokens.",
-            stage=GraphStage.core,
-            evidence_element_ids=(first_element.id,),
-        ),
-        GraphNode(
-            id="second-node",
-            node_type="claim",
-            name="Efficiency",
-            summary="Improves efficiency.",
-            stage=GraphStage.core,
-            evidence_element_ids=(first_element.id,),
-        ),
-    )
-    edge = GraphEdge(
-        source_node_id="first-node",
-        target_node_id="second-node",
-        relation_type="supports",
-        stage=GraphStage.core,
-        evidence_element_ids=(second_element.id,),
-    )
-
-    with pytest.raises(GraphReferenceError, match="evidence"):
-        repository.replace_graph_stage(first.id, GraphStage.core, nodes, (edge,))
-
-
-def test_core_replacement_rolls_back_and_preserves_existing_graph(repository):
-    """Breaks if a failed core replacement deletes a prior deep graph."""
-    paper, element = _paper_with_located_element(repository, "paper")
-    old = _deep_nodes(element.id)
-    repository.replace_graph_stage(paper.id, GraphStage.deep, old, ())
-
-    with pytest.raises(IntegrityError):
-        repository.replace_graph_stage(
-            paper.id, GraphStage.core, _duplicate_nodes(element.id), ()
-        )
-
-    assert repository.get_graph(paper.id).nodes == old
-
-
-def test_repository_rejects_canonical_equivalent_graph_node_names(repository):
-    """Breaks if direct persistence stores canonical-equivalent node names separately."""
-    paper, element = _paper_with_located_element(repository, "paper")
-    nodes = (
-        GraphNode(
-            id="cafe-nfc",
-            node_type="method",
-            name="Caf\u00e9",
-            summary="Normalizes Unicode node names.",
-            stage=GraphStage.core,
-            evidence_element_ids=(element.id,),
-        ),
-        GraphNode(
-            id="cafe-nfd",
-            node_type="method",
-            name="Cafe\u0301",
-            summary="Rejects duplicate durable identities.",
-            stage=GraphStage.core,
-            evidence_element_ids=(element.id,),
-        ),
-    )
-
-    with pytest.raises(IntegrityError):
-        repository.replace_graph_stage(paper.id, GraphStage.core, nodes, ())
-
-    assert repository.get_graph(paper.id).nodes == ()
-
-
-def test_graph_replacement_normalizes_names_and_respects_stage_dependencies(repository):
-    """Breaks if case variants coexist or stage replacement clears the wrong records."""
-    paper, element = _paper_with_located_element(repository, "paper")
-    core = GraphNode(
-        id="core-method",
-        node_type="method",
-        name="Router",
-        summary="Routes tokens.",
-        stage=GraphStage.core,
-        evidence_element_ids=(element.id,),
-    )
-    deep = _deep_nodes(element.id)
-    repository.replace_graph_stage(paper.id, GraphStage.core, (core,), ())
-    repository.replace_graph_stage(paper.id, GraphStage.deep, deep, ())
-
-    with repository.engine.connect() as connection:
-        assert connection.execute(
-            select(graph_nodes.c.normalized_name).where(graph_nodes.c.id == core.id)
-        ).scalar_one() == "router"
-
-    replacement = GraphNode(
-        id="replacement-component",
-        node_type="component",
-        name="Decoder",
-        summary="Decodes outputs.",
-        stage=GraphStage.deep,
-        evidence_element_ids=(element.id,),
-    )
-    repository.replace_graph_stage(paper.id, GraphStage.deep, (replacement,), ())
-    assert repository.get_graph(paper.id).nodes == (core, replacement)
-
-    replacement_core = GraphNode(
-        id="replacement-method",
-        node_type="method",
-        name="Retriever",
-        summary="Retrieves context.",
-        stage=GraphStage.core,
-        evidence_element_ids=(element.id,),
-    )
-    assert repository.replace_graph_stage(
-        paper.id, GraphStage.core, (replacement_core,), ()
-    ).nodes == (replacement_core,)
-    assert repository.get_graph(paper.id).nodes == (replacement_core,)
-
-
-def test_repository_reads_graph_nodes_neighbors_subgraphs_and_directed_paths(repository):
-    """Breaks if graph reads or traversal omit reachable same-paper records."""
-    paper, element = _paper_with_located_element(repository, "paper")
-    nodes = (
-        GraphNode(
-            id="node-a",
-            node_type="method",
-            name="Router",
-            summary="Routes tokens.",
-            stage=GraphStage.core,
-            evidence_element_ids=(element.id,),
-        ),
-        GraphNode(
-            id="node-b",
-            node_type="claim",
-            name="Efficiency",
-            summary="Improves efficiency.",
-            stage=GraphStage.core,
-            evidence_element_ids=(element.id,),
-        ),
-        GraphNode(
-            id="node-c",
-            node_type="experiment",
-            name="Benchmark",
-            summary="Tests the method.",
-            stage=GraphStage.core,
-            evidence_element_ids=(element.id,),
-        ),
-    )
-    edges = (
-        GraphEdge(
-            id="edge-a-b",
-            source_node_id="node-a",
-            target_node_id="node-b",
-            relation_type="supports",
-            stage=GraphStage.core,
-            evidence_element_ids=(element.id,),
-        ),
-        GraphEdge(
-            id="edge-b-c",
-            source_node_id="node-b",
-            target_node_id="node-c",
-            relation_type="tests",
-            stage=GraphStage.core,
-            evidence_element_ids=(element.id,),
-        ),
-    )
-    repository.replace_graph_stage(paper.id, GraphStage.core, nodes, edges)
-
-    assert repository.get_graph_node(paper.id, "missing") is None
-    assert repository.get_graph_node(paper.id, "node-b") == nodes[1]
-    assert repository.get_graph_neighbors(paper.id, "node-b") == PaperGraph(
-        nodes=nodes,
-        edges=edges,
-    )
-    assert repository.get_graph_subgraph(paper.id, ("node-a",), depth=1) == PaperGraph(
-        nodes=nodes[:2], edges=edges[:1]
-    )
-    assert repository.get_graph_subgraph(paper.id, ("node-a",), depth=2) == PaperGraph(
-        nodes=nodes, edges=edges
-    )
-    assert repository.find_graph_paths(paper.id, "node-a", "node-c", max_depth=2) == (
-        ("node-a", "node-b", "node-c"),
-    )
-    assert repository.find_graph_paths(paper.id, "node-c", "node-a", max_depth=2) == ()
-
-
-PAPER_OWNED_TABLES = (
-    "conversation_message_note_citations",
-    "conversation_message_anchors",
-    "conversation_message_citations",
-    "conversation_messages",
-    "conversations",
-    "selection_assist_requests",
-    "note_anchors",
-    "notes",
-    "highlights",
-    "text_anchor_rects",
-    "text_anchors",
-    "graph_edge_evidence",
-    "graph_node_evidence",
-    "graph_edges",
-    "graph_nodes",
-    "document_elements",
-    "sections",
-    "pages",
-    "processing_runs",
-)
-
-
 def _fully_populated_paper(repository: PaperRepository) -> Paper:
     paper = repository.create_paper(
         original_filename="full.pdf", stored_filename="full.pdf"
@@ -1589,21 +1268,6 @@ def _fully_populated_paper(repository: PaperRepository) -> Paper:
             citation_element_ids=(element.id,),
             request_id="delete-request",
         )
-    )
-    repository.replace_graph_stage(
-        paper.id,
-        GraphStage.core,
-        (
-            GraphNode(
-                id="node-1",
-                node_type="method",
-                name="Router",
-                summary="Routes tokens.",
-                stage=GraphStage.core,
-                evidence_element_ids=(element.id,),
-            ),
-        ),
-        (),
     )
     repository.record_processing_status(
         paper.id, ProcessingStatus.completed, stage="stage1"
@@ -1699,6 +1363,25 @@ def _fully_populated_paper(repository: PaperRepository) -> Paper:
             )
         )
     return paper
+
+
+PAPER_OWNED_TABLES = (
+    "conversation_message_note_citations",
+    "conversation_message_anchors",
+    "conversation_message_citations",
+    "conversation_messages",
+    "conversations",
+    "selection_assist_requests",
+    "note_anchors",
+    "notes",
+    "highlights",
+    "text_anchor_rects",
+    "text_anchors",
+    "document_elements",
+    "sections",
+    "pages",
+    "processing_runs",
+)
 
 
 def test_delete_paper_data_removes_every_paper_owned_row(repository):

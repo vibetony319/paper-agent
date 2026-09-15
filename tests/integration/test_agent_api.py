@@ -35,6 +35,9 @@ DEFAULT_PROFILE_ID = "10000000-0000-0000-0000-000000000001"
 SECOND_PROFILE_ID = "10000000-0000-0000-0000-000000000002"
 
 
+_UNUSED_ANSWER = "[[status:insufficient_evidence]]\n\nunused raw model prose"
+
+
 class FakeAgentClient:
     """Deterministic in-process substitute for the external reasoning service."""
 
@@ -42,15 +45,12 @@ class FakeAgentClient:
         self,
         *,
         turns: tuple[VllmToolTurn | Exception, ...] = (),
-        final_payload: dict[str, object] | Exception | None = None,
+        final_answer: str | Exception = _UNUSED_ANSWER,
+        stream_chunks: tuple[str, ...] | None = None,
     ) -> None:
         self.remaining_turns = list(turns)
-        self.final_payload = final_payload or {
-            "status": "insufficient_evidence",
-            "paper_answer": "unused raw model prose",
-            "citation_element_ids": [],
-            "background_explanation": None,
-        }
+        self.final_answer = final_answer
+        self.stream_chunks = stream_chunks
         self.health_calls = 0
         self.health_error: Exception | None = None
         self.tool_requests = 0
@@ -73,17 +73,20 @@ class FakeAgentClient:
             raise turn
         return turn
 
-    def generate_json_messages(
-        self,
-        *,
-        messages: list[dict[str, object]],
-        schema_name: str,
-        schema: dict[str, object],
-    ) -> dict[str, object]:
+    def complete_markdown_messages(self, *, messages: list[dict[str, object]]) -> str:
         self.final_requests += 1
-        if isinstance(self.final_payload, Exception):
-            raise self.final_payload
-        return deepcopy(self.final_payload)
+        if isinstance(self.final_answer, Exception):
+            raise self.final_answer
+        return self.final_answer
+
+    def stream_final_answer(self, *, messages: list[dict[str, object]]):
+        self.final_requests += 1
+        if isinstance(self.final_answer, Exception):
+            raise self.final_answer
+        chunks = (
+            [self.final_answer] if self.stream_chunks is None else self.stream_chunks
+        )
+        yield from chunks
 
     def validate_tool_calling(self) -> None:
         self.health_calls += 1
@@ -240,12 +243,9 @@ def _grounded_tool_flow(paper: UploadedPaper) -> FakeAgentClient:
             ),
             VllmToolTurn(content=None, tool_calls=()),
         ),
-        final_payload={
-            "status": "grounded",
-            "paper_answer": "The method is introduced in the paper.",
-            "citation_element_ids": [paper.element_id],
-            "background_explanation": None,
-        },
+        final_answer=(
+            f"The method is introduced in the paper. [[{paper.element_id}]]"
+        ),
     )
 
 
@@ -345,7 +345,9 @@ def test_agent_returns_locatable_same_paper_citations_without_paths(
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "grounded"
-    assert body["paper_answer"] == "The method is introduced in the paper."
+    assert body["paper_answer"] == (
+        f"The method is introduced in the paper. [[{uploaded_paper.element_id}]]"
+    )
     assert body["background_explanation"] is None
     assert body["citations"][0]["id"] == uploaded_paper.element_id
     assert body["citations"][0]["kind"] == "text_block"
@@ -490,12 +492,9 @@ def test_complete_duplicate_replays_background_citation_order_and_original_geome
             ),
             VllmToolTurn(content=None, tool_calls=()),
         ),
-        final_payload={
-            "status": "grounded",
-            "paper_answer": "Ordered answer.",
-            "citation_element_ids": [second.id, uploaded_paper.element_id],
-            "background_explanation": None,
-        },
+        final_answer=(
+            f"Ordered answer. [[{second.id}]] [[{uploaded_paper.element_id}]]"
+        ),
     )
     provider = _configure_fake_agent_runtime(client.app, fake)
     request_id = "20000000-0000-0000-0000-000000000030"
@@ -661,7 +660,7 @@ def test_agent_rejects_insufficient_capabilities_before_chat_write(
     client: TestClient, uploaded_paper: UploadedPaper
 ) -> None:
     """Breaks if an untested model writes a user row before Agent capability gating."""
-    profile = _model_profile(DEFAULT_PROFILE_ID, structured_output=False)
+    profile = _model_profile(DEFAULT_PROFILE_ID, tool_calling=False)
     fake = FakeAgentClient()
     _configure_fake_agent_models(
         client.app,
@@ -679,6 +678,27 @@ def test_agent_rejects_insufficient_capabilities_before_chat_write(
     assert _chat_row_counts(client.app.state.paper_repository) == before
     assert fake.tool_requests == 0
     assert fake.final_requests == 0
+
+
+def test_agent_accepts_a_model_without_structured_output(
+    client: TestClient, uploaded_paper: UploadedPaper
+) -> None:
+    """The Markdown answer needs tool calling, not a structured response format."""
+    profile = _model_profile(DEFAULT_PROFILE_ID, structured_output=False)
+    _configure_fake_agent_models(
+        client.app,
+        {DEFAULT_PROFILE_ID: _grounded_tool_flow(uploaded_paper)},
+        profiles={DEFAULT_PROFILE_ID: profile},
+    )
+
+    response = client.post(
+        f"/api/papers/{uploaded_paper.id}/agent/messages",
+        json=_agent_payload("Explain the method."),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "grounded"
+    assert response.json()["citations"]
 
 
 def test_agent_profile_lease_blocks_delete_while_allowing_edit_after_snapshot(
@@ -1197,12 +1217,9 @@ def test_agent_returns_model_answer_without_citation_guard_replacement(
     _configure_fake_agent_runtime(
         client.app,
         FakeAgentClient(
-            final_payload={
-                "status": "grounded",
-                "paper_answer": "raw unsupported claim",
-                "citation_element_ids": [uploaded_paper.element_id],
-                "background_explanation": None,
-            }
+            final_answer=(
+                f"raw unsupported claim [[{uploaded_paper.element_id}]]"
+            )
         ),
     )
 
@@ -1242,3 +1259,134 @@ def test_agent_health_is_explicit_and_maps_unavailable_or_failed_validation_to_5
         "detail": "Reasoning model tool calling is unavailable."
     }
     assert "raw health endpoint secret" not in response.text
+
+
+def _stream_events(response) -> list[tuple[str, dict[str, object]]]:
+    """Parse an SSE body into (event, payload) pairs."""
+    events: list[tuple[str, dict[str, object]]] = []
+    for frame in response.text.split("\n\n"):
+        if not frame.strip():
+            continue
+        name = None
+        data = None
+        for line in frame.splitlines():
+            if line.startswith("event:"):
+                name = line[len("event:"):].strip()
+            elif line.startswith("data:"):
+                data = line[len("data:"):].strip()
+        assert name is not None and data is not None, frame
+        events.append((name, json.loads(data)))
+    return events
+
+
+def test_agent_stream_emits_deltas_then_the_persisted_message(
+    client: TestClient, uploaded_paper: UploadedPaper
+) -> None:
+    """Breaks if a streamed answer is not durable, duplicated, or misordered."""
+    fake = _grounded_tool_flow(uploaded_paper)
+    fake.stream_chunks = None
+    _configure_fake_agent_runtime(client.app, fake)
+    request_id = "20000000-0000-0000-0000-000000000040"
+
+    response = client.post(
+        f"/api/papers/{uploaded_paper.id}/agent/messages/stream",
+        json=_agent_payload("Explain the method.", request_id=request_id),
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    events = _stream_events(response)
+    assert [name for name, _ in events] == ["started", "delta", "completed"]
+    assert events[0][1]["request_id"] == request_id
+    streamed = events[1][1]["text"]
+    message = events[2][1]["message"]
+    assert message["paper_answer"] == streamed
+    assert message["paper_answer"].endswith(f"[[{uploaded_paper.element_id}]]")
+    assert message["status"] == "grounded"
+    assert message["citations"][0]["id"] == uploaded_paper.element_id
+
+    history = client.get(
+        f"/api/papers/{uploaded_paper.id}/agent/conversations/{message['conversation_id']}"
+    ).json()
+    assert [item["role"] for item in history["messages"]] == ["user", "assistant"]
+    assert history["messages"][1]["content"] == message["paper_answer"]
+    assert fake.final_requests == 1
+
+
+def test_agent_stream_replays_a_duplicate_request_without_calling_the_model(
+    client: TestClient, uploaded_paper: UploadedPaper
+) -> None:
+    """Breaks if a retried stream regenerates an already stored answer."""
+    fake = _grounded_tool_flow(uploaded_paper)
+    _configure_fake_agent_runtime(client.app, fake)
+    request_id = "20000000-0000-0000-0000-000000000041"
+    payload = _agent_payload("Explain the method.", request_id=request_id)
+
+    first = _stream_events(
+        client.post(
+            f"/api/papers/{uploaded_paper.id}/agent/messages/stream", json=payload
+        )
+    )
+    final_requests_after_first = fake.final_requests
+
+    replay = _stream_events(
+        client.post(
+            f"/api/papers/{uploaded_paper.id}/agent/messages/stream", json=payload
+        )
+    )
+
+    assert [name for name, _ in replay] == ["started", "completed"]
+    assert replay[-1][1]["message"]["message_id"] == first[-1][1]["message"]["message_id"]
+    assert fake.final_requests == final_requests_after_first
+    assert _chat_row_counts(client.app.state.paper_repository) == (1, 2)
+
+
+def test_agent_stream_reports_a_provider_failure_as_an_error_event(
+    client: TestClient, uploaded_paper: UploadedPaper
+) -> None:
+    """Breaks if a provider failure leaks raw text or leaves an assistant row."""
+    _configure_fake_agent_runtime(
+        client.app,
+        FakeAgentClient(final_answer=VllmToolCallingError("raw-stream-provider-secret")),
+    )
+
+    response = client.post(
+        f"/api/papers/{uploaded_paper.id}/agent/messages/stream",
+        json=_agent_payload("Explain the method."),
+    )
+
+    assert response.status_code == 200
+    events = _stream_events(response)
+    assert [name for name, _ in events] == ["started", "error"]
+    assert events[-1][1]["code"] == "agent_failed"
+    assert "raw-stream-provider-secret" not in response.text
+    assert _chat_row_counts(client.app.state.paper_repository) == (1, 1)
+
+
+def test_agent_stream_keeps_request_errors_outside_the_event_stream(
+    client: TestClient, uploaded_paper: UploadedPaper, stage1_incomplete_paper
+) -> None:
+    """Breaks if validation failures are reported as stream errors instead of JSON."""
+    _configure_fake_agent_runtime(
+        client.app,
+        FakeAgentClient(final_answer=VllmToolCallingError("unused")),
+    )
+
+    missing_paper = client.post(
+        f"/api/papers/{uuid4()}/agent/messages/stream", json=_agent_payload()
+    )
+    unknown_profile = client.post(
+        f"/api/papers/{uploaded_paper.id}/agent/messages/stream",
+        json=_agent_payload(model_profile_id=str(uuid4())),
+    )
+    incomplete = client.post(
+        f"/api/papers/{stage1_incomplete_paper.id}/agent/messages/stream",
+        json=_agent_payload(),
+    )
+
+    assert missing_paper.status_code == 404
+    assert unknown_profile.status_code == 503
+    assert incomplete.status_code == 200
+    events = _stream_events(incomplete)
+    assert [name for name, _ in events] == ["started", "error"]
+    assert events[-1][1]["code"] == "agent_not_ready"

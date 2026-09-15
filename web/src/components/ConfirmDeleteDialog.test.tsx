@@ -13,8 +13,6 @@ const paper: PaperSummary = {
   status: 'completed',
   stage0_status: 'completed',
   stage1_status: 'completed',
-  stage2_status: 'queued',
-  stage3_status: null,
   error: null,
 };
 

@@ -58,6 +58,14 @@ def _tool(name, arguments):
     )])
 
 
+def _agent_markdown(messages):
+    results = [json.loads(m['content']) for m in messages if m['role'] == 'tool']
+    evidence = [element for result in results for element in result['evidence_element_ids']]
+    has_notes = any('<note_data>' in (m.get('content') or '') for m in messages if m['role'] == 'system')
+    answer = ('结合笔记，' if has_notes else '') + '论文使用路由负载均衡损失，将工作分配给稀疏专家。'
+    return answer if not evidence else f"{answer}[[{evidence[0]}]]"
+
+
 class FakeOpenAI:
     """Stateless completions based on the current request, including real tool results."""
 
@@ -66,7 +74,12 @@ class FakeOpenAI:
 
     def create(self, *, messages, stream=False, tools=None, response_format=None, **_kwargs):
         if stream:
-            text = TRANSLATION if '翻译' in messages[0]['content'] else EXPLANATION
+            system = messages[0].get('content') or ''
+            text = (
+                (TRANSLATION if '翻译' in system else EXPLANATION)
+                if '<selected_text>' in system
+                else _agent_markdown(messages)
+            )
             return iter(SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content=part))])
                         for part in (text[:10], text[10:]))
 
@@ -79,27 +92,12 @@ class FakeOpenAI:
             return _response()
 
         if response_format is None:
-            return _response('OK')
+            return _response(_agent_markdown(messages))
+
         schema = response_format['json_schema']['name']
-        if schema == 'capability_status':
-            payload = {'status': 'ok'}
-        elif schema == 'paper_graph_nodes':
-            source = json.loads(messages[-1]['content'])['source_elements'][0]
-            payload = {'nodes': [{
-                'local_id': 'routing', 'node_type': 'method', 'name': '负载均衡路由',
-                'summary': '将工作分配给稀疏专家。', 'evidence_element_ids': [source['id']],
-            }]}
-        elif schema in {'paper_graph_edges', 'paper_graph_cross_section_edges'}:
-            payload = {'edges': []}
-        else:
-            results = [json.loads(m['content']) for m in messages if m['role'] == 'tool']
-            evidence = [element for result in results for element in result['evidence_element_ids']]
-            has_notes = any('<note_data>' in (m.get('content') or '') for m in messages if m['role'] == 'system')
-            answer = ('结合笔记，' if has_notes else '') + '论文使用路由负载均衡损失，将工作分配给稀疏专家。'
-            payload = {'status': 'grounded' if evidence else 'insufficient_evidence',
-                       'paper_answer': answer, 'citation_element_ids': evidence[:1],
-                       'background_explanation': None}
-        return _response(json.dumps(payload, ensure_ascii=False))
+        if schema != 'capability_status':
+            raise AssertionError(f'e2e stub received an unexpected schema: {schema}')
+        return _response(json.dumps({'status': 'ok'}, ensure_ascii=False))
 
 
 def create_e2e_app() -> FastAPI:

@@ -4,7 +4,7 @@
 
 ## 覆盖层次
 
-- **后端单元测试**：领域模型、存储、迁移、解析器、vLLM 协议适配和服务规则。重点覆盖模型回答结构解析、可选引用回显、请求幂等、模型快照、删除恢复和图谱证据校验。
+- **后端单元测试**：领域模型、存储、迁移、解析器、vLLM 协议适配和服务规则。重点覆盖 Markdown 回答解析、可选引用回显、流式事件顺序、请求幂等、模型快照与删除恢复。
 - **后端集成测试**：FastAPI 路由、schema、稳定错误与跨层持久化。测试 fixture 用临时目录创建应用与生成的 PDF；模型能力通过 fake provider/client 注入。
 - **前端 Vitest**：React 组件、阅读器几何、SSE 解析、客户端请求、状态 reducer 与样式契约，在 `jsdom` 中执行。
 - **Playwright**：使用专用 E2E 服务器和运行时生成的两页 PDF，覆盖桌面（1440×900）与小屏（390×844）阅读路径及 axe 严重/关键可访问性问题。脚本已添加；最新实际验收结果见[开发交接](developer-handoff.md)。
@@ -46,7 +46,7 @@ POSIX shell：
 
 ## Fake 模型与请求边界
 
-后端测试应构造 `Settings(data_dir=tmp_path / ...)`，使数据库、PDF 与秘密目录均在测试临时目录。为使 Agent、图谱和选区辅助可重复：
+后端测试应构造 `Settings(data_dir=tmp_path / ...)`，使数据库、PDF 与秘密目录均在测试临时目录。为使 Agent 和选区辅助可重复：
 
 - 为请求级 provider 注入或替换带固定 `ModelSnapshot` 的 fake clients；不要调用实际 vLLM。
 - chat fake 为 `stream_text()` 产生固定片段；structured fake 返回符合 schema 的对象；tool fake 返回确定的 tool turn 和最终 JSON。

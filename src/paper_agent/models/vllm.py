@@ -179,6 +179,9 @@ class VllmToolCall:
 class VllmToolTurn:
     content: str | None
     tool_calls: tuple[VllmToolCall, ...]
+    # Thinking-mode providers return their reasoning alongside the tool call and
+    # reject a follow-up request that replays the turn without it.
+    reasoning_content: str | None = None
 
 
 class VllmToolCallingError(RuntimeError):
@@ -243,6 +246,7 @@ class VllmToolCallingClient:
     ) -> VllmToolTurn:
         failed = False
         content: str | None = None
+        reasoning_content: str | None = None
         tool_calls: tuple[VllmToolCall, ...] = ()
         try:
             response = self.client.chat.completions.create(
@@ -257,6 +261,10 @@ class VllmToolCallingClient:
             content = message.content
             if content is not None and not isinstance(content, str):
                 raise TypeError
+            raw_reasoning = getattr(message, "reasoning_content", None)
+            if raw_reasoning is not None and not isinstance(raw_reasoning, str):
+                raise TypeError
+            reasoning_content = raw_reasoning
             raw_tool_calls = message.tool_calls
             if raw_tool_calls is None:
                 raw_tool_calls = ()
@@ -265,29 +273,58 @@ class VllmToolCallingClient:
             failed = True
         if failed:
             raise VllmToolCallingError("vLLM returned an invalid tool response.")
-        return VllmToolTurn(content=content, tool_calls=tool_calls)
+        return VllmToolTurn(
+            content=content,
+            tool_calls=tool_calls,
+            reasoning_content=reasoning_content,
+        )
 
-    def generate_json_messages(
-        self,
-        *,
-        messages: list[dict[str, object]],
-        schema_name: str,
-        schema: dict[str, object],
-    ) -> dict[str, object]:
+    def complete_markdown_messages(self, *, messages: list[dict[str, object]]) -> str:
+        """Return the final answer text of a turn that is already done with tools."""
         failed = False
-        result: object = None
+        content: object = None
         try:
-            result = _json_completion(
-                self.client, model=self.config.model, messages=messages,
-                schema_name=schema_name, schema=schema,
+            response = self.client.chat.completions.create(
+                model=self.config.model,
+                messages=messages,
+                temperature=0,
             )
-            if not isinstance(result, dict):
+            content = response.choices[0].message.content
+            if not isinstance(content, str) or not content.strip():
                 raise TypeError
         except Exception:
             failed = True
         if failed:
-            raise VllmToolCallingError("vLLM returned an invalid final JSON response.")
-        return result
+            raise VllmToolCallingError("vLLM returned an invalid final answer.")
+        return content
+
+    def stream_final_answer(
+        self, *, messages: list[dict[str, object]]
+    ) -> Iterator[str]:
+        """Stream the final Markdown answer of a turn that is done with tools."""
+        failed = False
+        yielded_text = False
+        try:
+            stream = self.client.chat.completions.create(
+                model=self.config.model,
+                messages=messages,
+                temperature=0,
+                stream=True,
+            )
+            for chunk in stream:
+                delta = chunk.choices[0].delta.content
+                if delta is None:
+                    continue
+                if not isinstance(delta, str):
+                    raise TypeError
+                if not delta:
+                    continue
+                yielded_text = True
+                yield delta
+        except Exception:
+            failed = True
+        if failed or not yielded_text:
+            raise VllmToolCallingError("vLLM could not stream the final answer.")
 
     def validate_tool_calling(self) -> None:
         health_tool = {

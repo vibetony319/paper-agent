@@ -18,6 +18,8 @@ class FakeOpenAI:
         self.tool_id = "call-1"
         self.content: str | None = "I will read it."
         self.json_content = '{"answer": "ok"}'
+        self.stream_chunks: list[str] = ["stream-1", "stream-2"]
+        self.stream_error_after_first = False
         self.empty_choices = False
         self.chat = SimpleNamespace(completions=self)
 
@@ -30,6 +32,8 @@ class FakeOpenAI:
             raise self.error
         if self.empty_choices:
             return SimpleNamespace(choices=[])
+        if kwargs.get("stream"):
+            return self._stream()
         if "response_format" in kwargs:
             return SimpleNamespace(
                 choices=[SimpleNamespace(message=SimpleNamespace(content=self.json_content))]
@@ -46,6 +50,14 @@ class FakeOpenAI:
                 SimpleNamespace(message=SimpleNamespace(content="ignore", tool_calls=[])),
             ]
         )
+
+    def _stream(self):
+        for index, text in enumerate(self.stream_chunks):
+            if index == 1 and self.stream_error_after_first:
+                raise RuntimeError("provider-secret")
+            yield SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content=text))]
+            )
 
 
 @pytest.fixture
@@ -202,38 +214,82 @@ def test_health_check_only_accepts_the_expected_empty_health_call(
     ]
 
 
-def test_generate_json_messages_uses_strict_schema_over_the_full_message_list(fake_openai):
-    """Breaks if final JSON omits strict schema mode or reconstructs the messages."""
+def test_complete_markdown_messages_sends_the_full_message_list_without_a_schema(
+    fake_openai,
+):
+    """Breaks if the final answer still negotiates a structured response format."""
     messages = [
         {"role": "system", "content": "Use citations."},
         {"role": "user", "content": "What is the conclusion?"},
     ]
+    fake_openai.content = "The conclusion is routing balance. [[e1]]"
 
-    result = VllmToolCallingClient(_config(), client=fake_openai).generate_json_messages(
-        messages=messages,
-        schema_name="final_answer",
-        schema={"type": "object", "properties": {"answer": {"type": "string"}}},
-    )
+    result = VllmToolCallingClient(
+        _config(), client=fake_openai
+    ).complete_markdown_messages(messages=messages)
 
-    assert result == {"answer": "ok"}
+    assert result == "The conclusion is routing balance. [[e1]]"
     assert fake_openai.requests == [
         {
             "model": "qwen-test",
             "messages": messages,
             "temperature": 0,
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "final_answer",
-                    "schema": {
-                        "type": "object",
-                        "properties": {"answer": {"type": "string"}},
-                    },
-                    "strict": True,
-                },
-            },
         }
     ]
+
+
+def test_complete_markdown_messages_rejects_blank_or_broken_transport(fake_openai):
+    """Breaks if an empty completion is treated as a valid answer."""
+    fake_openai.content = "   "
+
+    with pytest.raises(VllmToolCallingError):
+        VllmToolCallingClient(_config(), client=fake_openai).complete_markdown_messages(
+            messages=[{"role": "user", "content": "question"}]
+        )
+
+
+def test_stream_final_answer_yields_plain_text_deltas(fake_openai):
+    """Breaks if streaming silently drops a chunk or re-adds tools."""
+    messages = [{"role": "user", "content": "What is the conclusion?"}]
+
+    chunks = list(
+        VllmToolCallingClient(
+            _config(), client=fake_openai
+        ).stream_final_answer(messages=messages)
+    )
+
+    assert chunks == ["stream-1", "stream-2"]
+    assert fake_openai.requests == [
+        {
+            "model": "qwen-test",
+            "messages": messages,
+            "temperature": 0,
+            "stream": True,
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "configure",
+    [
+        lambda fake: setattr(fake, "stream_chunks", []),
+        lambda fake: setattr(fake, "stream_error_after_first", True),
+    ],
+)
+def test_stream_final_answer_fails_as_a_sanitized_service_error(
+    fake_openai, configure
+):
+    """Breaks if an empty or interrupted stream reaches the parser as an answer."""
+    configure(fake_openai)
+
+    with pytest.raises(VllmToolCallingError) as error:
+        list(
+            VllmToolCallingClient(
+                _config(), client=fake_openai
+            ).stream_final_answer(messages=[{"role": "user", "content": "question"}])
+        )
+
+    assert "provider-secret" not in _exception_chain_text(error.value)
 
 
 @pytest.mark.parametrize(

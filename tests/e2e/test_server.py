@@ -69,19 +69,6 @@ def test_assists_stream_and_save_selected_model_note(e2e_client, action, body, n
     assert [saved['id'] for saved in notes] == [note['id']]
 
 
-def test_graph_uses_real_uploaded_evidence(e2e_client):
-    paper_id = upload(e2e_client)
-    response = e2e_client.post(f'/api/papers/{paper_id}/graph/core', json={
-        'model_profile_id': profiles(e2e_client)[1]['id'], 'request_id': str(uuid4()),
-    })
-    assert response.status_code == 200, response.text
-    graph = e2e_client.get(f'/api/papers/{paper_id}/graph').json()
-    assert len(graph['nodes']) == 1
-    elements = e2e_client.get(f'/api/papers/{paper_id}/document').json()['elements']
-    assert set(graph['nodes'][0]['evidence_element_ids']) <= {item['id'] for item in elements}
-    assert graph['nodes'][0]['evidence_element_ids']
-
-
 def test_agent_reads_note_memory_and_switches_model_in_same_conversation(e2e_client):
     paper_id = upload(e2e_client)
     note = assist(e2e_client, paper_id)

@@ -2,7 +2,7 @@
 
 ## OpenAI-compatible 接口兼容（2026-09-11）
 
-结构化生成优先请求 `json_schema`。仅当服务返回 HTTP 400 且明确表示不支持 `json_schema` 时，以 `json_object` 再请求一次，并把目标 Schema 加入系统指令；其他错误不降级。图谱抽取和 Agent 最终回答共享此路径，仍通过本地 JSON Schema 做传输结构解析；Agent 不再使用 Citation Guard 拦截或改写模型回答，引用只用于可选的页面跳转。
+结构化生成优先请求 `json_schema`。仅当服务返回 HTTP 400 且明确表示不支持 `json_schema` 时，以 `json_object` 再请求一次，并把目标 Schema 加入系统指令；其他错误不降级。这条路径现在只服务于档案页的能力探测；Agent 最终回答是 Markdown，不使用 `response_format`，也不会被 Citation Guard 拦截或改写，内联引用只用于可选的页面跳转。
 
 工具能力检测包含用户消息，避免部分接口拒绝只有系统消息的请求；实际工具调用仍使用 `parallel_tool_calls=False`。检测失败只表示本次未通过，可能是接口兼容、连接或响应格式问题，不直接断定模型没有该能力。更新服务后需在模型设置中重新测试，不能手动伪造能力状态。
 
@@ -19,18 +19,17 @@
 1. `POST /api/model-profiles` 新增档案。`api_key` 可选，本地未启用鉴权的 vLLM 可省略或写 `EMPTY`。
 2. `POST /api/model-profiles/{id}/test` 探测三项能力并保存结果；只有已测试合格的档案才应参与对应任务。
 3. `POST /api/model-profiles/{id}/default` 把某个启用档案设为默认。
-4. 默认档案用于模型档案管理与 Agent 健康检查的默认解析；当前 Agent、图谱和选区辅助请求仍必须显式携带 `model_profile_id`，不会悄悄改用默认档案。
-5. `PATCH` 可停用档案，`DELETE` 是逻辑删除。删除后历史消息和构建记录仍保留各自的不含密钥模型快照。
+4. 默认档案用于模型档案管理与 Agent 健康检查的默认解析；当前 Agent 与选区辅助请求仍必须显式携带 `model_profile_id`，不会悄悄改用默认档案。
+5. `PATCH` 可停用档案，`DELETE` 是逻辑删除。删除后历史消息仍保留各自的不含密钥模型快照。
 
 ## 能力要求
 
 | 功能 | 必需能力 |
 |---|---|
 | 解释 / 翻译选区 | 基础对话 |
-| 知识图谱构建 | 结构化输出 |
-| 论文助手 | 结构化输出 + 工具调用 |
+| 论文助手 | 工具调用 |
 
-数据库档案在请求开始时检查能力；能力不足会在写入任何处理状态前返回 `409`。只读环境变量档案不执行能力门禁，直接尝试调用，由运行时错误兜底。能力测试本身会写回档案能力与修订号，不能视为纯读取操作。
+数据库档案在请求开始时检查能力；能力不足会在写入任何处理状态前返回 `409`。Agent 回答是 Markdown，不再依赖 `response_format`，所以 `structured output` 只作为档案页的能力展示，不参与聊天门禁。只读环境变量档案不执行能力门禁，直接尝试调用，由运行时错误兜底。能力测试本身会写回档案能力与修订号，不能视为纯读取操作。
 
 修改 `base_url`、`model_name` 或替换密钥会清空已保存的能力结果并递增修订号，需要重新测试。只改展示名、默认状态等展示字段不会清空能力结果。
 
@@ -87,18 +86,19 @@ curl -X POST http://127.0.0.1:8000/api/papers/<paper-id>/agent/messages \
   }'
 ```
 
-知识图谱构建同样传模型和请求标识；重复的已完成 `request_id` 直接重放，不再次调用模型：
+前端使用流式端点，逐段渲染回答；重复的已完成 `request_id` 只重放已保存的回合，不再次调用模型：
 
 ```bash
-curl -X POST http://127.0.0.1:8000/api/papers/<paper-id>/graph/core \
+curl -N -X POST http://127.0.0.1:8000/api/papers/<paper-id>/agent/messages/stream \
   -H "Content-Type: application/json" \
   -d '{
+    "content": "这篇文章解决了什么问题？",
     "model_profile_id": "<profile-id>",
-    "request_id": "6d8e9554-c42a-4dd3-8b4e-76a9f37e76db"
+    "request_id": "8ef96cf9-75be-4ab9-97af-b4a93c3d4b12"
   }'
 ```
 
-会话内切换模型只需在下一条消息中使用不同的 `model_profile_id`；`conversation_id` 不变，不会清空历史或新建会话。每条助手消息、图谱阶段、AI 笔记与选区辅助请求都会保存当次请求的不可变模型快照。
+会话内切换模型只需在下一条消息中使用不同的 `model_profile_id`；`conversation_id` 不变，不会清空历史或新建会话。每条助手消息、AI 笔记与选区辅助请求都会保存当次请求的不可变模型快照。
 
 `ReasoningClientProvider` 按档案 ID 和 revision 解析 chat、structured、tool 三类客户端；缓存键同样包含 revision。因此档案更新不会改写正在进行或历史请求的来源。请求期间 `ModelProfileService.usage_lease()` 阻止删除正在使用的可写档案；删除返回 `409 profile_in_use` 时应稍后再试。
 

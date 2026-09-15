@@ -105,7 +105,7 @@ $env:PAPER_AGENT_REASONING_API_KEY = "EMPTY"
 
 测试不连接真实模型。现有集成测试通过替换 `app.state.reasoning_client_provider` / `app.state.model_profile_service`，或 monkeypatch `ReasoningClientProvider` 创建的 `VllmChatClient`、`VllmToolCallingClient`，注入确定性的 fake client。例如 `tests/integration/test_selection_assists_api.py` 替换 chat client，`tests/integration/test_agent_api.py` 替换请求级 provider 与 tool client。fake 必须返回与测试场景相符的普通文本、严格 JSON 或工具回合，不能用网络 mock 掩盖协议问题。
 
-vLLM 联调失败时先在模型档案的测试操作中查看三项能力：basic chat、structured output、tool calling。前两项失败通常说明服务地址、模型名、鉴权或 JSON schema 支持不匹配；仅工具调用失败时，检查服务端是否为该模型启用了适配的 chat template 与 tool-call parser，并确认其 OpenAI-compatible 返回中含可解析的 tool calls。项目客户端要求：图谱使用严格 `json_schema`，Agent 使用严格 JSON 和单工具调用（`parallel_tool_calls=False`）。能力未满足时不要绕过门禁硬接主 Agent。
+vLLM 联调失败时先在模型档案的测试操作中查看三项能力：basic chat、structured output、tool calling。前两项失败通常说明服务地址、模型名、鉴权或 JSON schema 支持不匹配；仅工具调用失败时，检查服务端是否为该模型启用了适配的 chat template 与 tool-call parser，并确认其 OpenAI-compatible 返回中含可解析的 tool calls。项目客户端要求：Agent 使用工具调用（请求里带 `parallel_tool_calls=False`，但 provider 可能忽略它，运行时按批处理并截断到预算上限）；能力探测里的结构化输出检查使用严格 `json_schema`。能力未满足时不要绕过门禁硬接主 Agent。
 
 ## 文档与变更入口
 

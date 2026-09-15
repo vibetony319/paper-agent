@@ -1,7 +1,24 @@
 import { ApiError, readApiError } from './client';
-import type { SelectionAssistEvent, SelectionAssistInput } from './types';
+import type {
+  AgentStreamEvent,
+  AskAgentInput,
+  SelectionAssistEvent,
+  SelectionAssistInput,
+} from './types';
 
-const KNOWN_EVENTS = new Set(['started', 'delta', 'completed', 'error']);
+interface StreamConfig {
+  known: ReadonlySet<string>;
+  label: string;
+}
+
+const ASSIST_STREAM: StreamConfig = {
+  known: new Set(['started', 'delta', 'completed', 'error']),
+  label: 'Selection assist',
+};
+const AGENT_STREAM: StreamConfig = {
+  known: new Set(['started', 'delta', 'completed', 'error']),
+  label: 'Paper agent',
+};
 
 function abortError(signal: AbortSignal): unknown {
   return signal.reason ?? new DOMException('The operation was aborted.', 'AbortError');
@@ -25,7 +42,7 @@ function drainFrames(buffer: string): { frames: string[]; rest: string } {
   return { frames, rest };
 }
 
-function parseFrame(frame: string): SelectionAssistEvent | null {
+function parseFrame(frame: string, config: StreamConfig): { event: string; data: unknown } | null {
   let event: string | null = null;
   const dataLines: string[] = [];
   for (const rawLine of frame.split('\n')) {
@@ -42,10 +59,10 @@ function parseFrame(frame: string): SelectionAssistEvent | null {
   if (event === null && dataLines.length === 0) {
     return null;
   }
-  if (event === null || !KNOWN_EVENTS.has(event)) {
+  if (event === null || !config.known.has(event)) {
     throw new ApiError(
       0,
-      'Selection assist stream returned an unknown event.',
+      `${config.label} stream returned an unknown event.`,
       'unknown_event',
     );
   }
@@ -55,17 +72,18 @@ function parseFrame(frame: string): SelectionAssistEvent | null {
   } catch {
     throw new ApiError(
       0,
-      'Selection assist stream returned invalid event data.',
+      `${config.label} stream returned invalid event data.`,
       'invalid_event_data',
     );
   }
-  return { event, data } as SelectionAssistEvent;
+  return { event, data };
 }
 
-export async function* parseSse(
+export async function* parseSse<T>(
   stream: ReadableStream<Uint8Array>,
   signal?: AbortSignal,
-): AsyncGenerator<SelectionAssistEvent> {
+  config: StreamConfig = ASSIST_STREAM,
+): AsyncGenerator<T> {
   const reader = stream.getReader();
   const abortListener = () => {
     void reader.cancel().catch(() => undefined);
@@ -84,18 +102,18 @@ export async function* parseSse(
       const drained = drainFrames(buffer);
       buffer = drained.rest;
       for (const frame of drained.frames) {
-        const event = parseFrame(frame);
+        const event = parseFrame(frame, config);
         if (event !== null) {
-          yield event;
+          yield event as T;
         }
       }
     }
     throwIfAborted(signal);
     buffer += decoder.decode();
     if (buffer.trim() !== '') {
-      const event = parseFrame(buffer);
+      const event = parseFrame(buffer, config);
       if (event !== null) {
-        yield event;
+        yield event as T;
       }
     }
   } catch (error) {
@@ -109,20 +127,18 @@ export async function* parseSse(
   }
 }
 
-export async function* streamSelectionAssist(
-  paperId: string,
-  input: SelectionAssistInput,
+async function* streamEndpoint<T>(
+  path: string,
+  input: unknown,
   signal: AbortSignal,
-): AsyncGenerator<SelectionAssistEvent> {
-  const response = await fetch(
-    `/api/papers/${encodeURIComponent(paperId)}/selection-assists`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(input),
-      signal,
-    },
-  );
+  config: StreamConfig,
+): AsyncGenerator<T> {
+  const response = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+    signal,
+  });
 
   if (!response.ok) {
     throw await readApiError(response);
@@ -132,7 +148,7 @@ export async function* streamSelectionAssist(
   if (!contentType.toLowerCase().includes('text/event-stream')) {
     throw new ApiError(
       response.status,
-      'Selection assist response is not an event stream.',
+      `${config.label} response is not an event stream.`,
       'invalid_content_type',
     );
   }
@@ -140,10 +156,36 @@ export async function* streamSelectionAssist(
   if (response.body === null) {
     throw new ApiError(
       response.status,
-      'Selection assist response has no body.',
+      `${config.label} response has no body.`,
       'empty_event_stream',
     );
   }
 
-  yield* parseSse(response.body, signal);
+  yield* parseSse<T>(response.body, signal, config);
+}
+
+export async function* streamSelectionAssist(
+  paperId: string,
+  input: SelectionAssistInput,
+  signal: AbortSignal,
+): AsyncGenerator<SelectionAssistEvent> {
+  yield* streamEndpoint<SelectionAssistEvent>(
+    `/api/papers/${encodeURIComponent(paperId)}/selection-assists`,
+    input,
+    signal,
+    ASSIST_STREAM,
+  );
+}
+
+export async function* streamAgentMessage(
+  paperId: string,
+  input: AskAgentInput,
+  signal: AbortSignal,
+): AsyncGenerator<AgentStreamEvent> {
+  yield* streamEndpoint<AgentStreamEvent>(
+    `/api/papers/${encodeURIComponent(paperId)}/agent/messages/stream`,
+    input,
+    signal,
+    AGENT_STREAM,
+  );
 }

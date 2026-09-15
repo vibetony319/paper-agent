@@ -22,39 +22,6 @@ class AgentMessageRole(StrEnum):
     assistant = "assistant"
 
 
-class GraphStage(StrEnum):
-    core = "stage2"
-    deep = "stage3"
-
-
-CORE_NODE_TYPES = frozenset({"problem", "contribution", "claim", "method", "experiment"})
-DEEP_NODE_TYPES = frozenset(
-    {"component", "concept", "dataset", "metric", "result", "ablation", "limitation"}
-)
-RELATION_TYPES = frozenset(
-    {
-        "addresses",
-        "part_of",
-        "uses",
-        "compares_with",
-        "evaluated_on",
-        "measured_by",
-        "produces",
-        "tests",
-        "supports",
-        "contradicts",
-        "defines",
-        "illustrates",
-        "related_to",
-    }
-)
-
-
-def normalize_graph_node_name(name: str) -> str:
-    """Return the durable identity used for graph-node names."""
-    return " ".join(normalize("NFKC", name).split()).casefold()
-
-
 def _require_nonempty_trimmed(value: str, label: str) -> None:
     if not isinstance(value, str) or not value or value != value.strip():
         raise ValueError(f"{label} must be nonempty and trimmed")
@@ -74,53 +41,6 @@ def _require_evidence_ids(evidence_element_ids: tuple[str, ...]) -> None:
         raise ValueError("evidence element IDs must be nonempty and trimmed")
     if len(set(evidence_element_ids)) != len(evidence_element_ids):
         raise ValueError("evidence element IDs must be unique")
-
-
-@dataclass(frozen=True)
-class GraphNode:
-    node_type: str
-    name: str
-    summary: str
-    stage: GraphStage
-    evidence_element_ids: tuple[str, ...]
-    id: str = field(default_factory=lambda: str(uuid4()))
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.stage, GraphStage):
-            raise ValueError("stage must be a GraphStage")
-        allowed_types = CORE_NODE_TYPES if self.stage is GraphStage.core else DEEP_NODE_TYPES
-        if self.node_type not in allowed_types:
-            raise ValueError("node type is not allowed for graph stage")
-        _require_nonempty_trimmed(self.name, "name")
-        _require_nonempty_trimmed(self.summary, "summary")
-        _require_evidence_ids(self.evidence_element_ids)
-
-
-@dataclass(frozen=True)
-class GraphEdge:
-    source_node_id: str
-    target_node_id: str
-    relation_type: str
-    stage: GraphStage
-    evidence_element_ids: tuple[str, ...]
-    id: str = field(default_factory=lambda: str(uuid4()))
-
-    def __post_init__(self) -> None:
-        if not isinstance(self.stage, GraphStage):
-            raise ValueError("stage must be a GraphStage")
-        _require_nonempty_trimmed(self.source_node_id, "source node ID")
-        _require_nonempty_trimmed(self.target_node_id, "target node ID")
-        if self.source_node_id == self.target_node_id:
-            raise ValueError("edge endpoints must be different")
-        if self.relation_type not in RELATION_TYPES:
-            raise ValueError("relation type is not allowed")
-        _require_evidence_ids(self.evidence_element_ids)
-
-
-@dataclass(frozen=True)
-class PaperGraph:
-    nodes: tuple[GraphNode, ...]
-    edges: tuple[GraphEdge, ...]
 
 
 @dataclass(frozen=True)
