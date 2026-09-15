@@ -21,6 +21,8 @@
 | 前端构建 | `web/` | `npm run build` | 已执行 `npm ci` | TypeScript 检查和 Vite 构建通过。 |
 | 文档检查 | 仓库根目录 | `git diff --check -- docs` | 无 | 无空白错误。 |
 | 浏览器 E2E | `web/` | `npm run test:e2e` | 已安装 Playwright Chromium；本地 Python 开发环境 | 桌面与小屏流程通过；不调用真实模型。 |
+| 流式（本地） | 仓库根目录 | `./.venv/Scripts/python.exe scripts/verify_stream_http.py` | 无网络、无真实模型（自带兼容桩与运行时生成的 PDF） | 增量分片、事件顺序、背景分段、重放与非流式一致性通过。 |
+| 流式（真实模型） | 仓库根目录 | `./.venv/Scripts/python.exe scripts/verify_stream_real.py --turns 4` | 真实模型服务与密钥、可选真实论文 | 打印 `ALL STREAMING TURNS PASSED`；provider 不可用时说明原因并退出。 |
 
 为避免 shell 方言混淆，后端命令的可复制版本如下。
 
@@ -54,6 +56,15 @@ POSIX shell：
 - 当验证 HTTP 行为时，使用 TestClient 与实际路由，而不是只断言私有辅助函数。
 
 真实模型手工检查前，先通过 `POST /api/model-profiles/{profile_id}/test` 或 `POST /api/agent/health` 验证能力。只使用本地测试档案和非敏感示例；将实际模型响应视为人工观察，不写入测试断言或文档基线。
+
+## 流式验证脚本
+
+in-process `TestClient` 看不出分片是否真的逐步到达（它会等到响应结束），`scripts/` 下两个脚本在真实 HTTP 栈上验证这一点，失败时以非零退出码结束并打印 `FAILURES` 明细：
+
+- `scripts/verify_stream_http.py`：自带 OpenAI 兼容桩模型与运行时生成的合成 PDF，无网络也能运行，覆盖增量到达（`spread <= 0` 即判为"一次性缓冲送达"）、事件顺序、`---` 背景分段、重复请求重放、非流式端点一致性与落库角色顺序。
+- `scripts/verify_stream_real.py`：对真实 provider 重复同一套契约。provider 取自 `PAPER_AGENT_REASONING_BASE_URL`、`PAPER_AGENT_REASONING_MODEL`（或 `--model`）与 `PAPER_AGENT_REASONING_API_KEY`，密钥只留在本机环境；默认上传运行时生成的合成 PDF，用 `--pdf` 指定真实论文。能力探测未通过时以退出码 2 结束并原样打印 provider 的报错（例如配额用尽或服务不可用），这属于环境状态而非产品缺陷。仅当回答自身标记为 `grounded` 时才要求内联引用与引用落库，因此合成样本上的 `insufficient_evidence` 回答不会造成误报。
+
+脚本不写入用户运行数据：每次运行使用系统临时目录作为数据目录，也不提交任何二进制论文。
 
 ## Playwright 使用与隔离
 

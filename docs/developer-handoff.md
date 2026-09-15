@@ -16,6 +16,7 @@
 - 验证：后端 400 项、前端 217 项、`tsc` 无错、生产构建通过；真实 DeepSeek 三轮流式对话 + 重复请求重放 + 与非流式端点一致性通过；Playwright 完整套件 6 项全部通过（`selection-assist-regression` 与修正后的 `reader-workspace`，桌面与小屏两个 project），此前遗留的失败项随本轮一并清除。
 - **顺带修复的既有可访问性问题**：修复后的 `reader-workspace` 审计暴露 `--ink-faint` 在 `--paper` 背景上只有 4.46:1（WCAG AA 要求 4.5:1）。该 token 由 `#6f7672` 调深为 `#6b726e`（4.73:1，白色背景 4.93:1），仍明显浅于 `--ink-soft`，三级墨色层次不变。
 - 顺带清理：`web/e2e/reader-workspace.spec.ts` 移除已删除的图谱步骤、改等待 `/agent/messages/stream` 并在路由处理中缓冲流后解析 `completed` 帧；删除论文弹窗文案不再提"知识图谱"；仓库根目录 4 个针对已修复缺陷的临时验证产物（`capture_calls.json`、`capture_overview_failure.py`、`verify_fix_real*.py`）已删除。
+- **新增 `scripts/` 流式验证脚本**：`verify_stream_http.py`（自带兼容桩与合成 PDF，无网络运行，验证分片确实增量到达而非一次性缓冲）与 `verify_stream_real.py`（对真实 provider 验证同一套契约，provider 与密钥只取自 `PAPER_AGENT_REASONING_*` 环境变量，`--pdf` 可指定真实论文）。两者都不写用户运行数据，用法见[测试策略](testing.md)。
 
 ### 图谱移除与 Markdown 流式回答（2026-09-15）
 
