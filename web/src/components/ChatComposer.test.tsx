@@ -86,6 +86,29 @@ it('answers greetings locally and shows honest pending feedback for paper questi
   expect(screen.queryByText(/正在生成回答/)).not.toBeInTheDocument();
 });
 
+it('keeps an interrupted partial answer visible and can resend the question', async () => {
+  // Breaks if a mid-stream failure throws away the text the reader was reading.
+  const user = userEvent.setup();
+  const askAgent = vi.fn().mockResolvedValue(null);
+  const { rerender } = render(<ChatComposer paperId="paper-a" profiles={profiles} selectedModelProfileId="qwen"
+    onSelectedModelProfileIdChange={vi.fn()} askAgent={askAgent} attachment={null} onAttachmentClear={vi.fn()} />);
+
+  await user.type(screen.getByLabelText('向论文助手提问'), '这篇论文讲了什么');
+  await user.click(screen.getByRole('button', { name: '发送' }));
+  await waitFor(() => expect(askAgent).toHaveBeenCalledOnce());
+
+  rerender(<ChatComposer paperId="paper-a" profiles={profiles} selectedModelProfileId="qwen"
+    onSelectedModelProfileIdChange={vi.fn()} askAgent={askAgent} attachment={null} onAttachmentClear={vi.fn()}
+    streamingText={'论文提出了 InfoGain-RAG'} streamInterrupted />);
+
+  expect(screen.getByText('论文提出了 InfoGain-RAG')).toBeVisible();
+  expect(screen.getByText('回答已中断，以上为已生成的部分。')).toBeVisible();
+
+  await user.click(screen.getByRole('button', { name: '重新提问' }));
+  await waitFor(() => expect(askAgent).toHaveBeenCalledTimes(2));
+  expect(askAgent).toHaveBeenLastCalledWith('这篇论文讲了什么', 'qwen', undefined);
+});
+
 it('sends the selected model and attached selection, then clears the attachment only after success', async () => {
   const user = userEvent.setup();
   const askAgent = vi.fn().mockResolvedValue(response);

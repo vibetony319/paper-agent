@@ -1,7 +1,7 @@
 import { HttpResponse, http } from 'msw';
 import { expect, it, vi } from 'vitest';
 
-import { paperApi } from './client';
+import { paperApi, ApiError, apiErrorMessage } from './client';
 import { server } from '../test/server';
 import type { Highlight, ModelProfile, Note } from './types';
 
@@ -298,5 +298,22 @@ it('deletes a paper with an explicit confirmation and resolves undefined on 204'
 
   await expect(paperApi.deletePaper('paper-a', 'paper-a')).resolves.toBeUndefined();
   expect(receivedBody).toEqual({ confirmation: 'paper-a' });
+});
+
+it('reports the reason behind a failed stream instead of a generic fallback', () => {
+  // Breaks if a known stream code is replaced by the caller's generic wording.
+  expect(apiErrorMessage(new ApiError(0, '', 'agent_failed', null), '暂时无法获取助手回答。'))
+    .toBe('模型未能完成有效回答，请重试或在模型设置中重新测试。');
+  expect(apiErrorMessage(new ApiError(0, '', 'answer_unavailable', null), '暂时无法获取助手回答。'))
+    .toBe('回答已生成，但引用信息无法解析，请重试。');
+});
+
+it('never echoes server-supplied error text for an unknown code', () => {
+  // Breaks if an upstream message is surfaced verbatim in the reader.
+  const upstream = new ApiError(502, '', 'UPSTREAM_TIMEOUT', 'upstream timeout at 10.0.0.7');
+
+  expect(apiErrorMessage(upstream, '解释请求失败，请重试。')).toBe('解释请求失败，请重试。');
+  expect(apiErrorMessage(new Error('raw transport failure'), '解释请求失败，请重试。'))
+    .toBe('解释请求失败，请重试。');
 });
 

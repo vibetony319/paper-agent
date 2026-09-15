@@ -4,6 +4,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 import json
+import logging
 from threading import Lock
 from typing import Literal
 
@@ -117,6 +118,9 @@ class _RequestLockEntry:
     references: int = 0
 
 
+logger = logging.getLogger(__name__)
+
+
 class PaperAgentRuntime:
     def __init__(
         self,
@@ -214,7 +218,10 @@ class PaperAgentRuntime:
             except AgentRuntimeUnavailableError:
                 yield AgentStreamEvent("error", code="model_unavailable")
                 return
-            except Exception:
+            except Exception as error:
+                logger.warning(
+                    "agent turn preparation failed with %s", type(error).__name__
+                )
                 yield AgentStreamEvent("error", code="agent_failed")
                 return
 
@@ -230,13 +237,24 @@ class PaperAgentRuntime:
                         return
                     parts.append(chunk)
                     yield AgentStreamEvent("delta", text=chunk)
-            except Exception:
+            except Exception as error:
+                # Only the exception type is logged: provider text must not
+                # reach the client, and a truncated stream is otherwise silent.
+                logger.warning(
+                    "answer stream broke after %d chars with %s",
+                    generated_chars,
+                    type(error).__name__,
+                )
                 yield AgentStreamEvent("error", code="agent_failed")
                 return
 
             try:
                 turn = self._finalize(prepared, "".join(parts))
-            except Exception:
+            except Exception as error:
+                logger.warning(
+                    "finalizing the streamed answer failed with %s",
+                    type(error).__name__,
+                )
                 yield AgentStreamEvent("error", code="agent_failed")
                 return
             yield AgentStreamEvent("completed", turn=turn)

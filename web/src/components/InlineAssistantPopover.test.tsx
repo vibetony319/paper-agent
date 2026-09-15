@@ -54,6 +54,25 @@ it('keeps cancelled streamed text copyable without saving a partial note', async
   expect(screen.getByRole('button', { name: '复制' })).toBeEnabled();
 });
 
+it('shows that the answer is being generated before the first delta lands', async () => {
+  // Breaks if an empty popover reads as "the button did nothing".
+  const runSelectionAssist = vi.fn(() => new Promise<never>(() => {}));
+  render(
+    <InlineAssistantPopover
+      action="explain"
+      draft={draft}
+      toolbarRect={{ left: 20, top: 30, width: 80, height: 20 } as DOMRect}
+      modelProfileId="model-a"
+      runSelectionAssist={runSelectionAssist}
+      onDismiss={vi.fn()}
+    />,
+  );
+
+  await waitFor(() => expect(runSelectionAssist).toHaveBeenCalledOnce());
+  expect(screen.getByText('正在生成解释…')).toBeVisible();
+  expect(screen.getByRole('button', { name: '取消' })).toBeVisible();
+});
+
 it('starts once on mount and aborts an active request when the popover unmounts', async () => {
   const abort = vi.fn();
   const runSelectionAssist = vi.fn((_action, _draft, _model, _requestId, signal) => new Promise<{ status: 'cancelled'; text: string }>(() => {

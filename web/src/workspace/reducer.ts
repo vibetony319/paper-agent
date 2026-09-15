@@ -193,7 +193,7 @@ export function workspaceReducer(
       return isCurrentLoad(state, action.paperId, action.loadRevision)
         ? {
           ...state,
-          streaming: { question: action.question, text: '' },
+          streaming: { question: action.question, text: '', interrupted: false },
           errorMessage: null,
         }
         : state;
@@ -203,8 +203,15 @@ export function workspaceReducer(
         ? { ...state, streaming: { ...state.streaming, text: state.streaming.text + action.text } }
         : state;
     case 'conversation/stream-failed':
+      // Keep whatever the model already produced: discarding it loses the
+      // answer the reader was already reading.
       return isCurrentLoad(state, action.paperId, action.loadRevision)
-        ? { ...state, streaming: null }
+        ? {
+          ...state,
+          streaming: state.streaming === null
+            ? null
+            : { ...state.streaming, interrupted: true },
+        }
         : state;
     case 'notes/created':
       return isCurrentLoad(state, action.paperId, action.loadRevision)

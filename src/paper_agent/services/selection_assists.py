@@ -3,6 +3,7 @@
 from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import StrEnum
+import logging
 from typing import Literal
 
 from paper_agent.annotation_storage import PaperAnnotationRepository
@@ -16,6 +17,9 @@ from paper_agent.schemas import NoteResponse
 class SelectionAssistAction(StrEnum):
     explain = "explain"
     translate = "translate"
+
+
+logger = logging.getLogger(__name__)
 
 
 SelectionAssistEventName = Literal["started", "delta", "completed", "error"]
@@ -152,7 +156,12 @@ class SelectionAssistService:
         except GeneratorExit:
             self.repository.fail_selection_assist(paper_id, request_id)
             raise
-        except Exception:
+        except Exception as error:
+            logger.warning(
+                "selection assist %s failed with %s",
+                request_id,
+                type(error).__name__,
+            )
             self.repository.fail_selection_assist(paper_id, request_id)
             yield SelectionAssistEvent(
                 "error",

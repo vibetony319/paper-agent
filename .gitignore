@@ -29,6 +29,7 @@ web/playwright-report/
 # Isolated feature workspaces
 .worktrees/
 .superpowers/sdd/2026-08-13-web-ui/
+.zcode/
 
 # Editor and operating-system files
 .DS_Store

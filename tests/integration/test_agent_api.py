@@ -6,6 +6,7 @@ from threading import Event
 from uuid import uuid4
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import delete, event, func, select
 
@@ -25,6 +26,7 @@ from paper_agent.domain import (
 )
 from paper_agent.models import VllmToolCall, VllmToolCallingError, VllmToolTurn
 from paper_agent.model_profiles import ModelCapabilities, ModelProfile, ModelProfileChanges
+from paper_agent.routes import agent as agent_routes
 from paper_agent.services.agent_runtime import PaperAgentRuntime
 from paper_agent.services.model_profiles import ModelProfileService
 from paper_agent.services.reasoning_clients import ReasoningClientResolutionError
@@ -1360,6 +1362,33 @@ def test_agent_stream_reports_a_provider_failure_as_an_error_event(
     assert events[-1][1]["code"] == "agent_failed"
     assert "raw-stream-provider-secret" not in response.text
     assert _chat_row_counts(client.app.state.paper_repository) == (1, 1)
+
+
+def test_agent_stream_reports_an_unresolvable_citation_as_an_error_event(
+    client: TestClient, uploaded_paper: UploadedPaper, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Breaks if a citation lookup failure truncates the stream with no event."""
+    fake = _grounded_tool_flow(uploaded_paper)
+    fake.stream_chunks = None
+    _configure_fake_agent_runtime(client.app, fake)
+
+    def fail_citation_response(*args: object, **kwargs: object) -> None:
+        raise HTTPException(
+            status_code=502, detail="Reasoning model could not complete the request."
+        )
+
+    monkeypatch.setattr(agent_routes, "_agent_message_response", fail_citation_response)
+
+    response = client.post(
+        f"/api/papers/{uploaded_paper.id}/agent/messages/stream",
+        json=_agent_payload("Explain the method."),
+    )
+
+    assert response.status_code == 200
+    events = _stream_events(response)
+    assert [name for name, _ in events] == ["started", "delta", "error"]
+    assert events[-1][1]["code"] == "answer_unavailable"
+    assert "Reasoning model could not complete the request." not in response.text
 
 
 def test_agent_stream_keeps_request_errors_outside_the_event_stream(

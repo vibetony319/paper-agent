@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react';
 
-import { ApiError, paperApi, publicApiMessage } from '../api/client';
+import { ApiError, apiErrorMessage, paperApi } from '../api/client';
+import { newRequestId } from '../api/ids';
 import { streamAgentMessage, streamSelectionAssist } from '../api/sse';
 import type { AgentMessage, Citation, HighlightColor, SelectionAssistAction, TextAnchorDraft } from '../api/types';
 import {
@@ -13,8 +14,8 @@ function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
 }
 
-function publicWorkspaceError(_error: unknown, fallback: string): string {
-  return publicApiMessage(fallback);
+function publicWorkspaceError(error: unknown, fallback: string): string {
+  return apiErrorMessage(error, fallback);
 }
 
 function selectionAssistFailureMessage(action: SelectionAssistAction): string {
@@ -165,7 +166,7 @@ export function usePaperWorkspace(
         content,
         conversation_id: conversationId ?? undefined,
         model_profile_id: modelProfileId,
-        request_id: crypto.randomUUID(),
+        request_id: newRequestId(),
         ...(selection === undefined ? {} : { selection }),
       }, controller.signal)) {
         if (event.event === 'delta') {
@@ -194,6 +195,10 @@ export function usePaperWorkspace(
       });
       return message;
     } catch (error) {
+      if (agentStreamController.current !== controller) {
+        // A newer question superseded this stream; its own result stands.
+        return null;
+      }
       dispatch({
         type: 'conversation/stream-failed',
         paperId,
@@ -234,7 +239,7 @@ export function usePaperWorkspace(
         body,
         element_id: elementId,
         page_number: pageNumber,
-        ...(anchor === undefined ? {} : { anchor, request_id: crypto.randomUUID() }),
+        ...(anchor === undefined ? {} : { anchor, request_id: newRequestId() }),
       }, { signal: workspaceLifetimeController.current.signal });
       const noteMutationGeneration = notesMutationGeneration.current + 1;
       notesMutationGeneration.current = noteMutationGeneration;
@@ -292,7 +297,16 @@ export function usePaperWorkspace(
           }
           return { status: 'completed' as const, text: event.data.note.body };
         }
-        if (event.event === 'error') return { status: 'failed' as const, text, message: publicApiMessage(selectionAssistFailureMessage(action)) };
+        if (event.event === 'error') {
+          return {
+            status: 'failed' as const,
+            text,
+            message: apiErrorMessage(
+              new ApiError(0, '', event.data.code, event.data.detail),
+              selectionAssistFailureMessage(action),
+            ),
+          };
+        }
       }
       return {
         status: 'failed' as const,
@@ -357,7 +371,7 @@ export function usePaperWorkspace(
       const highlight = await paperApi.createHighlight(paperId, {
         ...state.selection.draft,
         color: 'yellow',
-        request_id: crypto.randomUUID(),
+        request_id: newRequestId(),
       });
       const mutationGeneration = highlightsMutationGeneration.current + 1;
       highlightsMutationGeneration.current = mutationGeneration;

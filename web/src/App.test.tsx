@@ -177,7 +177,7 @@ it('uses a focused library view and returns there after permanent deletion', asy
   await user.click(screen.getByRole('button', { name: '打开 routing-paper.pdf' }));
   await user.click(screen.getByRole('button', { name: '论文操作' }));
   await user.click(screen.getByRole('menuitem', { name: '删除论文' }));
-  expect(screen.getByText('PDF、解析结果、知识图谱、高亮、笔记和对话将被永久删除。')).toBeVisible();
+  expect(screen.getByText('PDF、解析结果、高亮、笔记和对话将被永久删除。')).toBeVisible();
 
   await user.click(screen.getByRole('button', { name: '确认永久删除' }));
 
