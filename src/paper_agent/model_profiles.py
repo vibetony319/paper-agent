@@ -67,6 +67,8 @@ class ModelCapabilities:
     basic_chat: bool = False
     structured_output: bool = False
     tool_calling: bool = False
+    max_context_length: int | None = None
+    max_output_length: int | None = None
     checked_at: datetime | None = None
 
     def __post_init__(self) -> None:
@@ -76,6 +78,10 @@ class ModelCapabilities:
                 "checked_at",
                 _normalized_public_datetime(self.checked_at, "capabilities checked_at"),
             )
+        if self.max_context_length is not None and self.max_context_length <= 0:
+            raise ValueError("max_context_length must be positive")
+        if self.max_output_length is not None and self.max_output_length <= 0:
+            raise ValueError("max_output_length must be positive")
 
 
 @dataclass(frozen=True)

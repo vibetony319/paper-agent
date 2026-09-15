@@ -71,6 +71,8 @@ export function ModelSettingsDialog({
   const [baseUrl, setBaseUrl] = useState('');
   const [modelName, setModelName] = useState('');
   const [apiKey, setApiKey] = useState('');
+  const [maxContextLength, setMaxContextLength] = useState<number | ''>('');
+  const [maxOutputLength, setMaxOutputLength] = useState<number | ''>('');
   const [isDefault, setIsDefault] = useState(false);
   const [clearApiKey, setClearApiKey] = useState(false);
 
@@ -109,6 +111,8 @@ export function ModelSettingsDialog({
     setBaseUrl('');
     setModelName('');
     setApiKey('');
+    setMaxContextLength('');
+    setMaxOutputLength('');
     setIsDefault(false);
     setClearApiKey(false);
   };
@@ -136,6 +140,8 @@ export function ModelSettingsDialog({
     setBaseUrl(profile.base_url);
     setModelName(profile.model_name);
     setApiKey('');
+    setMaxContextLength(profile.capabilities.max_context_length ?? '');
+    setMaxOutputLength(profile.capabilities.max_output_length ?? '');
     setIsDefault(profile.is_default);
     setClearApiKey(false);
     setErrorMessage(null);

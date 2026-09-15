@@ -372,6 +372,8 @@ class ModelCapabilitiesResponse(BaseModel):
     basic_chat: bool
     structured_output: bool
     tool_calling: bool
+    max_context_length: int | None
+    max_output_length: int | None
     checked_at: datetime | None
 
     @classmethod
@@ -382,6 +384,8 @@ class ModelCapabilitiesResponse(BaseModel):
             basic_chat=capabilities.basic_chat,
             structured_output=capabilities.structured_output,
             tool_calling=capabilities.tool_calling,
+            max_context_length=capabilities.max_context_length,
+            max_output_length=capabilities.max_output_length,
             checked_at=capabilities.checked_at,
         )
 

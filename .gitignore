@@ -1,41 +1,54 @@
-/.env
-.venv/
-__pycache__/
-*.py[cod]
-*.egg-info/
-.pytest_cache/
-*.tmp
-.mypy_cache/
-.ruff_cache/
-coverage.xml
-htmlcov/
-
-# Local application data and uploaded papers
-.paper-agent/
-.e2e-data/
-var/
-data/
-
-# JavaScript tooling (introduced with the WebUI increment)
+```gitignore
+# Dependencies
 node_modules/
-.next/
+
+# Build artifacts
 dist/
-web/.npm-cache/
-web/node_modules/
-web/dist/
-web/test-results/
-web/playwright-report/
+build/
+target/
 
-# Isolated feature workspaces
-.worktrees/
-.superpowers/sdd/2026-08-13-web-ui/
-.zcode/
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+.ENV
+.python-version
+.pytest_cache/
+.mypy_cache/
+.coverage
+coverage/
 
-# Editor and operating-system files
-.DS_Store
-Thumbs.db
+# Environment variables
+.env
+.env.local
+.env.*
+!.env.example
+
+# IDE and editor files
 .vscode/
 .idea/
+*.swp
+*.swo
+*.tmp
 
-# Runtime service logs
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Logs
 *.log
+
+# Compressed files
+*.zip
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.gz
+*.rar
+*.7z
+```

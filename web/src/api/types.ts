@@ -23,6 +23,8 @@ export interface ModelProfile {
     basic_chat: boolean;
     structured_output: boolean;
     tool_calling: boolean;
+    max_context_length: number | null;
+    max_output_length: number | null;
     checked_at: string | null;
   };
   read_only: boolean;
@@ -31,7 +33,11 @@ export interface ModelProfile {
 export type ModelProfileCreateInput = Pick<
   ModelProfile,
   'display_name' | 'base_url' | 'model_name' | 'enabled' | 'is_default'
-> & { api_key?: string };
+> & { 
+  api_key?: string;
+  max_context_length?: number | null;
+  max_output_length?: number | null;
+};
 
 export type ModelProfileUpdateInput = Partial<ModelProfileCreateInput> & {
   clear_api_key?: boolean;
