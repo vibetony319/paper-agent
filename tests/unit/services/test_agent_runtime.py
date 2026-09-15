@@ -343,7 +343,7 @@ def test_runtime_persists_user_before_model_then_only_the_final_answer(repositor
         turn.user_message,
         turn.assistant_message,
     )
-    assert client.tool_choices == ["required", "auto"]
+    assert client.tool_choices == ["auto", "auto"]
     assert client.final_requests[0]["schema"] == CitationGuard().output_schema()
     assert _chat_row_counts(repository)[2] == before_processing_rows
     assert "raw tool-planning prose" not in repr(
@@ -612,8 +612,9 @@ def test_runtime_sends_openai_tool_result_messages_with_returned_evidence_ids(re
     )
 
     final_messages = client.final_requests[0]["messages"]
-    assistant_tool_call = final_messages[-2]
-    tool_result = final_messages[-1]
+    assistant_tool_call = final_messages[-3]
+    tool_result = final_messages[-2]
+    assert final_messages[-1]["role"] == "system"
     assert assistant_tool_call["role"] == "assistant"
     assert assistant_tool_call["tool_calls"][0]["function"]["name"] == "search_paper"
     assert tool_result["role"] == "tool"
@@ -621,6 +622,73 @@ def test_runtime_sends_openai_tool_result_messages_with_returned_evidence_ids(re
     result_payload = json.loads(tool_result["content"])
     assert result_payload["evidence_element_ids"] == [paper.element_id]
     assert result_payload["content"]["elements"][0]["id"] == paper.element_id
+
+
+def test_final_json_request_is_closed_with_a_wrap_up_instruction_after_tools(
+    repository,
+):
+    """Breaks if the final JSON request ends on tool results and tool-trained models keep tool-calling."""
+    paper = _paper_with_stage1_document(repository)
+    client = FakeAgentClient(
+        turns=(
+            _tool_turn("search_paper", {"query": "router", "limit": 5}),
+            VllmToolTurn(content=None, tool_calls=()),
+        ),
+        final_payload=_grounded_payload(citations=[paper.element_id]),
+    )
+
+    _runtime(repository, client).ask(
+        paper_id=paper.id,
+        question=AgentQuestion(content="Explain it."),
+    )
+
+    final_messages = client.final_requests[0]["messages"]
+    assert final_messages[-1]["role"] == "system"
+    assert "final JSON answer" in final_messages[-1]["content"]
+    assert final_messages[-2]["role"] == "tool"
+    assert final_messages[-3]["role"] == "assistant"
+
+
+def test_wrap_up_instruction_follows_budget_exhausted_tool_results(repository):
+    """Breaks if the budget-exhausted final request ends on bare tool results."""
+    paper = _paper_with_stage1_document(repository)
+    turns = tuple(
+        _tool_turn(
+            "search_paper",
+            {"query": "router", "limit": 5},
+            call_id=f"call-{index}",
+        )
+        for index in range(6)
+    )
+    client = FakeAgentClient(
+        turns=turns,
+        final_payload=_grounded_payload(citations=[paper.element_id]),
+    )
+
+    _runtime(repository, client).ask(
+        paper_id=paper.id,
+        question=AgentQuestion(content="Keep searching."),
+    )
+
+    final_messages = client.final_requests[0]["messages"]
+    assert final_messages[-1]["role"] == "system"
+    assert final_messages[-2]["role"] == "tool"
+
+
+def test_final_json_request_keeps_user_ending_when_no_tool_ran(repository):
+    """The wrap-up instruction must not be appended without preceding tool results."""
+    paper = _paper_with_stage1_document(repository)
+    client = FakeAgentClient(
+        final_payload=_grounded_payload(citations=[paper.element_id])
+    )
+
+    _runtime(repository, client).ask(
+        paper_id=paper.id,
+        question=AgentQuestion(content="Question"),
+    )
+
+    final_messages = client.final_requests[0]["messages"]
+    assert final_messages[-1] == {"role": "user", "content": "Question"}
 
 
 def test_agent_injects_relevant_notes_and_returns_note_references(repository):
@@ -1008,7 +1076,7 @@ def test_runtime_stops_after_six_single_tool_turns(repository):
     )
 
     assert turn.answer.status == "grounded"
-    assert client.tool_choices == ["required", "auto", "auto", "auto", "auto", "auto"]
+    assert client.tool_choices == ["auto", "auto", "auto", "auto", "auto", "auto"]
     assert len(client.remaining_turns) == 1
     assert len(client.final_requests) == 1
 
@@ -1067,8 +1135,9 @@ def test_runtime_executes_batched_read_tools_sequentially_with_matching_results(
         question=AgentQuestion(content='Explain'))
     assert turn.answer.status == 'grounded'
     messages = client.final_requests[0]['messages']
-    assert [c['id'] for c in messages[-3]['tool_calls']] == ['one','two']
-    assert [m['tool_call_id'] for m in messages[-2:]] == ['one','two']
+    assert [c['id'] for c in messages[-4]['tool_calls']] == ['one','two']
+    assert [m['tool_call_id'] for m in messages[-3:-1]] == ['one','two']
+    assert messages[-1]['role'] == 'system'
 
 
 def test_runtime_rejects_malformed_final_contract_without_persisting_model_content(

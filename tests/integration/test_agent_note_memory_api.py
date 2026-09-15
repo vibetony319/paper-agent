@@ -34,7 +34,13 @@ class FakeToolClient:
         return SimpleNamespace(content=None, tool_calls=())
 
     def generate_json_messages(self, *, messages, **_kwargs):
-        tool_result = json.loads(messages[-1]["content"])
+        tool_result = json.loads(
+            next(
+                message["content"]
+                for message in reversed(messages)
+                if message["role"] == "tool"
+            )
+        )
         evidence_ids = tool_result["evidence_element_ids"]
         return {
             "status": "grounded",

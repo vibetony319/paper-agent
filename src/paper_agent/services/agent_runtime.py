@@ -28,6 +28,12 @@ from paper_agent.storage import PaperRepository
 MAX_TOOL_TURNS = 6
 HISTORY_MESSAGE_LIMIT = 6
 _FINAL_SCHEMA_NAME = "paper_agent_final_answer"
+# Some tool-trained models keep emitting tool-call text when the final JSON
+# request follows tool results directly, which fails the structured parse.
+_FINAL_ANSWER_INSTRUCTION = (
+    "Tool calling is complete. Based on the evidence above, respond with the "
+    "final JSON answer now; do not call any more tools."
+)
 _PREREQUISITE_ERROR = "Paper agent prerequisites are not complete."
 _UNAVAILABLE_ERROR = "Reasoning model is not configured."
 _RESPONSE_ERROR = "Reasoning model could not complete the request."
@@ -220,12 +226,12 @@ class PaperAgentRuntime:
                     allowed_evidence_ids.update(execution.evidence_element_ids)
                     executed_calls += 1
                 messages.append({'role':'system', 'content':'请用中文概括已有论文证据中的研究问题、方法和结论。只引用已读取的元素 ID；片段不足时说明范围，不要编造。'})
-            for tool_turn_index in range(0 if overview and allowed_evidence_ids else MAX_TOOL_TURNS):
+            for _ in range(0 if overview and allowed_evidence_ids else MAX_TOOL_TURNS):
                 try:
                     turn = client.request_tool_turn(
                         messages=messages,
                         tools=tool_definitions,
-                        tool_choice="required" if tool_turn_index == 0 and not allowed_evidence_ids else "auto",
+                        tool_choice="auto",
                     )
                     if len(turn.tool_calls) > MAX_TOOL_TURNS - executed_calls:
                         raise ValueError("tool call budget exceeded")
@@ -252,6 +258,11 @@ class PaperAgentRuntime:
                         break
                 except Exception:
                     raise AgentRuntimeResponseError(_RESPONSE_ERROR) from None
+
+            if messages[-1].get("role") == "tool":
+                messages.append(
+                    {"role": "system", "content": _FINAL_ANSWER_INSTRUCTION}
+                )
 
             try:
                 payload = client.generate_json_messages(
