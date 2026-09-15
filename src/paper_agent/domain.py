@@ -22,27 +22,6 @@ class AgentMessageRole(StrEnum):
     assistant = "assistant"
 
 
-def _require_nonempty_trimmed(value: str, label: str) -> None:
-    if not isinstance(value, str) or not value or value != value.strip():
-        raise ValueError(f"{label} must be nonempty and trimmed")
-
-
-def _require_evidence_ids(evidence_element_ids: tuple[str, ...]) -> None:
-    if not isinstance(evidence_element_ids, tuple):
-        raise ValueError("evidence element IDs must be a tuple")
-    if not evidence_element_ids:
-        raise ValueError("evidence element IDs are required")
-    if any(
-        not isinstance(element_id, str)
-        or not element_id
-        or element_id != element_id.strip()
-        for element_id in evidence_element_ids
-    ):
-        raise ValueError("evidence element IDs must be nonempty and trimmed")
-    if len(set(evidence_element_ids)) != len(evidence_element_ids):
-        raise ValueError("evidence element IDs must be unique")
-
-
 @dataclass(frozen=True)
 class BoundingBox:
     x0: float

@@ -1,5 +1,4 @@
 export type ProcessingStatus = 'queued' | 'running' | 'completed' | 'partial' | 'failed';
-export type AgentMessageRole = 'user' | 'assistant';
 export type NoteType = 'manual' | 'explanation' | 'translation';
 
 export interface ModelSnapshot {
@@ -190,19 +189,6 @@ export interface AgentMessage {
   citations: Citation[];
   model?: ModelSnapshot | null;
   note_references?: NoteReference[];
-}
-
-export interface ConversationMessage {
-  id: string;
-  role: AgentMessageRole;
-  content: string;
-  citations: Citation[];
-}
-
-export interface Conversation {
-  id: string;
-  paper_id: string;
-  messages: ConversationMessage[];
 }
 
 export interface CreateNoteInput {

@@ -11,14 +11,9 @@ interface StreamConfig {
   label: string;
 }
 
-const ASSIST_STREAM: StreamConfig = {
-  known: new Set(['started', 'delta', 'completed', 'error']),
-  label: 'Selection assist',
-};
-const AGENT_STREAM: StreamConfig = {
-  known: new Set(['started', 'delta', 'completed', 'error']),
-  label: 'Paper agent',
-};
+const STREAM_EVENTS = new Set(['started', 'delta', 'completed', 'error']);
+const ASSIST_STREAM: StreamConfig = { known: STREAM_EVENTS, label: 'Selection assist' };
+const AGENT_STREAM: StreamConfig = { known: STREAM_EVENTS, label: 'Paper agent' };
 
 function abortError(signal: AbortSignal): unknown {
   return signal.reason ?? new DOMException('The operation was aborted.', 'AbortError');

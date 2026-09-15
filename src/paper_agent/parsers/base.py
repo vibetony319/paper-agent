@@ -1,6 +1,5 @@
 from dataclasses import dataclass
-from typing import Literal, Protocol
-from pathlib import Path
+from typing import Literal
 
 from paper_agent.domain import BoundingBox, Page
 
@@ -35,5 +34,3 @@ class Stage0Result:
     visual_elements: tuple[VisualElement, ...]
 
 
-class Stage0Parser(Protocol):
-    def parse(self, pdf_path: Path) -> Stage0Result: ...

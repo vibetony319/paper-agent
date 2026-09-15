@@ -11,7 +11,6 @@ from paper_agent.domain import Note
 from paper_agent.model_profiles import ModelSnapshot
 from paper_agent.models.vllm import VllmChatClient, VllmResponseError
 from paper_agent.schemas import NoteResponse
-from paper_agent.services.sse import sse_frame
 
 
 class SelectionAssistAction(StrEnum):
@@ -190,6 +189,3 @@ class SelectionAssistService:
             {"note": NoteResponse.from_note(note).model_dump(mode="json")},
         )
 
-
-def encode_sse(event: SelectionAssistEvent) -> bytes:
-    return sse_frame(event.event, event.payload)

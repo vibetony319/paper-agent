@@ -1,6 +1,5 @@
 import type {
   AnnotationBundle,
-  Conversation,
   CreateHighlightInput,
   CreateNoteInput,
   Highlight,
@@ -156,11 +155,6 @@ export const paperApi = {
     request<void>(
       `/api/papers/${encodeURIComponent(paperId)}/notes/${encodeURIComponent(noteId)}`,
       { ...jsonRequest('DELETE'), ...init },
-    ),
-
-  getConversation: (paperId: string, conversationId: string) =>
-    request<Conversation>(
-      `/api/papers/${encodeURIComponent(paperId)}/agent/conversations/${encodeURIComponent(conversationId)}`,
     ),
 
   listModelProfiles: () => request<ModelProfile[]>('/api/model-profiles'),

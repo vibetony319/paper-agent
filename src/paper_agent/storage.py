@@ -1093,15 +1093,6 @@ class PaperRepository:
             )
         )
 
-    def _next_processing_sequence(self, paper_id: str) -> int:
-        with self.engine.connect() as connection:
-            current = connection.execute(
-                select(func.max(processing_runs.c.sequence)).where(
-                    processing_runs.c.paper_id == paper_id
-                )
-            ).scalar_one()
-        return 0 if current is None else current + 1
-
     def _get_processing_statuses(
         self, paper_id: str, *, stage: str | None
     ) -> tuple[ProcessingStatus, ...]:

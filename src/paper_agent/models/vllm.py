@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 from jsonschema import Draft202012Validator
-from typing import TYPE_CHECKING, Any, Iterator
+from typing import TYPE_CHECKING, Iterator
 
 if TYPE_CHECKING:
     from openai import OpenAI
@@ -108,6 +108,35 @@ def _json_completion(client, *, model, messages, schema_name, schema):
     return result
 
 
+def _plain_completion(client, *, model: str, messages: list) -> str:
+    """Return the assistant text of one non-streaming completion."""
+    response = client.chat.completions.create(
+        model=model, messages=messages, temperature=0,
+    )
+    content = response.choices[0].message.content
+    if not isinstance(content, str) or not content.strip():
+        raise TypeError("completion has no text content")
+    return content
+
+
+def _streamed_completion(client, *, model: str, messages: list) -> Iterator[str]:
+    """Yield the text deltas of one streaming completion."""
+    stream = client.chat.completions.create(
+        model=model, messages=messages, temperature=0, stream=True,
+    )
+    yielded_text = False
+    for chunk in stream:
+        delta = chunk.choices[0].delta.content
+        if delta is None or delta == "":
+            continue
+        if not isinstance(delta, str):
+            raise TypeError("stream delta is not text")
+        yielded_text = True
+        yield delta
+    if not yielded_text:
+        raise TypeError("stream produced no text")
+
+
 class VllmChatClient:
     def __init__(self, config: VllmModelConfig, client: OpenAI | None = None) -> None:
         self.config = config
@@ -126,16 +155,11 @@ class VllmChatClient:
 
     def complete(self, messages: list[dict[str, str]]) -> str:
         failed = False
-        content: object = None
+        content: str = ""
         try:
-            response = self.client.chat.completions.create(
-                model=self.config.model,
-                messages=messages,
-                temperature=0,
+            content = _plain_completion(
+                self.client, model=self.config.model, messages=messages
             )
-            content = response.choices[0].message.content
-            if not isinstance(content, str) or not content.strip():
-                raise TypeError
         except Exception:
             failed = True
         if failed:
@@ -143,28 +167,17 @@ class VllmChatClient:
         return content
 
     def stream_text(self, messages: list[dict[str, str]]) -> Iterator[str]:
+        # Provider text must not reach the exception chain, so the error is
+        # raised after the except block instead of being chained to it.
         failed = False
-        yielded_text = False
         try:
-            stream = self.client.chat.completions.create(
-                model=self.config.model,
-                messages=messages,
-                temperature=0,
-                stream=True,
-            )
-            for chunk in stream:
-                delta = chunk.choices[0].delta.content
-                if delta is None:
-                    continue
-                if not isinstance(delta, str):
-                    raise TypeError
-                if not delta:
-                    continue
-                yielded_text = True
+            for delta in _streamed_completion(
+                self.client, model=self.config.model, messages=messages
+            ):
                 yield delta
         except Exception:
             failed = True
-        if failed or not yielded_text:
+        if failed:
             raise VllmResponseError("vLLM could not stream text generation.")
 
 
@@ -282,16 +295,11 @@ class VllmToolCallingClient:
     def complete_markdown_messages(self, *, messages: list[dict[str, object]]) -> str:
         """Return the final answer text of a turn that is already done with tools."""
         failed = False
-        content: object = None
+        content = ""
         try:
-            response = self.client.chat.completions.create(
-                model=self.config.model,
-                messages=messages,
-                temperature=0,
+            content = _plain_completion(
+                self.client, model=self.config.model, messages=messages
             )
-            content = response.choices[0].message.content
-            if not isinstance(content, str) or not content.strip():
-                raise TypeError
         except Exception:
             failed = True
         if failed:
@@ -303,27 +311,14 @@ class VllmToolCallingClient:
     ) -> Iterator[str]:
         """Stream the final Markdown answer of a turn that is done with tools."""
         failed = False
-        yielded_text = False
         try:
-            stream = self.client.chat.completions.create(
-                model=self.config.model,
-                messages=messages,
-                temperature=0,
-                stream=True,
-            )
-            for chunk in stream:
-                delta = chunk.choices[0].delta.content
-                if delta is None:
-                    continue
-                if not isinstance(delta, str):
-                    raise TypeError
-                if not delta:
-                    continue
-                yielded_text = True
+            for delta in _streamed_completion(
+                self.client, model=self.config.model, messages=messages
+            ):
                 yield delta
         except Exception:
             failed = True
-        if failed or not yielded_text:
+        if failed:
             raise VllmToolCallingError("vLLM could not stream the final answer.")
 
     def validate_tool_calling(self) -> None:

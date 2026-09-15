@@ -33,8 +33,8 @@ from paper_agent.services.selection_assists import (
     SelectionAssistAction,
     SelectionAssistEvent,
     SelectionAssistService,
-    encode_sse,
 )
+from paper_agent.services.sse import sse_frame
 from paper_agent.services.annotations import AnnotationService, draft_from_request
 
 
@@ -55,6 +55,10 @@ def _service(request: Request) -> AnnotationService:
 
 def _selection_assist_service(request: Request) -> SelectionAssistService:
     return request.app.state.selection_assist_service
+
+
+def _frame(event: SelectionAssistEvent) -> bytes:
+    return sse_frame(event.event, event.payload)
 
 
 def _provider(request: Request) -> ReasoningClientProvider:
@@ -268,7 +272,7 @@ def create_selection_assist(
     }
     if existing is not None and existing["status"] == "completed":
         return StreamingResponse(
-            (encode_sse(event) for event in assist_service.replay(paper_id, request_id)),
+            (_frame(event) for event in assist_service.replay(paper_id, request_id)),
             media_type="text/event-stream",
             headers=headers,
         )
@@ -288,16 +292,16 @@ def create_selection_assist(
                         model_snapshot=resolved.snapshot,
                         request_id=request_id,
                     ):
-                        yield encode_sse(event)
+                        yield _frame(event)
         except PaperDeletingError:
-            yield encode_sse(
+            yield _frame(
                 SelectionAssistEvent(
                     "error",
                     {"code": "paper_busy", "detail": "论文正在删除。"},
                 )
             )
         except ModelProfileNotFoundError:
-            yield encode_sse(
+            yield _frame(
                 SelectionAssistEvent(
                     "error",
                     {"code": "assist_failed", "detail": "模型档案不可用。"},
