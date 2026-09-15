@@ -2,7 +2,22 @@ import AxeBuilder from '@axe-core/playwright';
 import { resolve } from 'node:path';
 import { test, expect, api, filename, explanation, showPane, selectText, noHorizontalOverflow } from './testApi';
 
-test('选文、高亮、自动笔记、会话内换模型、图谱和永久删除', async ({ page, request, paperId }, info) => {
+type CompletedTurn = {
+  conversation_id: string;
+  model: { display_name: string };
+  note_references: unknown[];
+};
+
+/** Return the message carried by the ``completed`` frame of an SSE body. */
+function completedTurn(body: string): CompletedTurn {
+  const frame = body.split('\n\n').find((item) => item.includes('event: completed'));
+  if (frame === undefined) throw new Error(`the stream never completed: ${body.slice(0, 200)}`);
+  const data = frame.split('\n').find((line) => line.startsWith('data:'));
+  if (data === undefined) throw new Error('the completed frame carried no data');
+  return JSON.parse(data.slice('data:'.length).trim()).message as CompletedTurn;
+}
+
+test('选文、高亮、自动笔记、会话内换模型和永久删除', async ({ page, request, paperId }, info) => {
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await selectText(page, /^We introduce/, /^experts\.$/);
@@ -31,13 +46,22 @@ test('选文、高亮、自动笔记、会话内换模型、图谱和永久删�
   }
 
   await page.getByRole('tab', { name: '论文助手', exact: true }).click();
+  // Playwright cannot read a streamed response body after the fact, so the
+  // frames are captured by buffering the stream in a route handler.
+  let streamBody = '';
+  await page.route('**/agent/messages/stream', async (route) => {
+    const response = await route.fetch();
+    streamBody = await response.text();
+    await route.fulfill({ response, body: streamBody });
+  });
   const send = async () => {
     await page.getByRole('textbox', { name: '向论文助手提问' }).fill('负载均衡损失如何分配专家？');
-    const response = page.waitForResponse((r) => r.url().endsWith('/agent/messages') && r.request().method() === 'POST');
+    const response = page.waitForResponse((r) => r.url().endsWith('/agent/messages/stream') && r.request().method() === 'POST');
     await page.getByRole('button', { name: '发送', exact: true }).click();
     const result = await response;
     expect(result.ok()).toBeTruthy();
-    return result.json();
+    expect(result.headers()['content-type']).toContain('text/event-stream');
+    return completedTurn(streamBody);
   };
   const first = await send();
   expect(first.model.display_name).toBe('测试 Qwen');
@@ -69,23 +93,17 @@ test('选文、高亮、自动笔记、会话内换模型、图谱和永久删�
   await showPane(page, '论文');
   await expect(page.getByRole('button', { name: '清除证据定位' })).toBeVisible();
 
-  await showPane(page, '工具');
-  await page.getByRole('tab', { name: '知识图谱', exact: true }).click();
-  await page.getByRole('button', { name: '构建核心图谱', exact: true }).click();
-  await expect(page.getByText('构建模型：测试 DeepSeek', { exact: true })).toBeVisible();
-  await expect(page.getByText('负载均衡路由', { exact: true })).toBeVisible();
-
   await page.reload();
   await page.getByRole('button', { name: `打开 ${filename}`, exact: true }).click();
   await expect(page.getByRole('button', { name: /^高亮：/ }).first()).toBeVisible();
   await page.getByRole('button', { name: '论文操作', exact: true }).click();
   await page.getByRole('menuitem', { name: '删除论文' }).click();
   const dialog = page.getByRole('dialog', { name: '删除论文' });
-  await expect(dialog.getByText(/PDF、解析结果、知识图谱、高亮、笔记和对话/)).toBeVisible();
+  await expect(dialog.getByText(/PDF、解析结果、高亮、笔记和对话/)).toBeVisible();
   await dialog.getByRole('button', { name: '确认永久删除' }).click();
   await expect(page.getByRole('heading', { name: '论文库', exact: true })).toBeVisible();
   await expect(page.getByText('论文库中还没有论文。')).toBeVisible();
-  for (const suffix of ['', '/document', '/source', '/graph', '/annotations', `/agent/conversations/${first.conversation_id}`]) {
+  for (const suffix of ['', '/document', '/source', '/annotations', `/agent/conversations/${first.conversation_id}`]) {
     expect((await request.get(`${api}/api/papers/${paperId}${suffix}`)).status()).toBe(404);
   }
   expect(errors).toEqual([]);

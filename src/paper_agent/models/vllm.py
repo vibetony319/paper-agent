@@ -126,7 +126,12 @@ def _streamed_completion(client, *, model: str, messages: list) -> Iterator[str]
     )
     yielded_text = False
     for chunk in stream:
-        delta = chunk.choices[0].delta.content
+        # OpenAI-compatible providers close a stream with a usage-only chunk
+        # that carries no choices; it is bookkeeping, not answer text.
+        choices = getattr(chunk, "choices", None)
+        if not choices:
+            continue
+        delta = choices[0].delta.content
         if delta is None or delta == "":
             continue
         if not isinstance(delta, str):

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
+import { newRequestId } from '../api/ids';
 import type { SelectionAssistAction, TextAnchorDraft } from '../api/types';
 
 type AssistResult =
@@ -64,7 +65,7 @@ export function InlineAssistantPopover({
 
   const start = useCallback(async () => {
     if (modelProfileId === null || controller.current !== null) return;
-    requestId.current ??= crypto.randomUUID();
+    requestId.current ??= newRequestId();
     const nextController = new AbortController();
     controller.current = nextController;
     setState('streaming');
@@ -100,6 +101,7 @@ export function InlineAssistantPopover({
       <header><strong>{title}</strong><button type="button" aria-label="关闭" onClick={() => { if (state === 'streaming') cancel(); onDismiss(); }}>关闭</button></header>
       <div className="inline-assistant-popover__body">
         {modelProfileId === null ? <p role="status">请先选择可用模型后再{title}。</p> : null}
+        {state === 'streaming' && text === '' ? <p role="status">正在生成{title}…</p> : null}
         {state === 'streaming' ? <button type="button" onClick={cancel}>取消</button> : null}
         {text ? <><p className="inline-assistant-popover__text">{text}</p><button type="button" onClick={() => { void copy(); }}>复制</button></> : null}
         {state === 'completed' ? <p role="status">已存入笔记</p> : null}

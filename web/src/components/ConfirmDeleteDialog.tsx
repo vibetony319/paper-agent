@@ -83,7 +83,7 @@ export function ConfirmDeleteDialog({ paper, onCancel, onDeleted }: ConfirmDelet
         <h2 id={titleId}>删除论文</h2>
       </header>
       <p>将永久删除《{paper.original_filename}》及其关联数据。</p>
-      <p>PDF、解析结果、知识图谱、高亮、笔记和对话将被永久删除。</p>
+      <p>PDF、解析结果、高亮、笔记和对话将被永久删除。</p>
       {errorMessage !== null && <p role="alert">{errorMessage}</p>}
       <div className="confirm-delete-dialog__actions">
         <button type="button" disabled={deleting} onClick={onCancel}>取消</button>

@@ -39,7 +39,7 @@ it('lists the deleted data and confirms permanent deletion with the paper confir
 
   expect(screen.getByRole('dialog', { name: '删除论文' })).toBeVisible();
   expect(screen.getByText(/routing-paper\.pdf/)).toBeVisible();
-  expect(screen.getByText('PDF、解析结果、知识图谱、高亮、笔记和对话将被永久删除。')).toBeVisible();
+  expect(screen.getByText('PDF、解析结果、高亮、笔记和对话将被永久删除。')).toBeVisible();
 
   await user.click(screen.getByRole('button', { name: '确认永久删除' }));
 

@@ -243,6 +243,7 @@ export function WorkspaceShell({
                   onSelectedModelProfileIdChange,
                   askAgent: workspace.askAgent,
                   streamingText: workspace.streaming?.text ?? '',
+                  streamInterrupted: workspace.streaming?.interrupted ?? false,
                   attachment: currentComposerAttachment,
                   onAttachmentClear: (token) => setComposerAttachment((current) => (
                     current?.paperId === paper.id && current.token === token ? null : current

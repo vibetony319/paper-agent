@@ -256,6 +256,26 @@ def test_chat_stream_yields_text_deltas_and_skips_empty_deltas(fake_openai_clien
     assert fake_openai_client.requests[0]["stream"] is True
 
 
+def test_chat_stream_skips_usage_only_chunks(fake_openai_client):
+    """Breaks if a bookkeeping chunk aborts a stream that already produced text."""
+    fake_openai_client.response = iter(
+        [
+            SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content="one"))]),
+            SimpleNamespace(choices=[]),
+            SimpleNamespace(),
+            SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content=" two"))]),
+        ]
+    )
+
+    result = list(
+        VllmChatClient(_config(), client=fake_openai_client).stream_text(
+            [{"role": "user", "content": "explain"}]
+        )
+    )
+
+    assert result == ["one", " two"]
+
+
 def test_chat_stream_rejects_non_text_deltas(fake_openai_client):
     """Breaks if malformed streaming deltas are forwarded as text."""
     fake_openai_client.response = iter([object()])

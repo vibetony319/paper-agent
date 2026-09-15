@@ -4,6 +4,19 @@
 
 ## 最新进度（接手先读）
 
+### 选区辅助可点击性与流式失败恢复（2026-09-15 第二轮）
+
+- **解释/翻译不再静默无响应**：此前没有可用模型时这两个按钮被 `disabled`，只有 hover 才显示「暂不可用」，点下去毫无反馈（其他三个按钮不经过模型判定，所以表现成"只有这两个失效"）。现在按钮始终可点，缺模型时由浮层给出中文提示；等待首个增量时显示「正在生成解释/翻译…」，不再是一个只有「取消」按钮的空面板。
+- **请求 ID 统一走 `newRequestId()`**（`web/src/api/ids.ts`）：`crypto.randomUUID` 只在安全上下文存在，用非 localhost 的 http 地址打开时点击会在事件处理器里抛 `TypeError`（表现为点了没反应）。Agent、笔记、高亮、选区辅助共 5 处调用点改为该封装，缺失时回退随机串。
+- **工具栏按下不再有清空选区的风险**：`.selection-toolbar` 加 `user-select: none`，容器 `onMouseDown` preventDefault、`onPointerUp` 阻止冒泡，避免按下按钮导致选区塌陷 → `selection/clear` → 工具栏在 click 之前被卸载。Chromium 实测该竞态不触发，属防御性修复（覆盖触摸与其他浏览器）；`AnnotationOverlay` 的 document 级 pointerdown（关闭高亮菜单）不受影响。
+- **流式中断保留已生成内容**：`conversation/stream-failed` 不再把 `streaming` 置空，而是标记 `interrupted`；聊天区保留半截回答并提示「回答已中断，以上为已生成的部分。」并可直接重新提问。被更新请求取代的旧请求失败不再覆盖新答案的错误提示（此前会误报通用失败文案）。
+- **失败原因可见且不泄漏上游文本**：`client.ts` 新增 `apiErrorMessage()`，按错误码映射中文原因（与后端 `_STREAM_ERROR_DETAILS` 对应）；服务端 `detail` 原文仍然不回落给用户。后端新增错误码 `answer_unavailable`（回答已生成，但引用信息无法解析）。
+- **后端流健壮性与可观测性**：`_streamed_completion` 跳过只带 usage、`choices` 为空的收尾分片（原会抛 `IndexError`，把已经流出内容的流打断）；`event_stream` 内部兜住异常并以错误帧结束，不再让 `HTTPException` 逃逸导致 SSE 在响应中途断开；Agent 回合与选区辅助失败时把异常类型写入 stderr（仅类型，不含 provider 文本）——此前项目没有日志配置，流式故障在磁盘上不留任何痕迹。
+- **本轮"流式输出一半报错"的实际原因**：ARK 档案 `glm-5.3` 返回 `429 AccountQuotaExceeded`（5 小时配额用尽，按响应中提示的时间重置），配额耗尽会掐断已经在传输的流；同 provider 的 `deepseek-flash` 实测正常。切换模型即可绕过，与代码无关的部分已在上一条完成兜底。
+- 验证：后端 400 项、前端 217 项、`tsc` 无错、生产构建通过；真实 DeepSeek 三轮流式对话 + 重复请求重放 + 与非流式端点一致性通过；Playwright 完整套件 6 项全部通过（`selection-assist-regression` 与修正后的 `reader-workspace`，桌面与小屏两个 project），此前遗留的失败项随本轮一并清除。
+- **顺带修复的既有可访问性问题**：修复后的 `reader-workspace` 审计暴露 `--ink-faint` 在 `--paper` 背景上只有 4.46:1（WCAG AA 要求 4.5:1）。该 token 由 `#6f7672` 调深为 `#6b726e`（4.73:1，白色背景 4.93:1），仍明显浅于 `--ink-soft`，三级墨色层次不变。
+- 顺带清理：`web/e2e/reader-workspace.spec.ts` 移除已删除的图谱步骤、改等待 `/agent/messages/stream` 并在路由处理中缓冲流后解析 `completed` 帧；删除论文弹窗文案不再提"知识图谱"；仓库根目录 4 个针对已修复缺陷的临时验证产物（`capture_calls.json`、`capture_overview_failure.py`、`verify_fix_real*.py`）已删除。
+
 ### 图谱移除与 Markdown 流式回答（2026-09-15）
 
 - **图谱功能整体删除**：路由、`GraphConstructionService`、图谱抽取、`storage`/`database`/`domain` 里的节点边与证据表、Agent 的四个图谱工具、`PaperSummary` 的 stage2/3 字段，以及前端的图谱状态、`@xyflow/react` 与 `elkjs` 依赖全部移除。`PAPER_DELETE_ORDER` 不再包含图谱表，旧库里的这些表会保留但不再被读写。
@@ -134,8 +147,8 @@ Plan 4 的生产代码、测试和文档均已提交。仅三个未跟踪文件�
 - `clear_api_key` 是前端便捷字段，客户端翻译为 `api_key: null` 发送，请求体不出现 `clear_api_key`。
 - Task 5 的页面所有权 DOM 契约为 `[data-pdf-page]`，坐标归一化基准为 `.pdf-page-view__surface`；计划中的旧 `.pdf-page__surface` 不再使用。批注使用与 document/graph/notes 同一 abort signal 和 generation guard 独立加载，未替换既有 notes 请求路径。
 - `GET /api/papers/{paper_id}/annotations` 现以可选的 additive `anchors` 字段返回所有文本锚点；前端在新旧服务端响应间兼容空 anchors，并将矩形并集统一转换为 `SourceTarget`。这让手写或生成、但未创建高亮的笔记在刷新后仍可显示原文并定位。
-- Task 7 的 `GraphBuildInput` 与完整 `AskAgentInput` 均强制 `model_profile_id` 和 `request_id`。工作区在每个聊天或图谱构建请求内部使用 `crypto.randomUUID()`，因此不再发送旧的空 POST body。
-- 当前模型选择器只存在于固定 `ChatComposer`。切换模型不会重置当前会话；聊天、图谱构建和选区解释/翻译均使用这一选择。无模型时发送、两类图谱构建和选区辅助均禁用并给出中文提示。回答范围（仅基于论文/允许背景知识）选择已整体移除，Agent 固定仅基于论文作答，接口不再接受 `mode` 字段。
+- Task 7 的 `GraphBuildInput` 与完整 `AskAgentInput` 均强制 `model_profile_id` 和 `request_id`。工作区为每个聊天请求生成请求 ID（现为 `web/src/api/ids.ts` 的 `newRequestId()`），因此不再发送旧的空 POST body。
+- 当前模型选择器只存在于固定 `ChatComposer`。切换模型不会重置当前会话，选区解释/翻译使用同一选择。无模型时发送被禁用并给出中文提示；解释/翻译保持可点，由浮层提示先选择可用模型（见"选区辅助可点击性与流式失败恢复"）。回答范围（仅基于论文/允许背景知识）选择已整体移除，Agent 固定仅基于论文作答，接口不再接受 `mode` 字段。
 - `问助手` 将当前 `TextAnchorDraft` 作为可移除附件写入聊天框并聚焦，不自动发送；成功后清除附件，失败保留以供重试。Agent 消息显示其不可变模型徽章，笔记引用与论文引用分开并可通过持久 anchor 或元素来源定位。
 - `ResizableSplit` 默认 62%，限制 45%–78%，持久化键为 `paper-agent:reader-split`；键盘左右键每次调整 2%。小于 880px 时显示论文/工具切换而不卸载任一子树。
 

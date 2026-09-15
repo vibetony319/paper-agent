@@ -146,7 +146,7 @@ it('exposes streamed answer text until the turn is completed', async () => {
     pending = result.current.askAgent('问题', 'qwen');
   });
 
-  expect(result.current.streaming).toEqual({ question: '问题', text: '完整' });
+  expect(result.current.streaming).toEqual({ question: '问题', text: '完整', interrupted: false });
   expect(result.current.exchanges).toEqual([]);
 
   await act(async () => {
@@ -158,7 +158,7 @@ it('exposes streamed answer text until the turn is completed', async () => {
   expect(result.current.exchanges).toEqual([{ question: '问题', message: answer }]);
 });
 
-it('clears the streamed answer and reports a local failure when the stream errors', async () => {
+it('keeps the streamed answer and reports the API reason when the stream errors', async () => {
   vi.mocked(streamAgentMessage).mockImplementationOnce(async function* () {
     yield { event: 'started', data: { request_id: 'agent-request-a' } };
     yield { event: 'delta', data: { text: '半截回答' } };
@@ -169,9 +169,9 @@ it('clears the streamed answer and reports a local failure when the stream error
 
   await act(async () => { await result.current.askAgent('问题', 'qwen'); });
 
-  expect(result.current.streaming).toBeNull();
+  expect(result.current.streaming).toEqual({ question: '问题', text: '半截回答', interrupted: true });
   expect(result.current.exchanges).toEqual([]);
-  expect(result.current.errorMessage).toBe('暂时无法获取助手回答。');
+  expect(result.current.errorMessage).toBe('模型未能完成有效回答，请重试或在模型设置中重新测试。');
 });
 
 it('loads highlights independently from the existing notes request', async () => {
@@ -460,6 +460,41 @@ it('ignores old Agent and note completions after retrying the same paper', async
   expect(result.current.conversationId).toBeNull();
   expect(result.current.messages).toEqual([]);
   expect(result.current.notes).toEqual([]);
+});
+
+it('ignores a superseded stream failure so the newer answer stands', async () => {
+  const answer: AgentMessage = { conversation_id: 'conversation-a', message_id: 'message-a', status: 'grounded', paper_answer: '新回答', background_explanation: null, citations: [] };
+  const gate = deferred<void>();
+  vi.mocked(streamAgentMessage)
+    .mockImplementationOnce(async function* () {
+      yield { event: 'started', data: { request_id: 'agent-request-a' } };
+      yield { event: 'delta', data: { text: '半截' } };
+      await gate.promise;
+      throw new ApiError(503, 'stale stream failure');
+    })
+    .mockImplementationOnce(async function* () {
+      yield { event: 'started', data: { request_id: 'agent-request-b' } };
+      yield { event: 'delta', data: { text: '新回答' } };
+      yield { event: 'completed', data: { message: answer } };
+    });
+  const { result } = renderHook(() => usePaperWorkspace('paper-a'));
+  await waitFor(() => expect(result.current.document).not.toBeNull());
+
+  let first: Promise<AgentMessage | null> = Promise.resolve(null);
+  let second: Promise<AgentMessage | null> = Promise.resolve(null);
+  await act(async () => {
+    first = result.current.askAgent('第一个问题', 'qwen');
+    second = result.current.askAgent('第二个问题', 'qwen');
+    await second;
+  });
+  await act(async () => {
+    gate.resolve(undefined);
+    await first;
+  });
+
+  expect(result.current.errorMessage).toBeNull();
+  expect(result.current.streaming).toBeNull();
+  expect(result.current.exchanges).toEqual([{ question: '第二个问题', message: answer }]);
 });
 
 it('ignores an old mutation failure after retrying the same paper', async () => {

@@ -1,3 +1,4 @@
+import logging
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request
@@ -42,6 +43,7 @@ from paper_agent.storage import PaperRepository
 
 
 router = APIRouter(prefix="/api", tags=["agent"])
+logger = logging.getLogger(__name__)
 
 
 def _runtime(request: Request) -> PaperAgentRuntime:
@@ -346,6 +348,7 @@ _STREAM_ERROR_DETAILS: dict[str, str] = {
     "request_conflict": "该请求已有不同的处理状态，请使用新的请求重试。",
     "invalid_selection": "选区无效。",
     "answer_too_long": "模型输出过长，请缩小问题范围后重试。",
+    "answer_unavailable": "回答已生成，但引用信息无法解析，请重试。",
     "paper_busy": "论文正在删除。",
     "agent_failed": "模型未能完成有效回答，请重试或在模型设置中重新测试。",
 }
@@ -389,46 +392,74 @@ def stream_paper_agent(
 
     def event_stream():
         try:
-            with request.app.state.paper_operation_coordinator.operation(
-                paper_id_text
-            ):
-                with _model_profile_service(request).usage_lease(profile_id):
-                    for event in _runtime(request).stream_ask(
-                        paper_id=paper_id_text,
-                        question=AgentQuestion(
-                            content=payload.content,
-                            conversation_id=(
-                                None
-                                if payload.conversation_id is None
-                                else str(payload.conversation_id)
-                            ),
-                        ),
-                        client=resolved.tools,
-                        model_snapshot=resolved.snapshot,
-                        request_id=request_id,
-                        selection=selection,
-                    ):
-                        if event.event == "completed" and event.turn is not None:
-                            yield sse_frame(
-                                "completed",
-                                {
-                                    "message": _agent_message_response(
-                                        repository, paper_id_text, event.turn
-                                    ).model_dump(mode="json")
-                                },
-                            )
-                        elif event.event == "error":
-                            yield sse_frame(
-                                "error", _stream_error_payload(event.code)
-                            )
-                        elif event.event == "delta":
-                            yield sse_frame("delta", {"text": event.text})
-                        else:
-                            yield sse_frame("started", {"request_id": request_id})
+            yield from agent_events()
         except PaperDeletingError:
             yield sse_frame("error", _stream_error_payload("paper_busy"))
         except ModelProfileNotFoundError:
             yield sse_frame("error", _stream_error_payload("model_unavailable"))
+        except HTTPException:
+            # Only the completed branch can raise here: its citation lookup
+            # needs elements that are no longer located. Answering with an error
+            # frame keeps the connection readable instead of truncating it.
+            logger.warning(
+                "agent stream could not resolve citations for paper %s request %s",
+                paper_id_text,
+                request_id,
+            )
+            yield sse_frame("error", _stream_error_payload("answer_unavailable"))
+        except Exception:
+            # The response has already started, so an escaping exception would
+            # close the stream without telling the client what happened.
+            logger.exception(
+                "agent stream failed for paper %s request %s",
+                paper_id_text,
+                request_id,
+            )
+            yield sse_frame("error", _stream_error_payload("agent_failed"))
+
+    def agent_events():
+        with request.app.state.paper_operation_coordinator.operation(
+            paper_id_text
+        ):
+            with _model_profile_service(request).usage_lease(profile_id):
+                for event in _runtime(request).stream_ask(
+                    paper_id=paper_id_text,
+                    question=AgentQuestion(
+                        content=payload.content,
+                        conversation_id=(
+                            None
+                            if payload.conversation_id is None
+                            else str(payload.conversation_id)
+                        ),
+                    ),
+                    client=resolved.tools,
+                    model_snapshot=resolved.snapshot,
+                    request_id=request_id,
+                    selection=selection,
+                ):
+                    if event.event == "completed" and event.turn is not None:
+                        yield sse_frame(
+                            "completed",
+                            {
+                                "message": _agent_message_response(
+                                    repository, paper_id_text, event.turn
+                                ).model_dump(mode="json")
+                            },
+                        )
+                    elif event.event == "error":
+                        logger.warning(
+                            "agent stream reported %s for paper %s request %s",
+                            event.code,
+                            paper_id_text,
+                            request_id,
+                        )
+                        yield sse_frame(
+                            "error", _stream_error_payload(event.code)
+                        )
+                    elif event.event == "delta":
+                        yield sse_frame("delta", {"text": event.text})
+                    else:
+                        yield sse_frame("started", {"request_id": request_id})
 
     return StreamingResponse(
         event_stream(),

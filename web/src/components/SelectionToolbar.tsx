@@ -53,6 +53,13 @@ export function SelectionToolbar({ draft, toolbarRect, actions = {}, onDismiss }
       role="toolbar"
       aria-label={`已选择：${draft.quote}`}
       style={position}
+      // Pressing a button would otherwise collapse the reader selection, which
+      // clears the workspace selection and unmounts this toolbar before the
+      // click is delivered. Preventing the collapse keeps the selection (and the
+      // toolbar) intact, and the pointerup is kept off the reader so its own
+      // selection capture cannot clear anything either.
+      onMouseDown={(event) => event.preventDefault()}
+      onPointerUp={(event) => event.stopPropagation()}
       onKeyDown={(event) => {
         if (event.key === 'Escape') {
           event.preventDefault();

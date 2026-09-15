@@ -26,6 +26,7 @@ export interface ChatComposerProps {
   messageTarget?: HTMLDivElement | null;
   onSendStart?: () => void;
   streamingText?: string;
+  streamInterrupted?: boolean;
 }
 
 export function ChatComposer({
@@ -40,6 +41,7 @@ export function ChatComposer({
   messageTarget = null,
   onSendStart,
   streamingText = '',
+  streamInterrupted = false,
 }: ChatComposerProps) {
   const [content, setContent] = useState('');
   const [pending, setPending] = useState(false);
@@ -80,12 +82,7 @@ export function ChatComposer({
     setErrorMessage(null);
   }, [paperId]);
 
-  const submit = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const question = content.trim();
-    if (!pending && /^(你好|您好|嗨|hello|hi)[！!。.?？\s]*$/i.test(question) && attachment === null) {
-      setGreeting(true); setSentQuestion(question); setContent(''); onSendStart?.(); return;
-    }
+  const send = async (question: string) => {
     if (!question || pending || paperId === null || selectedModelProfileId === null) return;
     const requestId = ++requestVersion.current;
     const requestPaperId = paperId;
@@ -120,12 +117,26 @@ export function ChatComposer({
     }
   };
 
+  const submit = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const question = content.trim();
+    if (!pending && /^(你好|您好|嗨|hello|hi)[！!。.?？\s]*$/i.test(question) && attachment === null) {
+      setGreeting(true); setSentQuestion(question); setContent(''); onSendStart?.(); return;
+    }
+    void send(question);
+  };
+
   const unavailable = selectedModelProfileId === null;
-  const feedback = (pending || greeting) && <div ref={feedbackRef} className="chat-feedback">
+  const interruptedText = streamInterrupted ? streamingText : '';
+  const feedback = (pending || greeting || interruptedText !== '') && <div ref={feedbackRef} className="chat-feedback">
     <p className="agent-panel__question">{sentQuestion}</p>
     <div className="chat-feedback__assistant" role="status">
       <span className="chat-feedback__name">论文助手</span>
-      {greeting ? <p>你好！我可以帮你概括论文、解释方法或分析选中的段落。试试问“这篇论文讲了什么”。</p> : streamingText === '' ? <p className="chat-feedback__waiting"><span className="chat-typing" aria-hidden="true"><i /><i /><i /></span>{elapsed >= 20 ? '模型还在处理，请稍候…' : '正在生成回答…'}</p> : <div className="agent-panel__answer"><MarkdownText text={streamingText} /></div>}
+      {greeting ? <p>你好！我可以帮你概括论文、解释方法或分析选中的段落。试试问“这篇论文讲了什么”。</p> : interruptedText !== '' ? <>
+        <div className="agent-panel__answer"><MarkdownText text={interruptedText} /></div>
+        <p className="chat-feedback__interrupted" role="alert">回答已中断，以上为已生成的部分。</p>
+        <button type="button" onClick={() => { void send(sentQuestion); }}>重新提问</button>
+      </> : streamingText === '' ? <p className="chat-feedback__waiting"><span className="chat-typing" aria-hidden="true"><i /><i /><i /></span>{elapsed >= 20 ? '模型还在处理，请稍候…' : '正在生成回答…'}</p> : <div className="agent-panel__answer"><MarkdownText text={streamingText} /></div>}
     </div>
   </div>;
 

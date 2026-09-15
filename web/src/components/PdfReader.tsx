@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 
 import { paperApi } from '../api/client';
+import { newRequestId } from '../api/ids';
 import type { Highlight, HighlightColor, Page, TextAnchorDraft } from '../api/types';
 import { getDocument } from '../pdfjs';
 import type { SourceTarget, WorkspaceState } from '../workspace/types';
@@ -100,7 +101,7 @@ export function PdfReader({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [visiblePages, setVisiblePages] = useState<Set<number>>(() => new Set(pageNumbers.slice(0, 1)));
   const [zoom, setZoom] = useState(1);
-  const [assistTarget, setAssistTarget] = useState<{ action: SelectionAssistAction; draft: TextAnchorDraft; rect: DOMRect; model: string; id: string } | null>(null);
+  const [assistTarget, setAssistTarget] = useState<{ action: SelectionAssistAction; draft: TextAnchorDraft; rect: DOMRect; model: string | null; id: string } | null>(null);
   const [manualNoteTarget, setManualNoteTarget] = useState<{ draft: TextAnchorDraft; rect: DOMRect } | null>(null);
   const [sectionsOpen, setSectionsOpen] = useState(false);
   const sectionsToggleRef = useRef<HTMLButtonElement | null>(null);
@@ -426,10 +427,10 @@ export function PdfReader({
           toolbarRect={selection.toolbarRect}
           onDismiss={clearTemporarySelection}
           actions={{
-            explain: runSelectionAssist === undefined || selectedModelProfileId === null
-              ? undefined : () => setAssistTarget({ action: 'explain', draft: selection.draft, rect: selection.toolbarRect, model: selectedModelProfileId, id: crypto.randomUUID() }),
-            translate: runSelectionAssist === undefined || selectedModelProfileId === null
-              ? undefined : () => setAssistTarget({ action: 'translate', draft: selection.draft, rect: selection.toolbarRect, model: selectedModelProfileId, id: crypto.randomUUID() }),
+            explain: runSelectionAssist === undefined
+              ? undefined : () => setAssistTarget({ action: 'explain', draft: selection.draft, rect: selection.toolbarRect, model: selectedModelProfileId, id: newRequestId() }),
+            translate: runSelectionAssist === undefined
+              ? undefined : () => setAssistTarget({ action: 'translate', draft: selection.draft, rect: selection.toolbarRect, model: selectedModelProfileId, id: newRequestId() }),
             note: onCreateSelectionNote === undefined
               ? undefined : () => setManualNoteTarget({ draft: selection.draft, rect: selection.toolbarRect }),
             ask: selectionActions?.ask === undefined

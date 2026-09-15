@@ -98,6 +98,24 @@ it('keeps assist snapshots after selection clears and starts fresh requests on r
   expect(runSelectionAssist.mock.calls[1][0]).toBe('translate');
 });
 
+it('answers a missing model with guidance instead of a dead explain button', async () => {
+  // Breaks if the button is silently disabled, which reads as "nothing happens".
+  const draft = { quote: 'Selected passage', page_number: 1, rects: [{ order: 0, x0: 0.1, y0: 0.1, x1: 0.5, y1: 0.2 }] };
+  const runSelectionAssist = vi.fn().mockResolvedValue({ status: 'completed', text: '回答' });
+  const props = {
+    paperId: 'paper-a', pages: [], activeSource: null, onSourceCleared: vi.fn(),
+    selectedModelProfileId: null, runSelectionAssist,
+  };
+  render(<PdfReader {...props} selection={{ draft, toolbarRect: new DOMRect(20, 20, 100, 20) }} />);
+
+  const explain = screen.getByRole('button', { name: /^解释$/ });
+  expect(explain).toBeEnabled();
+  fireEvent.click(explain);
+
+  expect(await screen.findByText('请先选择可用模型后再解释。')).toBeVisible();
+  expect(runSelectionAssist).not.toHaveBeenCalled();
+});
+
 it('keeps an aspect ratio page shell until a page enters the overscan area', async () => {
   render(
     <PdfReader paperId="paper-a" pages={manyPages} activeSource={null} onSourceCleared={vi.fn()} />,

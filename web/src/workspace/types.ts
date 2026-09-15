@@ -43,4 +43,6 @@ export type AgentExchange = {
 export type AgentStream = {
   question: string;
   text: string;
+  /** True once the request failed, so the partial text is kept but not final. */
+  interrupted: boolean;
 };

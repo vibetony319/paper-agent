@@ -50,3 +50,29 @@ it('recomputes its fixed position when the viewport changes', () => {
 
   expect(toolbar).toHaveStyle({ left: '768px' });
 });
+
+it('presses a button without letting the press collapse the reader selection', () => {
+  // Breaks if the press reaches the reader: collapsing the selection clears the
+  // workspace selection and unmounts this toolbar before the click is delivered.
+  const explain = vi.fn();
+  const parentPointerUp = vi.fn();
+  render(
+    <div onPointerUp={parentPointerUp}>
+      <SelectionToolbar
+        draft={draft}
+        toolbarRect={{ left: 20, top: 100, width: 100, height: 20 } as DOMRect}
+        actions={{ explain }}
+        onDismiss={vi.fn()}
+      />
+    </div>,
+  );
+  const button = screen.getByRole('button', { name: '解释' });
+
+  const collapseAllowed = fireEvent.mouseDown(button);
+  fireEvent.pointerUp(button);
+  fireEvent.click(button);
+
+  expect(collapseAllowed).toBe(false);
+  expect(explain).toHaveBeenCalledOnce();
+  expect(parentPointerUp).not.toHaveBeenCalled();
+});

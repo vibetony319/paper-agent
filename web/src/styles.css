@@ -26,7 +26,7 @@
   /* Ink */
   --ink: #23282b;
   --ink-soft: #5a615e;
-  --ink-faint: #6f7672;
+  --ink-faint: #6b726e;
 
   /* Hairlines */
   --line: #ded9d0;
@@ -1206,6 +1206,7 @@ textarea::placeholder {
   max-width: calc(100vw - 1.5rem);
   padding: 0.3rem;
   position: fixed;
+  user-select: none;
   z-index: 40;
 }
 
@@ -1761,6 +1762,7 @@ textarea::placeholder {
 .chat-feedback__assistant { display: grid; gap: 12px; font-size: 14px; line-height: 1.85; }
 .chat-feedback__assistant p { margin: 0; }
 .chat-feedback__waiting { display: flex; align-items: center; gap: 12px; color: var(--ink-soft); }
+.chat-feedback__interrupted { color: var(--danger-strong); font-size: 12px; }
 .chat-typing { display: flex; gap: 4px; }
 .chat-typing i { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
 @media (prefers-reduced-motion: no-preference) {
