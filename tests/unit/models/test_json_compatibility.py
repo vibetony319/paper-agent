@@ -28,6 +28,22 @@ class Transport:
         return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(self.payload)))])
 
 
+class ProseTransport:
+    """Provider whose model answers in prose around the requested JSON object."""
+
+    def __init__(self, content, fail_first=True):
+        self.content, self.fail_first, self.requests = content, fail_first, []
+        self.chat = SimpleNamespace(completions=self)
+
+    def create(self, **kwargs):
+        self.requests.append(kwargs)
+        if self.fail_first and len(self.requests) == 1:
+            raise BadRequestError('provider-secret', response=httpx.Response(
+                400, request=httpx.Request('POST', 'https://example.invalid')),
+                body={'message': 'json_schema is not supported by this model'})
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=self.content))])
+
+
 def invoke(kind, transport):
     config = VllmModelConfig('https://example.invalid', 'model')
     messages = [{'role': 'user', 'content': 'source'}, {'role': 'assistant', 'content': 'history'}]
@@ -63,4 +79,30 @@ def test_unrelated_bad_request_does_not_trigger_fallback(kind):
     transport = Transport({'status':'ok'}, error='invalid schema syntax')
     with pytest.raises((VllmResponseError, VllmToolCallingError)):
         invoke(kind, transport)
+    assert len(transport.requests) == 1
+
+
+@pytest.mark.parametrize('kind', ['graph', 'agent'])
+def test_prose_before_json_is_extracted(kind):
+    content = '论文的结论如下：三点局限性。\n\n{"status": "ok"}'
+    assert invoke(kind, ProseTransport(content)) == {'status': 'ok'}
+
+
+@pytest.mark.parametrize('kind', ['graph', 'agent'])
+def test_fenced_json_is_extracted(kind):
+    content = 'Answer in prose.\n```json\n{"status": "ok"}\n```'
+    assert invoke(kind, ProseTransport(content)) == {'status': 'ok'}
+
+
+@pytest.mark.parametrize('kind', ['graph', 'agent'])
+def test_prose_without_json_fails(kind):
+    with pytest.raises((VllmResponseError, VllmToolCallingError)):
+        invoke(kind, ProseTransport('纯散文回答，没有结构化数据。'))
+
+
+@pytest.mark.parametrize('kind', ['graph', 'agent'])
+def test_native_schema_mode_also_extracts_embedded_json(kind):
+    content = 'prose { "unrelated": true } then {"status": "ok"}'
+    transport = ProseTransport(content, fail_first=False)
+    assert invoke(kind, transport) == {'status': 'ok'}
     assert len(transport.requests) == 1

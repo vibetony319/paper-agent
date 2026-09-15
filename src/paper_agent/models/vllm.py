@@ -24,6 +24,57 @@ class VllmResponseError(RuntimeError):
     """Raised when vLLM does not provide a valid structured response."""
 
 
+def _balanced_object(content: str, start: int) -> str | None:
+    """Return the brace-balanced object text starting at a '{', or None."""
+    depth = 0
+    in_string = False
+    escaped = False
+    for index in range(start, len(content)):
+        char = content[index]
+        if escaped:
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == '"':
+            in_string = not in_string
+        elif not in_string:
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    return content[start:index + 1]
+    return None
+
+
+def _extract_json_object(content: object, schema: dict[str, object]) -> dict | None:
+    """Parse the first schema-valid JSON object embedded in model output.
+
+    Some chat models answer in prose before emitting the requested JSON even
+    under json_object mode, so a strict whole-string parse would reject an
+    otherwise valid payload.
+    """
+    if not isinstance(content, str):
+        return None
+    validator = Draft202012Validator(schema)
+    first_parsed: dict | None = None
+    start = content.find("{")
+    while start != -1:
+        candidate = _balanced_object(content, start)
+        if candidate is not None:
+            try:
+                parsed = json.loads(candidate)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, dict):
+                if first_parsed is None:
+                    first_parsed = parsed
+                if not any(validator.iter_errors(parsed)):
+                    return parsed
+        start = content.find("{", start + 1)
+    return first_parsed
+
+
 def _json_completion(client, *, model, messages, schema_name, schema):
     """Prefer native schema mode; only negotiate on explicit unsupported-format errors."""
     from openai import BadRequestError
@@ -50,8 +101,8 @@ def _json_completion(client, *, model, messages, schema_name, schema):
                        "Return only a JSON object matching this JSON Schema: " + json.dumps(schema)}] + list(messages),
             response_format={"type": "json_object"},
         )
-    result = json.loads(response.choices[0].message.content)
-    if not isinstance(result, dict):
+    result = _extract_json_object(response.choices[0].message.content, schema)
+    if result is None:
         raise ValueError("Expected a JSON object")
     Draft202012Validator(schema).validate(result)
     return result
