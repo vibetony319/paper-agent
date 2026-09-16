@@ -19,6 +19,8 @@ export interface ModelProfile {
   revision: number;
   has_api_key: boolean;
   api_key_mask: string | null;
+  context_length: number | null;
+  max_output_tokens: number | null;
   capabilities: {
     basic_chat: boolean;
     structured_output: boolean;
@@ -31,7 +33,11 @@ export interface ModelProfile {
 export type ModelProfileCreateInput = Pick<
   ModelProfile,
   'display_name' | 'base_url' | 'model_name' | 'enabled' | 'is_default'
-> & { api_key?: string };
+> & {
+  api_key?: string;
+  context_length?: number | null;
+  max_output_tokens?: number | null;
+};
 
 export type ModelProfileUpdateInput = Partial<ModelProfileCreateInput> & {
   clear_api_key?: boolean;
@@ -138,6 +144,8 @@ export interface Section {
   title: string;
   page_number: number | null;
   order: number;
+  /** Navigation nesting depth; 1 is top level. Older payloads omit it. */
+  level?: number;
 }
 
 export interface DocumentElement {

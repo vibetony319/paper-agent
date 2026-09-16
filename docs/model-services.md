@@ -33,6 +33,16 @@
 
 修改 `base_url`、`model_name` 或替换密钥会清空已保存的能力结果并递增修订号，需要重新测试。只改展示名、默认状态等展示字段不会清空能力结果。
 
+## 上下文长度与输出上限（2026-09-16）
+
+档案可配置两个可选 token 字段：`context_length`（1,000–10,000,000）与 `max_output_tokens`（1–200,000；两者都填写时 `max_output_tokens` 必须小于 `context_length`）。
+
+- **留空即不限制**：未配置 `context_length` 的档案不压缩、不截断，行为与之前完全一致；只配置 `max_output_tokens` 时仅下发输出上限，不做任何上下文管理。
+- `max_output_tokens` 配置后作为 `max_tokens` 下发到该档案的全部请求（结构化、普通、流式、工具调用）；未配置时省略参数，保留提供方自己的输出上限。
+- `context_length` 配置后启用 Agent 上下文压缩：有效预算为 `context_length − (max_output_tokens 或 8192 预留)`；请求估算（CJK ≈1 token/字、其余 ≈4 字符/token，另加 1000 token 工具定义开销）超过 0.75× 预算时，把系统提示与当前问题之间的会话历史折叠为一条摘要 system 消息，摘要由同一模型非流式生成；工具循环中途压缩会原样保留末尾的 assistant(tool_calls)+tool 消息对。摘要失败时降级为丢弃最旧完整对话轮的硬截断（至 0.9× 以下），不让整轮失败。
+- 压缩与截断是请求组装层的瞬态行为：不落库、不进入模型快照、不影响 `request_id` 幂等重放。设计取舍见 [ADR 0004](adr/0004-context-compaction.md)。
+- 修改两个 token 字段不清空能力探测结果（不属于 material configuration），但会递增修订号使客户端缓存重建。
+
 ## 档案 API 示例
 
 新增档案：
@@ -46,11 +56,13 @@ curl -X POST http://127.0.0.1:8000/api/model-profiles \
     "model_name": "Qwen3-32B",
     "api_key": "EMPTY",
     "enabled": true,
-    "is_default": true
+    "is_default": true,
+    "context_length": 131072,
+    "max_output_tokens": 8192
   }'
 ```
 
-响应包含 `id` 和 `revision`，不包含 `api_key`；密钥只以 `has_api_key` 和掩码形式表达。
+响应包含 `id` 和 `revision`，不包含 `api_key`；密钥只以 `has_api_key` 和掩码形式表达。`context_length` 与 `max_output_tokens` 可省略或置 `null` 表示不限制；`PATCH` 中显式 `null` 清除、省略字段保持不变。
 
 测试能力、设默认、修改和删除都要求 `If-Match` 头携带当前修订号，避免并发覆盖：
 
@@ -117,9 +129,11 @@ curl -N -X POST http://127.0.0.1:8000/api/papers/<paper-id>/agent/messages/strea
 $env:PAPER_AGENT_REASONING_BASE_URL = "http://127.0.0.1:8001/v1"
 $env:PAPER_AGENT_REASONING_MODEL = "your-served-model"
 $env:PAPER_AGENT_REASONING_API_KEY = "EMPTY"
+$env:PAPER_AGENT_REASONING_CONTEXT_LENGTH = "131072"
+$env:PAPER_AGENT_REASONING_MAX_OUTPUT_TOKENS = "8192"
 ```
 
-该档案使用稳定保留 ID `00000000-0000-0000-0000-000000000000`，不能编辑或删除；一旦存在启用的数据库档案，环境变量回退就不再解析。它仍须由调用方作为 `model_profile_id` 显式提交；不构成按请求自动回退。
+后两个变量可选（默认不限制），必须是不小于 1 的整数，否则启动报配置错误。该档案使用稳定保留 ID `00000000-0000-0000-0000-000000000000`，不能编辑或删除；一旦存在启用的数据库档案，环境变量回退就不再解析。它仍须由调用方作为 `model_profile_id` 显式提交；不构成按请求自动回退。
 
 ## 部署边界
 

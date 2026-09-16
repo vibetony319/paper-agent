@@ -85,6 +85,7 @@ export function WorkspaceShell({
         id: section.id,
         title: section.title,
         pageNumber: pageBySection.get(section.id) ?? null,
+        level: section.level ?? 1,
       }));
     }
     return document.pages.map((page) => ({

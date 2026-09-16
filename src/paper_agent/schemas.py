@@ -325,6 +325,8 @@ class ModelProfileCreateRequest(BaseModel):
     api_key: str | None = Field(default=None, max_length=4096)
     enabled: bool = True
     is_default: bool = False
+    context_length: int | None = Field(default=None, ge=1000, le=10000000)
+    max_output_tokens: int | None = Field(default=None, ge=1, le=200000)
 
     @field_validator("display_name", "model_name")
     @classmethod
@@ -344,6 +346,8 @@ class ModelProfilePatchRequest(BaseModel):
     api_key: str | None = Field(default=None, max_length=4096)
     enabled: bool | None = None
     is_default: bool | None = None
+    context_length: int | None = Field(default=None, ge=1000, le=10000000)
+    max_output_tokens: int | None = Field(default=None, ge=1, le=200000)
 
     @field_validator("display_name", "model_name")
     @classmethod
@@ -359,7 +363,7 @@ class ModelProfilePatchRequest(BaseModel):
     def _require_explicit_non_null_changes(self) -> "ModelProfilePatchRequest":
         if not self.model_fields_set:
             raise ValueError("at least one change is required")
-        nullable = {"api_key"}
+        nullable = {"api_key", "context_length", "max_output_tokens"}
         if any(
             field_name not in nullable and getattr(self, field_name) is None
             for field_name in self.model_fields_set
@@ -396,6 +400,8 @@ class ModelProfileResponse(BaseModel):
     revision: int
     has_api_key: bool
     api_key_mask: str | None
+    context_length: int | None
+    max_output_tokens: int | None
     capabilities: ModelCapabilitiesResponse
     read_only: bool
 
@@ -412,6 +418,8 @@ class ModelProfileResponse(BaseModel):
             revision=profile.revision,
             has_api_key=view.has_api_key,
             api_key_mask=view.api_key_mask,
+            context_length=profile.context_length,
+            max_output_tokens=profile.max_output_tokens,
             capabilities=ModelCapabilitiesResponse.from_capabilities(
                 profile.capabilities
             ),
@@ -440,6 +448,7 @@ class SectionResponse(BaseModel):
     title: str
     page_number: int | None
     order: int
+    level: int = 1
 
     @classmethod
     def from_section(cls, section: Section) -> "SectionResponse":
@@ -448,6 +457,7 @@ class SectionResponse(BaseModel):
             title=section.title,
             page_number=section.page_number,
             order=section.order,
+            level=section.level,
         )
 
 

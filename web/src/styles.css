@@ -761,6 +761,10 @@ textarea::placeholder {
   width: 100%;
 }
 
+.pdf-reader__section-list .pdf-reader__section-link {
+  padding-inline-start: calc(0.5rem + (var(--section-level, 1) - 1) * 0.6rem);
+}
+
 .pdf-reader__section-list button:hover:not(:disabled),
 .pdf-reader__section-list button:focus-visible {
   background: var(--accent-softer);
@@ -1250,9 +1254,47 @@ textarea::placeholder {
 
 .inline-assistant-popover header {
   align-items: center;
+  cursor: grab;
   display: flex;
   gap: 1rem;
   justify-content: space-between;
+  touch-action: none;
+  user-select: none;
+}
+
+.inline-assistant-popover header:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.inline-assistant-popover header:active {
+  cursor: grabbing;
+}
+
+/* An explicit user size may exceed the default auto-size caps. */
+.inline-assistant-popover--sized {
+  max-height: calc(100dvh - 1.5rem);
+  max-width: calc(100vw - 1.5rem);
+}
+
+.inline-assistant-popover__resize-handle {
+  background: linear-gradient(
+    135deg,
+    transparent 0 50%,
+    var(--line) 50% 56%,
+    transparent 56% 68%,
+    var(--line) 68% 74%,
+    transparent 74%
+  );
+  border: 0;
+  border-bottom-right-radius: calc(var(--radius-surface) - 0.25rem);
+  bottom: 0;
+  cursor: nwse-resize;
+  height: 1.25rem;
+  position: absolute;
+  right: 0;
+  touch-action: none;
+  width: 1.25rem;
 }
 
 .inline-assistant-popover__body {

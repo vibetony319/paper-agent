@@ -125,6 +125,8 @@ class ReasoningClientProvider:
             base_url=profile.base_url,
             model=profile.model_name,
             api_key=api_key,
+            context_length=profile.context_length,
+            max_output_tokens=profile.max_output_tokens,
         )
 
     def _environment_fallback(self) -> tuple[ModelProfile, VllmModelConfig]:
@@ -140,6 +142,8 @@ class ReasoningClientProvider:
                 base_url=config.base_url,
                 model_name=config.model,
                 is_default=True,
+                context_length=config.context_length,
+                max_output_tokens=config.max_output_tokens,
             ),
             config,
         )

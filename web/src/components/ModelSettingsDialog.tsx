@@ -35,6 +35,20 @@ const CAPABILITY_LABELS: Array<{ key: CapabilityKey; label: string }> = [
 const ACTION_FAILED_MESSAGE = '操作失败，请重试。';
 const REVISION_CONFLICT_MESSAGE = '档案数据已被其他修改更新，列表已刷新，请重试。';
 const REQUIRED_FIELDS_MESSAGE = '请填写配置名称、服务地址和模型名称。';
+const TOKEN_LIMITS_MESSAGE = '上下文长度与最大输出必须是正整数（tokens）。';
+const OUTPUT_CAP_MESSAGE = '最大输出 tokens 必须小于上下文长度。';
+
+function parseOptionalTokenLimit(raw: string): number | null | 'invalid' {
+  const trimmed = raw.trim();
+  if (trimmed === '') {
+    return null;
+  }
+  if (!/^\d+$/.test(trimmed)) {
+    return 'invalid';
+  }
+  const value = Number(trimmed);
+  return Number.isSafeInteger(value) && value >= 1 ? value : 'invalid';
+}
 
 function capabilityText(capabilities: ModelProfile['capabilities'], key: CapabilityKey): string {
   if (capabilities.checked_at === null) {
@@ -71,6 +85,8 @@ export function ModelSettingsDialog({
   const [baseUrl, setBaseUrl] = useState('');
   const [modelName, setModelName] = useState('');
   const [apiKey, setApiKey] = useState('');
+  const [contextLength, setContextLength] = useState('');
+  const [maxOutputTokens, setMaxOutputTokens] = useState('');
   const [isDefault, setIsDefault] = useState(false);
   const [clearApiKey, setClearApiKey] = useState(false);
 
@@ -109,6 +125,8 @@ export function ModelSettingsDialog({
     setBaseUrl('');
     setModelName('');
     setApiKey('');
+    setContextLength('');
+    setMaxOutputTokens('');
     setIsDefault(false);
     setClearApiKey(false);
   };
@@ -136,6 +154,10 @@ export function ModelSettingsDialog({
     setBaseUrl(profile.base_url);
     setModelName(profile.model_name);
     setApiKey('');
+    setContextLength(profile.context_length === null ? '' : String(profile.context_length));
+    setMaxOutputTokens(
+      profile.max_output_tokens === null ? '' : String(profile.max_output_tokens),
+    );
     setIsDefault(profile.is_default);
     setClearApiKey(false);
     setErrorMessage(null);
@@ -157,6 +179,20 @@ export function ModelSettingsDialog({
       setErrorMessage(REQUIRED_FIELDS_MESSAGE);
       return;
     }
+    const parsedContextLength = parseOptionalTokenLimit(contextLength);
+    const parsedMaxOutputTokens = parseOptionalTokenLimit(maxOutputTokens);
+    if (parsedContextLength === 'invalid' || parsedMaxOutputTokens === 'invalid') {
+      setErrorMessage(TOKEN_LIMITS_MESSAGE);
+      return;
+    }
+    if (
+      parsedContextLength !== null &&
+      parsedMaxOutputTokens !== null &&
+      parsedMaxOutputTokens >= parsedContextLength
+    ) {
+      setErrorMessage(OUTPUT_CAP_MESSAGE);
+      return;
+    }
 
     setPending(true);
     setErrorMessage(null);
@@ -168,17 +204,23 @@ export function ModelSettingsDialog({
           model_name: trimmedModelName,
           enabled: true,
           is_default: isDefault,
+          context_length: parsedContextLength,
+          max_output_tokens: parsedMaxOutputTokens,
         };
         if (apiKey !== '') {
           input.api_key = apiKey;
         }
         await onCreate(input);
       } else if (editingProfile !== null) {
+        // The form carries the full desired state, so the limits are always
+        // sent explicitly: an empty field clears the stored value.
         const input: ModelProfileUpdateInput = {
           display_name: trimmedName,
           base_url: trimmedBaseUrl,
           model_name: trimmedModelName,
           is_default: isDefault,
+          context_length: parsedContextLength,
+          max_output_tokens: parsedMaxOutputTokens,
         };
         if (clearApiKey) {
           input.clear_api_key = true;
@@ -258,7 +300,11 @@ export function ModelSettingsDialog({
                       {profile.read_only && <span>只读</span>}
                       {!profile.enabled && <span>已停用</span>}
                     </div>
-                    <p>{profile.model_name} · {profile.base_url}</p>
+                    <p>
+                      {profile.model_name} · {profile.base_url}
+                      {profile.context_length !== null && ` · 上下文 ${profile.context_length}`}
+                      {profile.max_output_tokens !== null && ` · 输出 ${profile.max_output_tokens}`}
+                    </p>
                     <ul className="model-settings__capabilities">
                       {CAPABILITY_LABELS.map(({ key, label }) => (
                         <li key={key}>{label}：{capabilityText(capabilities, key)}</li>
@@ -347,6 +393,26 @@ export function ModelSettingsDialog({
               value={modelName}
               onChange={(event) => setModelName(event.target.value)}
               required
+            />
+          </div>
+          <div className="model-settings__field">
+            <label htmlFor={`${fieldId}-context-length`}>上下文长度（tokens，可选）</label>
+            <input
+              id={`${fieldId}-context-length`}
+              inputMode="numeric"
+              value={contextLength}
+              onChange={(event) => setContextLength(event.target.value)}
+              placeholder="如 128000，留空不限制"
+            />
+          </div>
+          <div className="model-settings__field">
+            <label htmlFor={`${fieldId}-max-output-tokens`}>最大输出（tokens，可选）</label>
+            <input
+              id={`${fieldId}-max-output-tokens`}
+              inputMode="numeric"
+              value={maxOutputTokens}
+              onChange={(event) => setMaxOutputTokens(event.target.value)}
+              placeholder="如 8192，留空不限制"
             />
           </div>
           <div className="model-settings__field">

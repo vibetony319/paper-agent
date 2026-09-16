@@ -38,8 +38,10 @@ from paper_agent.services.agent_runtime import (
     AgentStreamEvent,
     AgentTurn,
     PaperAgentRuntime,
+    _COMPACTION_INSTRUCTION,
 )
 from paper_agent.services.agent_tools import PaperToolRegistry
+from paper_agent.services.context_budget import ContextBudget
 from paper_agent.services.citation_guard import CitationGuard
 from paper_agent.services.note_memory import NoteMemoryService
 from paper_agent.storage import PaperRepository
@@ -69,6 +71,8 @@ class FakeAgentClient:
         final_error: Exception | None = None,
         stream_error_at: int | None = None,
         on_tool_turn: Callable[[], None] | None = None,
+        summary_answer: str | None = None,
+        summary_error: Exception | None = None,
     ) -> None:
         self.remaining_turns = list(turns)
         self.final_answer = final_answer
@@ -76,6 +80,9 @@ class FakeAgentClient:
         self.final_error = final_error
         self.stream_error_at = stream_error_at
         self.on_tool_turn = on_tool_turn
+        self.summary_answer = summary_answer
+        self.summary_error = summary_error
+        self.summary_requests: list[dict[str, object]] = []
         self.tool_requests: list[dict[str, object]] = []
         self.final_requests: list[dict[str, object]] = []
         self.health_calls = 0
@@ -111,6 +118,12 @@ class FakeAgentClient:
         return turn
 
     def complete_markdown_messages(self, *, messages: list[dict[str, object]]) -> str:
+        if messages and messages[0].get("content") == _COMPACTION_INSTRUCTION:
+            self.summary_requests.append({"messages": deepcopy(messages)})
+            if self.summary_error is not None:
+                raise self.summary_error
+            if self.summary_answer is not None:
+                return self.summary_answer
         self.final_requests.append({"messages": deepcopy(messages)})
         if self.final_error is not None:
             raise self.final_error
@@ -212,13 +225,20 @@ class RuntimeHarness:
         self.runtime = runtime
         self.client = client
 
-    def ask(self, *, paper_id: str, question: AgentQuestion) -> AgentTurn:
+    def ask(
+        self,
+        *,
+        paper_id: str,
+        question: AgentQuestion,
+        context_budget: ContextBudget | None = None,
+    ) -> AgentTurn:
         return self.runtime.ask(
             paper_id=paper_id,
             question=question,
             client=self.client,
             model_snapshot=_model_snapshot(),
             request_id=str(uuid4()),
+            context_budget=context_budget,
         )
 
     def stream_ask(
@@ -227,6 +247,7 @@ class RuntimeHarness:
         paper_id: str,
         question: AgentQuestion,
         request_id: str | None = None,
+        context_budget: ContextBudget | None = None,
     ) -> list[AgentStreamEvent]:
         return list(
             self.runtime.stream_ask(
@@ -235,6 +256,7 @@ class RuntimeHarness:
                 client=self.client,
                 model_snapshot=_model_snapshot(),
                 request_id=request_id or str(uuid4()),
+                context_budget=context_budget,
             )
         )
 
@@ -316,6 +338,28 @@ def _all_durable_rows(repository: PaperRepository) -> list[tuple[str, str]]:
             .order_by(conversation_messages.c.sequence)
         )
         return [(row.role, row.content) for row in rows]
+
+
+# ~108 estimated tokens per message; six of these push a small profile over
+# its compaction threshold without slowing the tests down.
+_HISTORY_CHUNK = "context filler " * 30
+
+
+def _conversation_with_history(
+    repository: PaperRepository, paper_id: str, *, count: int = 6
+) -> Conversation:
+    conversation = repository.create_conversation(Conversation(paper_id=paper_id))
+    for index in range(count):
+        role = AgentMessageRole.user if index % 2 == 0 else AgentMessageRole.assistant
+        repository.append_conversation_message(
+            ConversationMessage(
+                conversation_id=conversation.id,
+                paper_id=paper_id,
+                role=role,
+                content=f"durable-{index} {_HISTORY_CHUNK}",
+            )
+        )
+    return conversation
 
 
 def test_runtime_persists_user_before_model_then_only_the_final_answer(repository):

@@ -189,3 +189,4 @@ sequenceDiagram
 | [ADR 0001：请求作用域模型档案](adr/0001-request-scoped-model-profiles.md) | 已接受 | 每次模型请求显式解析并冻结无密钥档案快照，使同一会话可切换模型且历史来源保持可追溯。 |
 | [ADR 0002：PDF 文本锚点](adr/0002-pdf-text-anchors.md) | 已接受 | PDF.js Canvas 与 TextLayer 共用 viewport，并以单页归一化矩形持久化可复制文字选区。 |
 | [ADR 0003：可崩溃恢复的论文永久删除](adr/0003-crash-recoverable-paper-deletion.md) | 已接受 | 删除协调器通过 marker、源文件暂存、逆序数据库事务与启动恢复处理阶段间崩溃，并明确文件异常补偿的现有限制。 |
+| [ADR 0004：上下文长度配置与上下文压缩](adr/0004-context-compaction.md) | 已接受 | 模型档案增加可空的上下文长度与输出上限；配置上下文长度后 Agent 在超阈值时把历史折叠为摘要消息，摘要失败降级硬截断，未配置则完全不压缩。 |

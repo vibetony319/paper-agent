@@ -64,8 +64,8 @@
 | 方法与路径 | 用途与重要请求/响应字段 | 稳定错误 / 幂等 |
 | --- | --- | --- |
 | `GET /api/model-profiles` | 返回 [`ModelProfileResponse`](#schema-索引) 数组；无启用持久档案时可包含只读环境回退档案。 | `ModelProfileErrorResponse`；只读。 |
-| `POST /api/model-profiles` | [`ModelProfileCreateRequest`](#schema-索引)：显示名、`base_url`、`model_name`、可选 `api_key`、`enabled`、`is_default`。 | `201`；输入 `422 validation_error`，秘密存储/模型不可用 `503`，其他为 `500 model_profile_error`。非幂等创建。 |
-| `PATCH /api/model-profiles/{profile_id}` | 有 `If-Match`；部分更新档案字段和可选 `api_key`，返回新 revision。 | `404 profile_not_found`、`409 profile_read_only` / `revision_conflict`、`422 validation_error`、`503 secret_store_unavailable`。相同 revision 的一次 compare-and-swap；重放旧 revision 可能冲突。 |
+| `POST /api/model-profiles` | [`ModelProfileCreateRequest`](#schema-索引)：显示名、`base_url`、`model_name`、可选 `api_key`、`enabled`、`is_default`、可选 `context_length`（1,000–10,000,000）与 `max_output_tokens`（1–200,000，须小于 `context_length`）。 | `201`；输入 `422 validation_error`，秘密存储/模型不可用 `503`，其他为 `500 model_profile_error`。非幂等创建。 |
+| `PATCH /api/model-profiles/{profile_id}` | 有 `If-Match`；部分更新档案字段和可选 `api_key`，返回新 revision。`context_length`/`max_output_tokens` 显式 `null` 表示清除（不压缩不限制），省略表示不变。 | `404 profile_not_found`、`409 profile_read_only` / `revision_conflict`、`422 validation_error`、`503 secret_store_unavailable`。相同 revision 的一次 compare-and-swap；重放旧 revision 可能冲突。 |
 | `DELETE /api/model-profiles/{profile_id}` | 有 `If-Match`；软删除并删除关联秘密，若删除默认档案会选另一启用档案为默认。 | 成功 `204`；`409 profile_in_use` 表示请求持有 usage lease，稍后重试；其余同 PATCH。不是删除幂等，已删除为 not found。 |
 | `POST /api/model-profiles/{profile_id}/default` | 有 `If-Match`；将启用档案设为默认，返回档案。 | `404 profile_not_found`、`409 profile_read_only` / `revision_conflict`、`422 validation_error`。compare-and-swap 语义。 |
 | `POST /api/model-profiles/{profile_id}/test` | 有 `If-Match`；探测 basic chat、structured output、tool calling，并在可写档案上保存能力结果及新 revision。 | `404 profile_not_found`、`409 revision_conflict` / `profile_read_only`、`503 model_unavailable`、`422 validation_error`。会探测外部模型，不能当作无副作用重试。 |
@@ -88,7 +88,7 @@
 | `GET /api/papers/{paper_id}/agent/conversations/{conversation_id}` | 返回 [`ConversationResponse`](#schema-索引)，含用户/助手消息、历史模型快照、引用和笔记引用可用性。 | 论文或会话不存在 `404`；只读。 |
 | `POST /api/agent/health` | 校验默认/环境回退模型的工具调用能力，返回 `AgentHealthResponse`（默认 `status: "ok"`）。 | `503` 工具调用不可用；只做能力探测，不写业务数据，可安全重复。 |
 
-模型正文会直接保存并返回；内联引用标记只是可选页面跳转，重复或无法定位的 ID 会被去重/忽略，不会改写回答。工具调用是 Agent 回合唯一必须通过的能力检测——`structured output` 现在只是模型档案里的展示信息，不再门禁聊天（Markdown 回答不需要 `response_format`）。
+模型正文会直接保存并返回；内联引用标记只是可选页面跳转，重复或无法定位的 ID 会被去重/忽略，不会改写回答。工具调用是 Agent 回合唯一必须通过的能力检测——`structured output` 现在只是模型档案里的展示信息，不再门禁聊天（Markdown 回答不需要 `response_format`）。档案配置了 `context_length` 时，Agent 请求组装会按估算做上下文压缩（详见[模型服务](model-services.md)与 [ADR 0004](adr/0004-context-compaction.md)）；压缩不改变本节任何请求/响应语义。
 
 ## Schema 索引
 

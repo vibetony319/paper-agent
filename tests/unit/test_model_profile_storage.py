@@ -320,3 +320,56 @@ def test_soft_delete_and_set_default_rolls_back_delete_when_promotion_fails(
 
     assert repository.get(current.id) == current
     assert repository.get(replacement.id) == replacement
+
+
+def test_token_limits_persist_and_update_without_capability_resets(repository):
+    """Token limits are plain columns: they persist, update, and clear."""
+    created = repository.create(
+        _profile(context_length=131_072, max_output_tokens=8_192)
+    )
+    repository.update_capabilities(
+        created.id,
+        expected_revision=created.revision,
+        capabilities=ModelCapabilities(
+            basic_chat=True, structured_output=True, tool_calling=True
+        ),
+    )
+    current = repository.get(created.id)
+
+    updated = repository.update(
+        current.id,
+        expected_revision=current.revision,
+        changes=ModelProfileChanges(max_output_tokens=16_384),
+    )
+    assert updated.context_length == 131_072
+    assert updated.max_output_tokens == 16_384
+    # Changing token limits is not a material configuration change: the
+    # capability probes must survive.
+    assert updated.capabilities == current.capabilities
+
+    cleared = repository.update(
+        updated.id,
+        expected_revision=updated.revision,
+        changes=ModelProfileChanges(
+            context_length=None, max_output_tokens=None
+        ),
+    )
+    assert cleared.context_length is None
+    assert cleared.max_output_tokens is None
+
+
+def test_token_limit_validation_bounds_and_pairing():
+    with pytest.raises(ValueError, match="context length"):
+        _profile(context_length=999)
+    with pytest.raises(ValueError, match="context length"):
+        _profile(context_length=10_000_001)
+    with pytest.raises(ValueError, match="output tokens"):
+        _profile(max_output_tokens=0)
+    with pytest.raises(ValueError, match="output tokens"):
+        _profile(max_output_tokens=200_001)
+    with pytest.raises(ValueError, match="smaller than context length"):
+        _profile(context_length=2_048, max_output_tokens=2_048)
+    # An output cap without a context window is fine: it only bounds the
+    # provider request, never compaction.
+    assert _profile(max_output_tokens=4_096).max_output_tokens == 4_096
+    assert _profile().context_length is None

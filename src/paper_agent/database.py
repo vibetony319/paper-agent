@@ -66,6 +66,7 @@ sections = Table(
     Column("title", String, nullable=False),
     Column("page_number", Integer),
     Column("order_index", Integer, nullable=False),
+    Column("level", Integer, nullable=False, server_default="1"),
     UniqueConstraint("paper_id", "id"),
     UniqueConstraint("paper_id", "order_index"),
 )
@@ -316,6 +317,8 @@ model_profiles = Table(
     Column("base_url", String, nullable=False),
     Column("model_name", String, nullable=False),
     Column("secret_ref", String),
+    Column("context_length", Integer),
+    Column("max_output_tokens", Integer),
     Column("enabled", Boolean, nullable=False, server_default="1"),
     Column("is_default", Boolean, nullable=False, server_default="0"),
     Column("revision", Integer, nullable=False),

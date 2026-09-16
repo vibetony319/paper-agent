@@ -54,4 +54,19 @@ def _reasoning_model_config() -> VllmModelConfig | None:
         base_url=base_url,
         model=model,
         api_key=os.getenv("PAPER_AGENT_REASONING_API_KEY", "EMPTY"),
+        context_length=_positive_int_env("PAPER_AGENT_REASONING_CONTEXT_LENGTH"),
+        max_output_tokens=_positive_int_env("PAPER_AGENT_REASONING_MAX_OUTPUT_TOKENS"),
     )
+
+
+def _positive_int_env(name: str) -> int | None:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return None
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        raise VllmConfigurationError(f"{name} must be an integer.") from None
+    if value < 1:
+        raise VllmConfigurationError(f"{name} must be a positive integer.")
+    return value

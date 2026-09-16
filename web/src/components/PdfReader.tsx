@@ -17,6 +17,7 @@ export interface SectionNavEntry {
   id: string;
   title: string;
   pageNumber: number | null;
+  level?: number;
 }
 
 type PdfReaderProps = {
@@ -341,8 +342,10 @@ export function PdfReader({
                       <li key={entry.id}>
                         <button
                           type="button"
+                          className="pdf-reader__section-link"
                           disabled={entry.pageNumber === null}
                           title={entry.pageNumber === null ? '该章节没有可定位的页面' : undefined}
+                          style={{ '--section-level': entry.level ?? 1 } as React.CSSProperties}
                           onClick={() => {
                             if (entry.pageNumber !== null) scrollToPage(entry.pageNumber);
                           }}

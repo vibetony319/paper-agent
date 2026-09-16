@@ -78,6 +78,8 @@ class ModelProfileRepository:
                 "base_url": updated.base_url,
                 "model_name": updated.model_name,
                 "secret_ref": updated.secret_ref,
+                "context_length": updated.context_length,
+                "max_output_tokens": updated.max_output_tokens,
                 "enabled": updated.enabled,
                 "is_default": updated.is_default,
                 "revision": expected_revision + 1,
@@ -197,6 +199,8 @@ class ModelProfileRepository:
                 base_url=profile.base_url,
                 model_name=profile.model_name,
                 secret_ref=profile.secret_ref,
+                context_length=profile.context_length,
+                max_output_tokens=profile.max_output_tokens,
                 enabled=profile.enabled,
                 is_default=profile.is_default,
                 revision=profile.revision,
@@ -255,6 +259,10 @@ def _apply_changes(profile: ModelProfile, changes: ModelProfileChanges) -> Model
             values[field_name] = value
     if changes.secret_ref is not UNCHANGED:
         values["secret_ref"] = changes.secret_ref
+    if changes.context_length is not UNCHANGED:
+        values["context_length"] = changes.context_length
+    if changes.max_output_tokens is not UNCHANGED:
+        values["max_output_tokens"] = changes.max_output_tokens
     return replace(profile, **values)
 
 
@@ -265,6 +273,8 @@ def _profile_from_row(row: RowMapping | Mapping[str, object]) -> ModelProfile:
         base_url=str(row["base_url"]),
         model_name=str(row["model_name"]),
         secret_ref=row["secret_ref"],
+        context_length=row["context_length"],
+        max_output_tokens=row["max_output_tokens"],
         enabled=bool(row["enabled"]),
         is_default=bool(row["is_default"]),
         revision=int(row["revision"]),

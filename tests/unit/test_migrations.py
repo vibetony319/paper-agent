@@ -21,6 +21,8 @@ MODEL_PROFILE_COLUMNS = {
     "base_url",
     "model_name",
     "secret_ref",
+    "context_length",
+    "max_output_tokens",
     "enabled",
     "is_default",
     "revision",
@@ -78,7 +80,7 @@ def test_model_profile_migration_upgrades_an_existing_database(tmp_path):
 
     assert {"model_profile_id", "model_snapshot_json", "request_id"} <= message_columns
     assert {"model_profile_id", "model_snapshot_json", "request_id"} <= run_columns
-    assert versions == [1, 2, 3, 4, 5]
+    assert versions == [1, 2, 3, 4, 5, 6, 7]
 
 
 def test_model_profile_migration_records_each_version_once_when_rerun(tmp_path):
@@ -93,7 +95,7 @@ def test_model_profile_migration_records_each_version_once_when_rerun(tmp_path):
             "SELECT version FROM schema_migrations ORDER BY version"
         ).scalars().all()
 
-    assert versions == [1, 2, 3, 4, 5]
+    assert versions == [1, 2, 3, 4, 5, 6, 7]
 
 
 def test_model_profile_migration_uses_frozen_schema_not_live_metadata(
@@ -229,7 +231,7 @@ def test_agent_response_snapshot_migration_upgrades_legacy_conversation_tables(
 
     assert "background_explanation" in message_columns
     assert {"ordinal", "citation_snapshot_json"} <= citation_columns
-    assert versions == [1, 2, 3, 4, 5]
+    assert versions == [1, 2, 3, 4, 5, 6, 7]
 
 
 def test_agent_response_snapshot_migration_uses_frozen_schema_not_live_metadata(
@@ -400,3 +402,48 @@ def test_annotation_migration_uses_frozen_schema_not_live_metadata(
             for column in connection.exec_driver_sql("PRAGMA table_info(notes)")
         }
     assert "future_note_column" not in columns
+
+
+def test_section_level_migration_upgrades_an_existing_database(tmp_path):
+    """Breaks if legacy sections tables keep working without the level column."""
+    engine = create_database_engine(database_url_for(tmp_path))
+    legacy = MetaData()
+    Table(
+        "papers",
+        legacy,
+        Column("id", String(36), primary_key=True),
+    )
+    Table(
+        "sections",
+        legacy,
+        Column("id", String(36), primary_key=True),
+        Column("paper_id", String(36), nullable=False),
+        Column("title", String, nullable=False),
+        Column("page_number", Integer),
+        Column("order_index", Integer, nullable=False),
+    )
+    legacy.create_all(engine)
+    with engine.begin() as connection:
+        connection.execute(
+            insert(legacy.tables["sections"]).values(
+                id="legacy-section",
+                paper_id="paper-1",
+                title="1. Introduction",
+                page_number=1,
+                order_index=0,
+            )
+        )
+
+    run_schema_migrations(engine)
+
+    with engine.connect() as connection:
+        columns = {
+            column[1]
+            for column in connection.exec_driver_sql("PRAGMA table_info(sections)")
+        }
+        levels = connection.exec_driver_sql(
+            "SELECT level FROM sections WHERE id = 'legacy-section'"
+        ).scalars().all()
+
+    assert "level" in columns
+    assert levels == [1]

@@ -266,6 +266,27 @@ def _apply_text_anchor_rect_paper_id(connection: Connection) -> None:
         )
 
 
+def _apply_model_profile_token_limits(connection: Connection) -> None:
+    """Frozen migration 6 schema for model profile context/output limits."""
+    _add_nullable_columns(
+        connection,
+        "model_profiles",
+        {"context_length": "INTEGER", "max_output_tokens": "INTEGER"},
+    )
+
+
+def _apply_section_levels(connection: Connection) -> None:
+    """Frozen migration 7 schema for hierarchical section navigation."""
+    columns = {
+        row[1]
+        for row in connection.exec_driver_sql("PRAGMA table_info(sections)")
+    }
+    if columns and "level" not in columns:
+        connection.exec_driver_sql(
+            "ALTER TABLE sections ADD COLUMN level INTEGER NOT NULL DEFAULT 1"
+        )
+
+
 MIGRATIONS = (
     Migration(
         version=1,
@@ -291,5 +312,15 @@ MIGRATIONS = (
         version=5,
         name="add_text_anchor_rect_paper_id",
         apply=_apply_text_anchor_rect_paper_id,
+    ),
+    Migration(
+        version=6,
+        name="add_model_profile_token_limits",
+        apply=_apply_model_profile_token_limits,
+    ),
+    Migration(
+        version=7,
+        name="add_section_levels",
+        apply=_apply_section_levels,
     ),
 )

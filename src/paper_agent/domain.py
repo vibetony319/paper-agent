@@ -112,7 +112,12 @@ class Section:
     title: str
     order: int
     page_number: int | None = None
+    level: int = 1
     id: str = field(default_factory=lambda: str(uuid4()))
+
+    def __post_init__(self) -> None:
+        if self.level < 1:
+            raise ValueError("section level must be positive")
 
 
 @dataclass(frozen=True)

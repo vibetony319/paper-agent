@@ -1,8 +1,18 @@
 # paper-agent 开发交接
 
-更新时间：2026-09-15（Asia/Shanghai）
+更新时间：2026-09-16（Asia/Shanghai）
 
 ## 最新进度（接手先读）
+
+### 章节解析、弹窗交互与上下文管理（2026-09-16）
+
+- **章节解析重写（`parsers/pymupdf_stage1.py`）**：PDF 书签大纲（`get_toc`）有效条目 ≥3 时作为权威来源（标题、顺序、层级）；无大纲时的启发式修复——全大写只统计 ASCII 字母（中文行不再误判）、加粗按"加粗字符占比 ≥60%"（作者行/arXiv 水印/STEP/图注不再入列）、跳过旋转文本（侧边水印）、首页标题区横幅守卫、垃圾标题后置过滤。`Section` 新增 `level`（迁移 7），前端章节导航按层级缩进。实测 InfoGain-RAG 论文从 49 条（含大量垃圾）降为 21 条干净章节。**需重新上传论文才应用新解析**（无重新解析入口，避免破坏已有高亮/笔记挂接）。
+- **解释/翻译弹窗可拖拽缩放（`InlineAssistantPopover.tsx`）**：标题栏拖拽（pointer capture，视口 12px 边距 clamp，键盘方向键微移 8/24px）、右下角缩放把手（最小 240×160）；用户交互后停止自动锚定、只保持视口内；宽高持久化到 localStorage。指针事件 stopPropagation，不影响阅读器的选区捕获契约（region aria-label、按钮名、z-index、流式渲染均不变）。
+- **模型档案 token 配置（迁移 6）**：`model_profiles` 新增可空 `context_length`（1,000–10,000,000）与 `max_output_tokens`（1–200,000，须小于上下文）；留空=不限制。全链路：域校验、存储、API（Create/Patch/Response，PATCH 显式 null 清除）、环境变量 `PAPER_AGENT_REASONING_CONTEXT_LENGTH`/`PAPER_AGENT_REASONING_MAX_OUTPUT_TOKENS`、前端设置表单两个数字输入（正整数 + 输出<上下文校验，编辑回填，列表展示配置值）。字段不进模型快照、不清空能力探测；6 个既有测试夹具文件同步补齐新字段（`npm run build` 的类型检查覆盖测试文件，缺字段会构建失败）。
+- **`max_output_tokens` 下发 provider**：`VllmModelConfig.max_output_tokens` 非空时以 `max_tokens` 传入全部四处 `chat.completions.create`（结构化两个分支、普通、流式）与 `request_tool_turn`；未配置省略参数，保持提供方默认。
+- **Agent 上下文压缩（`services/context_budget.py` + `agent_runtime.py`，设计见 [ADR 0004](adr/0004-context-compaction.md)）**：token 估算不用 tokenizer（CJK ≈1/字、其余 ≈4 字符/token，+1000 工具定义开销）；有效预算 = `context_length − (max_output_tokens 或 8192)`，超 0.75× 触发压缩——head 系统块与当前用户消息之间的历史折叠为一条摘要 system 消息（同一 client 非流式生成，中文提示词保留论文主题/事实/证据元素 ID/当前任务），工具循环中途压缩保留末尾 assistant(tool_calls)+tool 配对；摘要失败降级为丢弃最旧完整对话轮的硬截断（至 0.9×）。压缩是请求组装层瞬态行为：不落库、不影响 `request_id` 重放。未配置 `context_length` 完全不压缩不截断。
+- **测试中发现并修复的缺陷**：`partition_messages` 尾部回溯把 assistant(tool_calls) 划入 middle 而非 tail（off-by-one），压缩会拆散 OpenAI 工具配对、留下孤儿 tool 消息被 API 拒绝；修复为 `tail_start = probe - 1` 并有回归测试。
+- 验证：后端 **450 项通过**（新增 context_budget 16 项、压缩行为 6 项、vllm/env 9 项、档案边界 5 项）；前端 **229 项通过**（弹窗拖拽缩放 6 项、设置表单 5 项新增）、`tsc` 无错；`npm run build` 通过。真实论文需删除重传以应用新章节解析。
 
 ### 选区辅助可点击性与流式失败恢复（2026-09-15 第二轮）
 
