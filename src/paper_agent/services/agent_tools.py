@@ -1,13 +1,18 @@
 """Strict, deterministic paper tools for the paper agent."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 from unicodedata import normalize
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from paper_agent.domain import DocumentElement, Section
 from paper_agent.storage import PaperRepository
+
+if TYPE_CHECKING:
+    from paper_agent.services.paper_search import SemanticPaperSearchService
 
 
 class AgentToolError(ValueError):
@@ -83,13 +88,24 @@ class PaperToolRegistry:
         "read_section": _ReadSectionArguments,
     }
     _descriptions: ClassVar[dict[str, str]] = {
-        "search_paper": "Find document elements by normalized text substring.",
+        "search_paper": (
+            "Find document elements by semantic similarity or normalized text "
+            "substring. Semantic matches surface related passages even when "
+            "the query shares no literal wording (e.g. Chinese questions about "
+            "an English paper)."
+        ),
         "read_element": "Read one document element from the active paper.",
         "read_section": "Read one section and its document elements from the active paper.",
     }
 
-    def __init__(self, repository: PaperRepository) -> None:
+    def __init__(
+        self,
+        repository: PaperRepository,
+        *,
+        search: SemanticPaperSearchService | None = None,
+    ) -> None:
         self.repository = repository
+        self.search = search
         self._handlers = {
             "search_paper": self._search_paper,
             "read_element": self._read_element,
@@ -129,16 +145,51 @@ class PaperToolRegistry:
 
     def _search_paper(self, paper_id: str, arguments: _ToolArguments) -> ToolExecution:
         query = _normalized_search_text(arguments.query)
-        elements = tuple(
-            element
-            for element in self.repository.get_elements(paper_id)
+        elements = self.repository.get_elements(paper_id)
+        by_id = {element.id: element for element in elements}
+        matches: list[tuple[DocumentElement, str, float]] = [
+            (element, "substring", 1.0)
+            for element in elements
             if query in _normalized_search_text(element.text)
-        )[: arguments.limit]
+        ]
+        matched_ids = {element.id for element, _, _ in matches}
+        for hit in self._semantic_hits(paper_id, arguments):
+            if len(matches) >= arguments.limit:
+                break
+            element = by_id.get(hit.element_id)
+            if element is None or element.id in matched_ids:
+                continue
+            matches.append((element, "semantic", hit.score))
+            matched_ids.add(element.id)
+        matches = matches[: arguments.limit]
         return ToolExecution(
             name="search_paper",
-            content={"elements": [_public_element(element) for element in elements]},
-            evidence_element_ids=self._located_evidence_ids(paper_id, elements),
+            content={
+                "elements": [
+                    {
+                        **_public_element(element),
+                        "search_mode": mode,
+                        "search_score": score,
+                    }
+                    for element, mode, score in matches
+                ]
+            },
+            evidence_element_ids=self._located_evidence_ids(
+                paper_id, tuple(element for element, _, _ in matches)
+            ),
         )
+
+    def _semantic_hits(self, paper_id: str, arguments: _SearchPaperArguments):
+        if self.search is None:
+            return ()
+        try:
+            return self.search.search(
+                paper_id, arguments.query, limit=arguments.limit * 2
+            )
+        except Exception:
+            # Semantic retrieval is an enhancement: any failure keeps the
+            # deterministic substring results intact.
+            return ()
 
     def _read_element(self, paper_id: str, arguments: _ToolArguments) -> ToolExecution:
         element = next(

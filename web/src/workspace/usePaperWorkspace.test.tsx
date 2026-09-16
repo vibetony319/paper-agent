@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 import { ApiError, paperApi } from '../api/client';
 import { streamAgentMessage, streamSelectionAssist } from '../api/sse';
-import type { AgentMessage, Highlight, Note, PaperDocument, SelectionAssistEvent, TextAnchorDraft } from '../api/types';
+import type { AgentMessage, ContextUsage, Highlight, Note, PaperDocument, SelectionAssistEvent, TextAnchorDraft } from '../api/types';
 import { usePaperWorkspace } from './usePaperWorkspace';
 
 vi.mock('../api/sse', () => ({ streamSelectionAssist: vi.fn(), streamAgentMessage: vi.fn() }));
@@ -125,6 +125,30 @@ it('uses a fresh current-model payload for Agent calls without resetting the con
     { question: '第二个问题', message: second },
   ]);
   expect(result.current.streaming).toBeNull();
+});
+
+it('tracks context usage from the completed event and refreshes it for the active conversation', async () => {
+  const answer: AgentMessage = { conversation_id: 'conversation-a', message_id: 'message-a', status: 'grounded', paper_answer: '回答', background_explanation: null, citations: [] };
+  const streamedUsage: ContextUsage = { used_tokens: 8200, context_length: 131072, effective_limit: 122880, compaction_threshold: 92160, percent: 6.7 };
+  vi.mocked(streamAgentMessage).mockImplementationOnce(async function* () {
+    yield { event: 'started', data: { request_id: 'agent-request-a' } };
+    yield { event: 'completed', data: { message: answer, context_usage: streamedUsage } };
+  });
+  vi.stubGlobal('crypto', { randomUUID: vi.fn().mockReturnValueOnce('agent-request-a') });
+  const refreshedUsage: ContextUsage = { used_tokens: 9100, context_length: 131072, effective_limit: 122880, compaction_threshold: 92160, percent: 7.4 };
+  const refresh = deferred<ContextUsage>();
+  const getContextUsage = vi.spyOn(paperApi, 'getContextUsage').mockReturnValue(refresh.promise);
+  const { result } = renderHook(() => usePaperWorkspace('paper-a', 0, 'qwen'));
+  await waitFor(() => expect(result.current.document).not.toBeNull());
+
+  expect(getContextUsage).not.toHaveBeenCalled();
+  await act(async () => { await result.current.askAgent('这篇论文讲了什么', 'qwen'); });
+
+  expect(result.current.conversationId).toBe('conversation-a');
+  expect(result.current.contextUsage).toEqual(streamedUsage);
+  expect(getContextUsage).toHaveBeenCalledWith('paper-a', 'conversation-a', 'qwen', expect.anything());
+  await act(async () => { refresh.resolve(refreshedUsage); await refresh.promise; });
+  await waitFor(() => expect(result.current.contextUsage).toEqual(refreshedUsage));
 });
 
 it('exposes streamed answer text until the turn is completed', async () => {

@@ -1822,6 +1822,30 @@ textarea::placeholder {
 .chat-composer__input-row textarea { width: 100%; min-height: 84px; max-height: 180px; resize: none; padding: 12px 92px 12px 14px; border-radius: 16px; font-family: inherit; font-size: 14px; }
 .chat-composer__input-row button[type='submit'] { position: absolute; right: 8px; bottom: 8px; padding: 8px 12px; border-radius: 10px; font-size: 12px; white-space: nowrap; }
 .chat-composer__hint { margin: 0; text-align: center; font-size: 11px; color: var(--ink-faint); }
+.chat-composer__hint-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0; }
+.chat-composer__hint-row .chat-composer__hint { flex: 1 1 auto; }
+
+.context-usage {
+  align-items: center;
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 5px;
+  margin: 0;
+  font-size: 11px;
+  color: var(--ink-faint);
+  white-space: nowrap;
+}
+
+.context-usage__dot {
+  border-radius: 50%;
+  background: currentColor;
+  display: inline-block;
+  height: 6px;
+  width: 6px;
+}
+
+.context-usage--warning { color: var(--amber); }
+.context-usage--danger { color: var(--danger-strong); }
 
 .model-selector {
   align-items: center;

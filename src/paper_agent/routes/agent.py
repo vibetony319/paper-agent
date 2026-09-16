@@ -1,7 +1,7 @@
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from paper_agent.annotation_storage import PaperAnnotationRepository
@@ -12,6 +12,7 @@ from paper_agent.schemas import (
     AgentMessageRequest,
     AgentMessageResponse,
     CitationResponse,
+    ContextUsageResponse,
     ConversationMessageResponse,
     ConversationResponse,
     ModelSnapshotResponse,
@@ -229,6 +230,12 @@ def _run_agent_request(
             repository,
             paper_id_text,
             runtime.turn_from_messages(paper_id=paper_id_text, messages=existing),
+            context_usage=_replayed_context_usage(
+                request,
+                runtime,
+                paper_id=paper_id_text,
+                stored=existing,
+            ),
         )
 
     partial_user = repository.get_agent_user_message_by_request(
@@ -309,13 +316,78 @@ def _run_agent_request(
             status_code=502,
             detail="模型未能完成有效回答，可能是工具调用或返回格式不符合要求，请重试或在模型设置中重新测试。",
         ) from None
-    return _agent_message_response(repository, paper_id_text, turn)
+    return _agent_message_response(
+        repository,
+        paper_id_text,
+        turn,
+        context_usage=_conversation_usage_or_none(
+            runtime,
+            paper_id=paper_id_text,
+            conversation_id=turn.conversation.id,
+            profile=resolved.profile,
+        ),
+    )
+
+
+def _conversation_usage_or_none(
+    runtime: PaperAgentRuntime,
+    *,
+    paper_id: str,
+    conversation_id: str,
+    profile: object,
+) -> ContextUsageResponse | None:
+    """The usage readout is auxiliary: never fail answer delivery over it."""
+    try:
+        usage = runtime.conversation_usage(
+            paper_id=paper_id,
+            conversation_id=conversation_id,
+            budget=ContextBudget.from_profile(profile),
+        )
+    except Exception:
+        logger.warning(
+            "context usage estimate failed for paper %s conversation %s",
+            paper_id,
+            conversation_id,
+        )
+        return None
+    return ContextUsageResponse.from_usage(usage)
+
+
+def _replayed_context_usage(
+    request: Request,
+    runtime: PaperAgentRuntime,
+    *,
+    paper_id: str,
+    stored: tuple[ConversationMessage, ConversationMessage],
+) -> ContextUsageResponse | None:
+    """Replay must answer from storage alone, so read the profile record.
+
+    The stored user turn names the profile that produced the original
+    response; the repository read keeps the replay independent of the
+    reasoning client provider. A profile without a stored record (env
+    fallback, deleted profile) reports usage without a limit.
+    """
+    user_message = stored[0]
+    profile = (
+        None
+        if user_message.model_profile_id is None
+        else request.app.state.model_profile_repository.get(
+            user_message.model_profile_id
+        )
+    )
+    return _conversation_usage_or_none(
+        runtime,
+        paper_id=paper_id,
+        conversation_id=user_message.conversation_id,
+        profile=profile,
+    )
 
 
 def _agent_message_response(
     repository: PaperRepository,
     paper_id: str,
     turn: AgentTurn,
+    context_usage: ContextUsageResponse | None = None,
 ) -> AgentMessageResponse:
     citation_elements = _citation_elements(
         repository, paper_id, (turn.assistant_message,)
@@ -341,6 +413,7 @@ def _agent_message_response(
             NoteReferenceResponse.from_reference(reference)
             for reference in turn.note_references
         ],
+        context_usage=context_usage,
     )
 
 
@@ -441,12 +514,21 @@ def stream_paper_agent(
                     context_budget=ContextBudget.from_profile(resolved.profile),
                 ):
                     if event.event == "completed" and event.turn is not None:
+                        usage = _conversation_usage_or_none(
+                            _runtime(request),
+                            paper_id=paper_id_text,
+                            conversation_id=event.turn.conversation.id,
+                            profile=resolved.profile,
+                        )
                         yield sse_frame(
                             "completed",
                             {
                                 "message": _agent_message_response(
                                     repository, paper_id_text, event.turn
-                                ).model_dump(mode="json")
+                                ).model_dump(mode="json"),
+                                "context_usage": (
+                                    None if usage is None else usage.model_dump(mode="json")
+                                ),
                             },
                         )
                     elif event.event == "error":
@@ -502,6 +584,38 @@ def get_conversation(
             for message in messages
         ],
     )
+
+
+@router.get(
+    "/papers/{paper_id}/agent/conversations/{conversation_id}/context-usage",
+    response_model=ContextUsageResponse,
+)
+def get_conversation_context_usage(
+    paper_id: UUID,
+    conversation_id: UUID,
+    request: Request,
+    model_profile_id: UUID = Query(...),
+) -> ContextUsageResponse:
+    """Estimate the context occupancy of the conversation's next request."""
+    paper_id_text = str(paper_id)
+    repository = _repository(request)
+    _require_paper(repository, paper_id_text)
+    conversation = _require_conversation(
+        repository, paper_id_text, str(conversation_id)
+    )
+    try:
+        resolved = _provider(request).resolve(str(model_profile_id))
+    except Exception:
+        raise HTTPException(
+            status_code=503,
+            detail="Reasoning model is not configured.",
+        ) from None
+    usage = _runtime(request).conversation_usage(
+        paper_id=paper_id_text,
+        conversation_id=conversation.id,
+        budget=ContextBudget.from_profile(resolved.profile),
+    )
+    return ContextUsageResponse.from_usage(usage)
 
 
 def _note_references_for_messages(

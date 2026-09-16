@@ -104,6 +104,43 @@ class ContextBudget:
         return self.request_tokens(messages) > self.compaction_threshold
 
 
+@dataclass(frozen=True)
+class ContextUsage:
+    """Estimated occupancy of the next agent request for a conversation.
+
+    A None context_length means the profile sets no limit, so only
+    used_tokens is meaningful. Percent is measured against the effective
+    limit (context minus the answer reserve), matching compaction.
+    """
+
+    used_tokens: int
+    context_length: int | None = None
+    effective_limit: int | None = None
+    compaction_threshold: int | None = None
+
+    @property
+    def percent(self) -> float | None:
+        if self.effective_limit is None or self.effective_limit <= 0:
+            return None
+        return round(self.used_tokens * 100 / self.effective_limit, 1)
+
+
+def context_usage(
+    messages: Iterable[Mapping[str, object]],
+    budget: ContextBudget | None,
+) -> ContextUsage:
+    """Estimate the next request's occupancy with the compaction estimator."""
+    used = estimate_messages_tokens(messages) + TOOL_DEFINITION_OVERHEAD
+    if budget is None:
+        return ContextUsage(used_tokens=used)
+    return ContextUsage(
+        used_tokens=used,
+        context_length=budget.context_length,
+        effective_limit=budget.effective_limit,
+        compaction_threshold=budget.compaction_threshold,
+    )
+
+
 @dataclass
 class CompactionParts:
     """Message slices that decide what compaction keeps and folds away."""

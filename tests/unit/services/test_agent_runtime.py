@@ -644,20 +644,29 @@ def test_runtime_retries_after_unexpected_guard_failure_without_leaking_or_dupli
     assert len(repository.get_conversation_messages(paper.id, recovered.conversation.id)) == 2
 
 
-def test_chinese_overview_reads_source_before_generating_answer(repository):
+def test_chinese_overview_searches_the_paper_before_generating_answer(repository):
+    """Overview questions get no pre-seeded excerpts; the model searches itself."""
     paper = _paper_with_stage1_document(repository)
-    client = FakeAgentClient(final_answer=_grounded_markdown(citations=[paper.element_id]))
+    client = FakeAgentClient(
+        turns=(
+            _tool_turn("search_paper", {"query": "这篇论文讲了什么", "limit": 5}),
+            VllmToolTurn(content=None, tool_calls=()),
+        ),
+        final_answer=_grounded_markdown(citations=[paper.element_id]),
+    )
     turn = _runtime(repository, client).ask(paper_id=paper.id,
         question=AgentQuestion(content='这篇论文讲了什么'))
     assert turn.answer.status == 'grounded'
     messages = client.final_requests[0]['messages']
-    assert any(
+    # The model's own search turn is replayed with its tool result.
+    tool_messages = [message for message in messages if message['role'] == 'tool']
+    assert len(tool_messages) == 1
+    assert tool_messages[0]['name'] == "search_paper"
+    # No system message may carry pre-seeded evidence the model never fetched.
+    assert not any(
         message['role'] == 'system' and paper.element_id in message['content']
         for message in messages
     )
-    # Pre-read excerpts must not be replayed as a tool turn the model never made.
-    assert not any(message['role'] == 'tool' for message in messages)
-    assert not any(message.get('tool_calls') for message in messages)
 
 
 def test_tool_turn_replays_the_providers_reasoning_content(repository):

@@ -27,6 +27,7 @@ from paper_agent.services.model_secrets import ModelSecretStore
 from paper_agent.services.note_memory import NoteMemoryService
 from paper_agent.services.paper_deletion import PaperDeletionService
 from paper_agent.services.paper_operations import PaperOperationCoordinator
+from paper_agent.services.paper_search import SemanticPaperSearchService
 from paper_agent.services.reasoning_clients import ReasoningClientProvider
 from paper_agent.services.selection_assists import SelectionAssistService
 from paper_agent.storage import PaperRepository
@@ -68,7 +69,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.selection_assist_service = SelectionAssistService(
         app.state.annotation_repository
     )
-    app.state.paper_tool_registry = PaperToolRegistry(repository)
+    app.state.paper_search_service = SemanticPaperSearchService(
+        repository,
+        index_dir=app.state.settings.search_index_dir,
+        embedding_model=app.state.settings.embedding_model,
+    )
+    app.state.paper_tool_registry = PaperToolRegistry(
+        repository, search=app.state.paper_search_service
+    )
     app.state.citation_guard = CitationGuard()
     app.state.paper_agent_runtime = PaperAgentRuntime(
         repository=repository,

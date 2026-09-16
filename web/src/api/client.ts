@@ -1,5 +1,6 @@
 import type {
   AnnotationBundle,
+  ContextUsage,
   CreateHighlightInput,
   CreateNoteInput,
   Highlight,
@@ -9,8 +10,8 @@ import type {
   Note,
   PaperDocument,
   PaperSummary,
-  UpdateHighlightInput,
   UpdateNoteInput,
+  UpdateHighlightInput,
 } from './types';
 
 const REQUEST_FAILED_MESSAGE = '请求失败，请稍后重试。';
@@ -140,6 +141,19 @@ export const paperApi = {
 
   getDocument: (paperId: string, init?: Pick<RequestInit, 'signal'>) =>
     request<PaperDocument>(`/api/papers/${encodeURIComponent(paperId)}/document`, init),
+
+  getContextUsage: (
+    paperId: string,
+    conversationId: string,
+    modelProfileId: string,
+    init?: Pick<RequestInit, 'signal'>,
+  ) =>
+    request<ContextUsage>(
+      `/api/papers/${encodeURIComponent(paperId)}/agent/conversations`
+      + `/${encodeURIComponent(conversationId)}/context-usage`
+      + `?model_profile_id=${encodeURIComponent(modelProfileId)}`,
+      init,
+    ),
 
   getSourceUrl: (paperId: string) =>
     `/api/papers/${encodeURIComponent(paperId)}/source`,

@@ -7,7 +7,9 @@ from paper_agent.services.context_budget import (
     TOOL_DEFINITION_OVERHEAD,
     CompactionParts,
     ContextBudget,
+    ContextUsage,
     compacted_messages,
+    context_usage,
     drop_oldest_exchange,
     estimate_messages_tokens,
     estimate_tokens,
@@ -248,3 +250,44 @@ def test_drop_oldest_exchange_stops_before_the_next_tool_block():
 
 def test_drop_oldest_exchange_reports_an_empty_middle():
     assert drop_oldest_exchange([]) is False
+
+
+def test_context_usage_without_a_budget_reports_only_used_tokens():
+    messages = [_message("system", "系统提示"), _message("user", "论文讲了什么")]
+
+    usage = context_usage(messages, None)
+
+    assert usage == ContextUsage(
+        used_tokens=estimate_messages_tokens(messages) + TOOL_DEFINITION_OVERHEAD
+    )
+    assert usage.context_length is None
+    assert usage.percent is None
+
+
+def test_context_usage_with_a_budget_reports_limit_fields():
+    messages = [_message("system", "system prompt"), _message("user", "question")]
+    budget = ContextBudget(context_length=8192, max_output_tokens=1024)
+
+    usage = context_usage(messages, budget)
+
+    assert usage.used_tokens == (
+        estimate_messages_tokens(messages) + TOOL_DEFINITION_OVERHEAD
+    )
+    assert usage.context_length == 8192
+    assert usage.effective_limit == 8192 - 1024
+    assert usage.compaction_threshold == int((8192 - 1024) * COMPACT_THRESHOLD)
+    assert usage.percent == round(
+        usage.used_tokens * 100 / (8192 - 1024), 1
+    )
+
+
+def test_context_usage_percent_uses_the_default_output_reserve():
+    budget = ContextBudget(context_length=32768)
+    messages = [_message("system", "s")]
+
+    usage = context_usage(messages, budget)
+
+    assert usage.effective_limit == 32768 - DEFAULT_OUTPUT_RESERVE
+    assert usage.percent == round(
+        usage.used_tokens * 100 / (32768 - DEFAULT_OUTPUT_RESERVE), 1
+    )

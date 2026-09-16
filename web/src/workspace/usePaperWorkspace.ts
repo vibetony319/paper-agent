@@ -3,7 +3,14 @@ import { useCallback, useEffect, useReducer, useRef } from 'react';
 import { ApiError, apiErrorMessage, paperApi } from '../api/client';
 import { newRequestId } from '../api/ids';
 import { streamAgentMessage, streamSelectionAssist } from '../api/sse';
-import type { AgentMessage, Citation, HighlightColor, SelectionAssistAction, TextAnchorDraft } from '../api/types';
+import type {
+  AgentMessage,
+  Citation,
+  ContextUsage,
+  HighlightColor,
+  SelectionAssistAction,
+  TextAnchorDraft,
+} from '../api/types';
 import {
   initialWorkspaceState,
   toSourceTarget,
@@ -25,6 +32,7 @@ function selectionAssistFailureMessage(action: SelectionAssistAction): string {
 export function usePaperWorkspace(
   activePaperId: string | null,
   loadRevision = 0,
+  modelProfileId: string | null = null,
 ) {
   const [state, dispatch] = useReducer(workspaceReducer, initialWorkspaceState);
   // Keep reducer guards unique even when callers reset their retry trigger.
@@ -140,6 +148,31 @@ export function usePaperWorkspace(
     };
   }, [activePaperId, loadRevision]);
 
+  // The usage readout is auxiliary: a failed refresh leaves the last value.
+  useEffect(() => {
+    if (activePaperId === null || modelProfileId === null || state.conversationId === null) {
+      return;
+    }
+    const controller = new AbortController();
+    void paperApi.getContextUsage(
+      activePaperId,
+      state.conversationId,
+      modelProfileId,
+      { signal: controller.signal },
+    )
+      .then((usage) => {
+        if (controller.signal.aborted) return;
+        dispatch({
+          type: 'context/usage-set',
+          paperId: activePaperId,
+          loadRevision: state.loadRevision,
+          usage,
+        });
+      })
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [activePaperId, modelProfileId, state.conversationId, state.loadRevision]);
+
   const askAgent = useCallback(async (
     content: string,
     modelProfileId: string,
@@ -162,6 +195,7 @@ export function usePaperWorkspace(
     });
     try {
       let message: AgentMessage | null = null;
+      let contextUsage: ContextUsage | null = null;
       for await (const event of streamAgentMessage(paperId, {
         content,
         conversation_id: conversationId ?? undefined,
@@ -178,6 +212,7 @@ export function usePaperWorkspace(
           });
         } else if (event.event === 'completed') {
           message = event.data.message;
+          contextUsage = event.data.context_usage ?? null;
         } else if (event.event === 'error') {
           throw new ApiError(0, '助手回答失败。', event.data.code, event.data.detail);
         }
@@ -192,6 +227,12 @@ export function usePaperWorkspace(
         conversationId: message.conversation_id,
         question: content,
         message,
+      });
+      dispatch({
+        type: 'context/usage-set',
+        paperId,
+        loadRevision: requestLoadRevision,
+        usage: contextUsage,
       });
       return message;
     } catch (error) {

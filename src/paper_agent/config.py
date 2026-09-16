@@ -6,14 +6,19 @@ from paper_agent.database import database_url_for
 from paper_agent.models.vllm import VllmConfigurationError, VllmModelConfig
 
 
+DEFAULT_EMBEDDING_MODEL = "st-paraphrase-multilingual-MiniLM-L12-v2"
+
+
 @dataclass(frozen=True)
 class Settings:
     data_dir: Path
     database_url: str
     reasoning_model: VllmModelConfig | None = None
+    embedding_model: str = DEFAULT_EMBEDDING_MODEL
     papers_dir: Path = field(init=False)
     trash_dir: Path = field(init=False)
     model_secrets_path: Path = field(init=False)
+    search_index_dir: Path = field(init=False)
 
     def __post_init__(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -26,6 +31,7 @@ class Settings:
             "model_secrets_path",
             self.data_dir / "secrets" / "model-profiles.json",
         )
+        object.__setattr__(self, "search_index_dir", self.data_dir / "search-indexes")
 
         if self.database_url.startswith("sqlite:///"):
             database_path = Path(self.database_url.removeprefix("sqlite:///"))
@@ -38,7 +44,15 @@ def get_settings(*, data_dir: Path | None = None) -> Settings:
         data_dir=resolved_data_dir,
         database_url=database_url_for(resolved_data_dir),
         reasoning_model=_reasoning_model_config(),
+        embedding_model=_embedding_model(),
     )
+
+
+def _embedding_model() -> str:
+    raw = os.getenv("PAPER_AGENT_EMBEDDING_MODEL")
+    if raw is None or not raw.strip():
+        return DEFAULT_EMBEDDING_MODEL
+    return raw.strip()
 
 
 def _reasoning_model_config() -> VllmModelConfig | None:

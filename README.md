@@ -52,7 +52,14 @@ flowchart LR
 - Python 3.12 或更高版本。
 - Node.js 22.14+（Node 22 系列）或 Node.js 24+。
 - npm。
-- 可选：一个或多个 OpenAI-compatible vLLM 服务。阅读、笔记和 PDF 管理不要求模型服务；解释、翻译、图谱构建和论文助手需要相应模型能力。
+- 可选：一个或多个 OpenAI-compatible vLLM 服务。阅读、笔记和 PDF 管理不要求模型服务；解释、翻译和论文助手需要相应模型能力。
+
+### 语义检索依赖（paperqa2）
+
+`paper-qa[local]` 已在默认依赖中：论文助手的 `search_paper` 工具用它做本地语义检索（默认嵌入模型 `st-paraphrase-multilingual-MiniLM-L12-v2`，支持中文提问检索英文论文；可用 `PAPER_AGENT_EMBEDDING_MODEL` 覆盖）。注意两点：
+
+- 安装体积较大（torch 约 2GB 磁盘空间）；首次对一篇论文提问时会从 HuggingFace 下载嵌入模型（约 100-500MB，之后离线运行）。国内网络建议先设置 `HF_ENDPOINT=https://hf-mirror.com` 再启动后端。
+- Windows 未开启长路径（`LongPathsEnabled=0`）且仓库路径很深时，`pip install` 可能在 litellm 的深层文件上报 `[Errno 2]`。解决办法：先单独下载 litellm wheel，用 Python 以 `\\?\` 前缀解压进 `site-packages`，再重跑 `pip install -e ".[dev]"`；或启用系统长路径支持后重装。嵌入模型不可用时 `search_paper` 自动回退纯子串匹配，不影响其他功能。
 
 ## 快速开始（Windows PowerShell）
 

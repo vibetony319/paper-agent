@@ -10,6 +10,7 @@ dependencies = [
     "jsonschema>=4.23,<5",
     "fastapi>=0.115,<0.116",
     "openai>=1.0,<3",
+    "paper-qa[local]>=2026.8.12",
     "pydantic>=2,<3",
     "PyMuPDF>=1.26,<1.27",
     "python-multipart>=0.0.9,<1.0",

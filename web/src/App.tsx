@@ -16,8 +16,12 @@ export function App() {
   const [libraryHeadingFocusRequested, setLibraryHeadingFocusRequested] = useState(false);
   const [workspaceLoadRevision, setWorkspaceLoadRevision] = useState(0);
   const [modelSettingsOpen, setModelSettingsOpen] = useState(false);
-  const workspace = usePaperWorkspace(activePaper?.id ?? null, workspaceLoadRevision);
   const modelProfiles = useModelProfiles(activePaper?.id ?? null);
+  const workspace = usePaperWorkspace(
+    activePaper?.id ?? null,
+    workspaceLoadRevision,
+    modelProfiles.selectedProfileId,
+  );
 
   const selectPaper = (paper: PaperSummary) => {
     const isActivePaper = activePaper?.id === paper.id;
