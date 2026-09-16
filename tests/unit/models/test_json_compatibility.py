@@ -104,3 +104,23 @@ def test_native_schema_mode_also_extracts_embedded_json():
 
     assert invoke(transport) == {'status': 'ok'}
     assert len(transport.requests) == 1
+
+
+def test_max_output_tokens_is_sent_on_both_json_paths():
+    """The output cap rides along schema mode and the json_object fallback."""
+    transport = Transport({'status': 'ok'})
+    VllmStructuredClient(
+        VllmModelConfig('https://example.invalid', 'model', max_output_tokens=256),
+        transport,
+    ).generate_json(
+        system_prompt='extract', user_prompt='source',
+        schema_name='test', schema=SCHEMA)
+
+    assert [request.get('max_tokens') for request in transport.requests] == [256, 256]
+
+
+def test_json_requests_omit_max_tokens_when_unconfigured():
+    transport = Transport({'status': 'ok'})
+    invoke(transport)
+
+    assert all('max_tokens' not in request for request in transport.requests)

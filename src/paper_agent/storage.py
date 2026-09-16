@@ -835,6 +835,7 @@ class PaperRepository:
                             "title": section.title,
                             "page_number": section.page_number,
                             "order_index": section.order,
+                            "level": section.level,
                         }
                         for section in stage1_sections
                     ],
@@ -867,7 +868,13 @@ class PaperRepository:
                 select(sections).where(sections.c.paper_id == paper_id).order_by(sections.c.order_index, sections.c.id)
             ).mappings()
             return tuple(
-                Section(id=row["id"], title=row["title"], page_number=row["page_number"], order=row["order_index"])
+                Section(
+                    id=row["id"],
+                    title=row["title"],
+                    page_number=row["page_number"],
+                    order=row["order_index"],
+                    level=row["level"],
+                )
                 for row in rows
             )
 

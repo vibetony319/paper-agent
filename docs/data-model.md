@@ -44,7 +44,7 @@ erDiagram
 | `papers` | `id` | — | 根表；`stored_filename` 只是 basename |
 | `processing_runs` | `id` | `paper_id → papers.id` | `(paper_id, sequence)` 唯一 |
 | `pages` | `id` | `paper_id → papers.id` | `(paper_id, number)` 唯一 |
-| `sections` | `id` | `paper_id → papers.id` | `(paper_id, order_index)` 唯一 |
+| `sections` | `id` | `paper_id → papers.id` | `(paper_id, order_index)` 唯一；`level`（1 起）记录章节层级，由 Stage 1 书签大纲或编号深度得出 |
 | `document_elements` | `id` | `paper_id → papers.id`；`(paper_id, section_id) → sections` | bbox 归一化与 `location_status` 一致性检查 |
 
 ### 批注与锚点
@@ -75,7 +75,7 @@ erDiagram
 
 ### 模型档案（全局，不属于论文）
 
-`model_profiles` 是全局表，软删除（`deleted_at`），**论文删除绝不触碰**。`processing_runs`、`notes`、`selection_assist_requests`、`conversation_messages` 上的 `model_profile_id` + `model_snapshot_json` 是请求作用域调用的追溯快照，不含密钥，档案删除后快照仍保留。模型档案的修订与 usage lease 见 [模型服务与模型档案](model-services.md)。
+`model_profiles` 是全局表，软删除（`deleted_at`），**论文删除绝不触碰**。除展示与连接字段外，还带两个可空 token 列：`context_length`（1,000–10,000,000）与 `max_output_tokens`（1–200,000，须小于 `context_length`），留空表示不限制、不压缩。`processing_runs`、`notes`、`selection_assist_requests`、`conversation_messages` 上的 `model_profile_id` + `model_snapshot_json` 是请求作用域调用的追溯快照，不含密钥（也不含 token 限制字段），档案删除后快照仍保留。模型档案的修订与 usage lease 见 [模型服务与模型档案](model-services.md)，上下文压缩设计见 [ADR 0004](adr/0004-context-compaction.md)。
 
 ## 永久删除
 

@@ -317,3 +317,55 @@ def test_tool_client_wraps_provider_protocol_and_argument_failures_safely(
     assert "response-secret" not in chain
     assert "provider-secret" not in chain
     assert "prompt-secret" not in chain
+
+
+def _capped_config() -> VllmModelConfig:
+    return VllmModelConfig(
+        base_url="http://127.0.0.1:8000/v1",
+        model="qwen-test",
+        api_key="test-key",
+        max_output_tokens=512,
+    )
+
+
+def test_tool_loop_requests_carry_the_configured_output_cap(fake_openai):
+    """max_tokens follows the profile's output cap on tool-loop requests."""
+    client = VllmToolCallingClient(_capped_config(), client=fake_openai)
+
+    client.request_tool_turn(
+        messages=[{"role": "user", "content": "question"}],
+        tools=(),
+        tool_choice="auto",
+    )
+
+    assert fake_openai.requests[0]["max_tokens"] == 512
+
+
+def test_tool_loop_requests_omit_max_tokens_when_unconfigured(fake_openai):
+    VllmToolCallingClient(_config(), client=fake_openai).request_tool_turn(
+        messages=[{"role": "user", "content": "question"}],
+        tools=(),
+        tool_choice="auto",
+    )
+
+    assert "max_tokens" not in fake_openai.requests[0]
+
+
+def test_final_answer_requests_carry_the_configured_output_cap(fake_openai):
+    fake_openai.content = "The conclusion is routing balance. [[e1]]"
+
+    VllmToolCallingClient(_capped_config(), client=fake_openai).complete_markdown_messages(
+        messages=[{"role": "user", "content": "question"}]
+    )
+
+    assert fake_openai.requests[0]["max_tokens"] == 512
+
+
+def test_streamed_final_answer_requests_carry_the_configured_output_cap(fake_openai):
+    list(
+        VllmToolCallingClient(_capped_config(), client=fake_openai).stream_final_answer(
+            messages=[{"role": "user", "content": "question"}]
+        )
+    )
+
+    assert fake_openai.requests[0]["max_tokens"] == 512

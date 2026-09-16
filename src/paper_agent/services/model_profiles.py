@@ -110,6 +110,8 @@ class ModelProfileService:
         api_key: str | None = None,
         enabled: bool = True,
         is_default: bool = False,
+        context_length: int | None = None,
+        max_output_tokens: int | None = None,
     ) -> ModelProfileView:
         if is_default and not enabled:
             raise ModelProfileInputError("disabled profile cannot be default")
@@ -120,6 +122,8 @@ class ModelProfileService:
                 model_name=model_name,
                 enabled=enabled,
                 is_default=is_default,
+                context_length=context_length,
+                max_output_tokens=max_output_tokens,
             )
             secret_written = False
             normalized_key = self._normalized_api_key(api_key)

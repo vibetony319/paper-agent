@@ -28,6 +28,7 @@ from paper_agent.services.agent_runtime import (
     AgentTurn,
     PaperAgentRuntime,
 )
+from paper_agent.services.context_budget import ContextBudget
 from paper_agent.services.model_profiles import (
     ModelProfileNotFoundError,
     ModelProfileService,
@@ -280,6 +281,7 @@ def _run_agent_request(
                 model_snapshot=resolved.snapshot,
                 request_id=request_id,
                 selection=selection,
+                context_budget=ContextBudget.from_profile(resolved.profile),
             )
     except ModelProfileNotFoundError:
         if partial_user is not None:
@@ -436,6 +438,7 @@ def stream_paper_agent(
                     model_snapshot=resolved.snapshot,
                     request_id=request_id,
                     selection=selection,
+                    context_budget=ContextBudget.from_profile(resolved.profile),
                 ):
                     if event.event == "completed" and event.turn is not None:
                         yield sse_frame(

@@ -22,6 +22,8 @@ PROFILE_FIELDS = {
     "revision",
     "has_api_key",
     "api_key_mask",
+    "context_length",
+    "max_output_tokens",
     "capabilities",
     "read_only",
 }
@@ -468,3 +470,84 @@ def test_environment_fallback_supplies_compatibility_clients_through_provider(
         assert resolved.structured is not None
     finally:
         client.close()
+
+
+def test_token_limit_fields_roundtrip_and_clear(client: TestClient) -> None:
+    """Breaks if token limits fail to persist, update, or clear to unlimited."""
+    created = _create_profile(client, context_length=131_072, max_output_tokens=8_192)
+    assert created["context_length"] == 131_072
+    assert created["max_output_tokens"] == 8_192
+
+    updated = client.patch(
+        f"/api/model-profiles/{created['id']}",
+        headers={"If-Match": str(created["revision"])},
+        json={"max_output_tokens": 16_384},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["context_length"] == 131_072
+    assert updated.json()["max_output_tokens"] == 16_384
+
+    # An unrelated PATCH must not disturb the limits, and a later PATCH can
+    # clear both back to "no limit, no compaction".
+    renamed = client.patch(
+        f"/api/model-profiles/{created['id']}",
+        headers={"If-Match": str(updated.json()["revision"])},
+        json={"display_name": "重命名模型"},
+    )
+    assert renamed.status_code == 200
+    assert renamed.json()["context_length"] == 131_072
+    assert renamed.json()["max_output_tokens"] == 16_384
+
+    cleared = client.patch(
+        f"/api/model-profiles/{created['id']}",
+        headers={"If-Match": str(renamed.json()["revision"])},
+        json={"context_length": None, "max_output_tokens": None},
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["context_length"] is None
+    assert cleared.json()["max_output_tokens"] is None
+    assert client.get("/api/model-profiles").json() == [cleared.json()]
+
+
+def test_token_limit_validation_rejects_out_of_range_and_reversed_pairs(
+    client: TestClient,
+) -> None:
+    """Breaks if absurd limits or an output cap above the context window pass."""
+    invalid_payloads = (
+        _profile_payload(context_length=999),
+        _profile_payload(context_length=10_000_001),
+        _profile_payload(max_output_tokens=0),
+        _profile_payload(max_output_tokens=200_001),
+        _profile_payload(context_length=2_048, max_output_tokens=2_048),
+        _profile_payload(context_length=2_048, max_output_tokens=4_096),
+    )
+
+    for payload in invalid_payloads:
+        response = client.post("/api/model-profiles", json=payload)
+        assert response.status_code == 422
+        assert response.json() == {
+            "code": "validation_error",
+            "detail": "模型档案请求无效。",
+        }
+
+
+def test_patch_token_limit_validation_rejects_shrinking_below_the_output_cap(
+    client: TestClient,
+) -> None:
+    created = _create_profile(client, context_length=131_072, max_output_tokens=8_192)
+
+    response = client.patch(
+        f"/api/model-profiles/{created['id']}",
+        headers={"If-Match": str(created["revision"])},
+        json={"context_length": 4_096},
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "code": "validation_error",
+        "detail": "模型档案请求无效。",
+    }
+    # The rejected PATCH must leave the stored limits untouched.
+    listed = client.get("/api/model-profiles").json()
+    assert listed[0]["context_length"] == 131_072
+    assert listed[0]["max_output_tokens"] == 8_192

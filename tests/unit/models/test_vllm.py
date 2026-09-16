@@ -336,3 +336,96 @@ def test_chat_stream_rejects_streams_without_usable_text(stream):
 @pytest.fixture
 def fake_openai_client() -> FakeOpenAIClient:
     return FakeOpenAIClient(response=_response('{"nodes": []}', "not valid json"))
+
+
+def test_output_cap_is_sent_when_configured_and_omitted_when_not(fake_openai_client):
+    """The provider keeps its own cap unless the profile sets max output tokens."""
+    fake_openai_client.response = _response("plain")
+    capped = VllmModelConfig(
+        base_url="http://127.0.0.1:8000/v1",
+        model="qwen-test",
+        api_key="test-key",
+        max_output_tokens=512,
+    )
+
+    VllmChatClient(capped, client=fake_openai_client).complete(
+        [{"role": "user", "content": "hi"}]
+    )
+
+    assert fake_openai_client.requests[0]["max_tokens"] == 512
+
+    fake_openai_client.requests.clear()
+    VllmChatClient(_config(), client=fake_openai_client).complete(
+        [{"role": "user", "content": "hi"}]
+    )
+
+    assert "max_tokens" not in fake_openai_client.requests[0]
+
+
+def test_streamed_text_requests_carry_the_configured_output_cap(fake_openai_client):
+    fake_openai_client.response = iter(
+        [SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(content="one"))])]
+    )
+    capped = VllmModelConfig(
+        base_url="http://127.0.0.1:8000/v1",
+        model="qwen-test",
+        api_key="test-key",
+        max_output_tokens=64,
+    )
+
+    list(
+        VllmChatClient(capped, client=fake_openai_client).stream_text(
+            [{"role": "user", "content": "explain"}]
+        )
+    )
+
+    assert fake_openai_client.requests[0]["max_tokens"] == 64
+
+
+def test_structured_requests_carry_the_configured_output_cap(fake_openai_client):
+    fake_openai_client.response = _response('{"answer": "ok"}')
+    capped = VllmModelConfig(
+        base_url="http://127.0.0.1:8000/v1",
+        model="qwen-test",
+        api_key="test-key",
+        max_output_tokens=128,
+    )
+
+    VllmStructuredClient(capped, client=fake_openai_client).generate_json(
+        system_prompt="s",
+        user_prompt="u",
+        schema_name="n",
+        schema={"type": "object"},
+    )
+
+    assert fake_openai_client.requests[0]["max_tokens"] == 128
+
+
+def test_settings_reads_optional_reasoning_token_limits(monkeypatch, tmp_path):
+    """Token limit env vars are optional and default to unlimited."""
+    monkeypatch.setenv("PAPER_AGENT_REASONING_BASE_URL", "http://127.0.0.1:8000/v1")
+    monkeypatch.setenv("PAPER_AGENT_REASONING_MODEL", "qwen-test")
+    monkeypatch.setenv("PAPER_AGENT_REASONING_CONTEXT_LENGTH", "131072")
+    monkeypatch.setenv("PAPER_AGENT_REASONING_MAX_OUTPUT_TOKENS", "8192")
+
+    settings = get_settings(data_dir=tmp_path / "data")
+
+    assert settings.reasoning_model == VllmModelConfig(
+        base_url="http://127.0.0.1:8000/v1",
+        model="qwen-test",
+        context_length=131_072,
+        max_output_tokens=8_192,
+    )
+
+
+@pytest.mark.parametrize("value", ["zero", "0", "-5"])
+def test_settings_rejects_non_positive_reasoning_token_limits(
+    monkeypatch, tmp_path, value
+):
+    """Breaks if a nonsense token limit silently becomes zero or negative."""
+    monkeypatch.setenv("PAPER_AGENT_REASONING_BASE_URL", "http://127.0.0.1:8000/v1")
+    monkeypatch.setenv("PAPER_AGENT_REASONING_MODEL", "qwen-test")
+    monkeypatch.setenv("PAPER_AGENT_REASONING_CONTEXT_LENGTH", value)
+
+    with pytest.raises(VllmConfigurationError):
+        get_settings(data_dir=tmp_path / "data")

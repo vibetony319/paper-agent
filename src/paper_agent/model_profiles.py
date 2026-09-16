@@ -6,6 +6,11 @@ from uuid import UUID, uuid4
 
 MODEL_SECRET_REFERENCE_PREFIX = "model-profile:"
 
+MIN_CONTEXT_LENGTH = 1_000
+MAX_CONTEXT_LENGTH = 10_000_000
+MIN_MAX_OUTPUT_TOKENS = 1
+MAX_MAX_OUTPUT_TOKENS = 200_000
+
 
 def validate_model_profile_id(profile_id: str) -> str:
     if not isinstance(profile_id, str):
@@ -87,6 +92,18 @@ class ModelSnapshot:
     revision: int
 
 
+def _validated_token_limit(
+    value: int | None, label: str, minimum: int, maximum: int
+) -> int | None:
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ValueError(f"{label} must be an integer or null")
+    if value < minimum or value > maximum:
+        raise ValueError(f"{label} must be between {minimum} and {maximum}")
+    return value
+
+
 @dataclass(frozen=True)
 class ModelProfile:
     display_name: str
@@ -96,6 +113,8 @@ class ModelProfile:
     is_default: bool = False
     revision: int = 1
     secret_ref: str | None = None
+    context_length: int | None = None
+    max_output_tokens: int | None = None
     capabilities: ModelCapabilities = field(default_factory=ModelCapabilities)
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
@@ -114,6 +133,32 @@ class ModelProfile:
             raise ValueError("revision must be positive")
         if self.secret_ref is not None:
             parse_model_secret_reference(self.secret_ref)
+        object.__setattr__(
+            self,
+            "context_length",
+            _validated_token_limit(
+                self.context_length,
+                "context length",
+                MIN_CONTEXT_LENGTH,
+                MAX_CONTEXT_LENGTH,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "max_output_tokens",
+            _validated_token_limit(
+                self.max_output_tokens,
+                "max output tokens",
+                MIN_MAX_OUTPUT_TOKENS,
+                MAX_MAX_OUTPUT_TOKENS,
+            ),
+        )
+        if (
+            self.context_length is not None
+            and self.max_output_tokens is not None
+            and self.max_output_tokens >= self.context_length
+        ):
+            raise ValueError("max output tokens must be smaller than context length")
         if not isinstance(self.capabilities, ModelCapabilities):
             raise ValueError("capabilities must be a ModelCapabilities")
         object.__setattr__(
@@ -159,6 +204,8 @@ class ModelProfileChanges:
     enabled: bool | None = None
     is_default: bool | None = None
     secret_ref: str | None | Unchanged = UNCHANGED
+    context_length: int | None | Unchanged = UNCHANGED
+    max_output_tokens: int | None | Unchanged = UNCHANGED
 
     def __post_init__(self) -> None:
         if self.secret_ref is not UNCHANGED and self.secret_ref is not None:

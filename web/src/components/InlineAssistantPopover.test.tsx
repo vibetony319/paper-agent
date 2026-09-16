@@ -11,6 +11,8 @@ const draft = {
   rects: [{ order: 0, x0: 0.1, y0: 0.2, x1: 0.7, y1: 0.3 }],
 };
 
+const SIZE_STORAGE_KEY = 'paper-agent:assist-popover-size';
+
 class ResizeObserverStub {
   static instances: ResizeObserverStub[] = [];
   readonly disconnect = vi.fn();
@@ -26,6 +28,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   ResizeObserverStub.instances.splice(0);
+  localStorage.removeItem(SIZE_STORAGE_KEY);
 });
 
 it('keeps cancelled streamed text copyable without saving a partial note', async () => {
@@ -171,4 +174,184 @@ it('keeps the same idempotency key when retrying one popover request', async () 
   expect(runSelectionAssist.mock.calls.map((call) => call[3])).toEqual([
     'assist-request-id', 'assist-request-id',
   ]);
+});
+
+it('drags the popover by its header and keeps it inside the viewport', async () => {
+  vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(800);
+  vi.spyOn(window, 'innerHeight', 'get').mockReturnValue(600);
+  render(
+    <InlineAssistantPopover
+      action="explain"
+      draft={draft}
+      toolbarRect={{ left: 100, top: 190, width: 40, height: 10 } as DOMRect}
+      modelProfileId="model-a"
+      runSelectionAssist={vi.fn().mockResolvedValue({ status: 'completed', text: '完成。' })}
+      onDismiss={vi.fn()}
+    />,
+  );
+
+  const popover = await screen.findByLabelText('解释选区');
+  const header = screen.getByLabelText('拖拽移动解释弹窗');
+  expect(popover).toHaveStyle({ left: '100px', top: '208px' });
+
+  fireEvent.pointerDown(header, { pointerId: 1, button: 0, clientX: 150, clientY: 220 });
+  fireEvent.pointerMove(header, { pointerId: 1, clientX: 300, clientY: 260 });
+  expect(popover).toHaveStyle({ left: '250px', top: '248px' });
+
+  fireEvent.pointerMove(header, { pointerId: 1, clientX: 900, clientY: 700 });
+  fireEvent.pointerUp(header, { pointerId: 1, clientX: 900, clientY: 700 });
+  expect(popover).toHaveStyle({ left: '788px', top: '588px' });
+});
+
+it('resizes the popover from the corner handle and persists the size', async () => {
+  vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(800);
+  vi.spyOn(window, 'innerHeight', 'get').mockReturnValue(600);
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function getBoundingClientRect(this: HTMLElement) {
+    if (this.classList.contains('inline-assistant-popover')) {
+      return { left: 100, top: 100, width: 320, height: 160 } as DOMRect;
+    }
+    return { width: 0, height: 0 } as DOMRect;
+  });
+  render(
+    <InlineAssistantPopover
+      action="explain"
+      draft={draft}
+      toolbarRect={{ left: 100, top: 92, width: 40, height: 8 } as DOMRect}
+      modelProfileId="model-a"
+      runSelectionAssist={vi.fn().mockResolvedValue({ status: 'completed', text: '完成。' })}
+      onDismiss={vi.fn()}
+    />,
+  );
+
+  const popover = await screen.findByLabelText('解释选区');
+  const handle = screen.getByRole('separator', { name: '调整解释弹窗大小' });
+
+  fireEvent.pointerDown(handle, { pointerId: 2, button: 0, clientX: 420, clientY: 260 });
+  fireEvent.pointerMove(handle, { pointerId: 2, clientX: 520, clientY: 460 });
+  fireEvent.pointerUp(handle, { pointerId: 2, clientX: 520, clientY: 460 });
+  expect(popover).toHaveClass('inline-assistant-popover--sized');
+  expect(popover).toHaveStyle({ width: '420px', height: '360px' });
+
+  fireEvent.pointerDown(handle, { pointerId: 3, button: 0, clientX: 420, clientY: 260 });
+  fireEvent.pointerMove(handle, { pointerId: 3, clientX: 2000, clientY: 2000 });
+  fireEvent.pointerUp(handle, { pointerId: 3, clientX: 2000, clientY: 2000 });
+  expect(popover).toHaveStyle({ width: '776px', height: '576px' });
+  expect(JSON.parse(localStorage.getItem(SIZE_STORAGE_KEY) ?? '{}')).toEqual({ width: 776, height: 576 });
+});
+
+it('nudges the popover with arrow keys from the header', async () => {
+  vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(800);
+  vi.spyOn(window, 'innerHeight', 'get').mockReturnValue(600);
+  render(
+    <InlineAssistantPopover
+      action="explain"
+      draft={draft}
+      toolbarRect={{ left: 100, top: 190, width: 40, height: 10 } as DOMRect}
+      modelProfileId="model-a"
+      runSelectionAssist={vi.fn().mockResolvedValue({ status: 'completed', text: '完成。' })}
+      onDismiss={vi.fn()}
+    />,
+  );
+
+  const header = await screen.findByLabelText('拖拽移动解释弹窗');
+  fireEvent.keyDown(header, { key: 'ArrowLeft' });
+  fireEvent.keyDown(header, { key: 'ArrowDown', shiftKey: true });
+
+  expect(screen.getByLabelText('解释选区')).toHaveStyle({ left: '92px', top: '232px' });
+});
+
+it('keeps a dragged position instead of re-anchoring when the viewport resizes', async () => {
+  let viewportWidth = 800;
+  let viewportHeight = 600;
+  vi.spyOn(window, 'innerWidth', 'get').mockImplementation(() => viewportWidth);
+  vi.spyOn(window, 'innerHeight', 'get').mockImplementation(() => viewportHeight);
+  render(
+    <InlineAssistantPopover
+      action="explain"
+      draft={draft}
+      toolbarRect={{ left: 600, top: 300, width: 40, height: 20 } as DOMRect}
+      modelProfileId="model-a"
+      runSelectionAssist={vi.fn().mockResolvedValue({ status: 'completed', text: '完成。' })}
+      onDismiss={vi.fn()}
+    />,
+  );
+
+  const popover = await screen.findByLabelText('解释选区');
+  const header = screen.getByLabelText('拖拽移动解释弹窗');
+  expect(popover).toHaveStyle({ left: '600px', top: '328px' });
+
+  fireEvent.pointerDown(header, { pointerId: 1, button: 0, clientX: 600, clientY: 328 });
+  fireEvent.pointerMove(header, { pointerId: 1, clientX: 200, clientY: 80 });
+  fireEvent.pointerUp(header, { pointerId: 1, clientX: 200, clientY: 80 });
+  expect(popover).toHaveStyle({ left: '200px', top: '80px' });
+
+  // 150x100 viewport clamps to 138x88; re-anchoring to the selection would also force top to 88.
+  viewportWidth = 150;
+  viewportHeight = 100;
+  fireEvent(window, new Event('resize'));
+
+  await waitFor(() => expect(popover).toHaveStyle({ left: '138px', top: '80px' }));
+});
+
+it('restores a stored size and ignores invalid persisted values', async () => {
+  localStorage.setItem(SIZE_STORAGE_KEY, JSON.stringify({ width: 480, height: 320 }));
+  const { unmount } = render(
+    <InlineAssistantPopover
+      action="explain"
+      draft={draft}
+      toolbarRect={{ left: 20, top: 30, width: 80, height: 20 } as DOMRect}
+      modelProfileId="model-a"
+      runSelectionAssist={vi.fn().mockResolvedValue({ status: 'completed', text: '完成。' })}
+      onDismiss={vi.fn()}
+    />,
+  );
+  const popover = await screen.findByLabelText('解释选区');
+  expect(popover).toHaveClass('inline-assistant-popover--sized');
+  expect(popover).toHaveStyle({ width: '480px', height: '320px' });
+  unmount();
+
+  localStorage.setItem(SIZE_STORAGE_KEY, '{"width": 40');
+  render(
+    <InlineAssistantPopover
+      action="explain"
+      draft={draft}
+      toolbarRect={{ left: 20, top: 30, width: 80, height: 20 } as DOMRect}
+      modelProfileId="model-a"
+      runSelectionAssist={vi.fn().mockResolvedValue({ status: 'completed', text: '完成。' })}
+      onDismiss={vi.fn()}
+    />,
+  );
+  const nextPopover = await screen.findByLabelText('解释选区');
+  expect(nextPopover).not.toHaveClass('inline-assistant-popover--sized');
+  expect(nextPopover).not.toHaveStyle({ width: '480px' });
+});
+
+it('does not let handle interactions bubble out of the popover', async () => {
+  const onPointerDown = vi.fn();
+  const onPointerUp = vi.fn();
+  render(
+    <div onPointerDown={onPointerDown} onPointerUp={onPointerUp}>
+      <InlineAssistantPopover
+        action="translate"
+        draft={draft}
+        toolbarRect={{ left: 100, top: 190, width: 40, height: 10 } as DOMRect}
+        modelProfileId="model-a"
+        runSelectionAssist={vi.fn().mockResolvedValue({ status: 'completed', text: '翻译完成。' })}
+        onDismiss={vi.fn()}
+      />
+    </div>,
+  );
+
+  const header = await screen.findByLabelText('拖拽移动翻译弹窗');
+  const handle = screen.getByRole('separator', { name: '调整翻译弹窗大小' });
+
+  fireEvent.pointerDown(header, { pointerId: 1, button: 0, clientX: 150, clientY: 220 });
+  fireEvent.pointerMove(header, { pointerId: 1, clientX: 200, clientY: 240 });
+  fireEvent.pointerUp(header, { pointerId: 1, clientX: 200, clientY: 240 });
+  fireEvent.pointerDown(handle, { pointerId: 2, button: 0, clientX: 400, clientY: 380 });
+  fireEvent.pointerMove(handle, { pointerId: 2, clientX: 440, clientY: 400 });
+  fireEvent.pointerUp(handle, { pointerId: 2, clientX: 440, clientY: 400 });
+
+  expect(onPointerDown).not.toHaveBeenCalled();
+  expect(onPointerUp).not.toHaveBeenCalled();
 });

@@ -20,7 +20,8 @@ import { WorkspaceShell } from './WorkspaceShell';
 
 const profile: ModelProfile = {
   id: 'qwen', display_name: '本地 Qwen', base_url: 'http://localhost/v1', model_name: 'qwen3', enabled: true, is_default: true, revision: 1,
-  has_api_key: false, api_key_mask: null, capabilities: { basic_chat: true, structured_output: true, tool_calling: false, checked_at: null }, read_only: false,
+  has_api_key: false, api_key_mask: null, context_length: null, max_output_tokens: null,
+  capabilities: { basic_chat: true, structured_output: true, tool_calling: false, checked_at: null }, read_only: false,
 };
 
 const paper: PaperSummary = {

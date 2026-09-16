@@ -159,6 +159,8 @@ def create_model_profile(
             api_key=payload.api_key,
             enabled=payload.enabled,
             is_default=payload.is_default,
+            context_length=payload.context_length,
+            max_output_tokens=payload.max_output_tokens,
         )
     )
 
@@ -181,6 +183,12 @@ def update_model_profile(
         model_name=payload.model_name if "model_name" in fields else None,
         enabled=payload.enabled if "enabled" in fields else None,
         is_default=payload.is_default if "is_default" in fields else None,
+        context_length=(
+            payload.context_length if "context_length" in fields else UNCHANGED
+        ),
+        max_output_tokens=(
+            payload.max_output_tokens if "max_output_tokens" in fields else UNCHANGED
+        ),
     )
     api_key = payload.api_key if "api_key" in fields else UNCHANGED
     return _response(

@@ -18,6 +18,8 @@ const modelProfile = (overrides: Partial<ModelProfile> = {}): ModelProfile => ({
   revision: 3,
   has_api_key: false,
   api_key_mask: null,
+  context_length: null,
+  max_output_tokens: null,
   capabilities: {
     basic_chat: false,
     structured_output: false,
@@ -87,6 +89,8 @@ it('creates a profile from the chinese form fields', async () => {
   await user.type(screen.getByLabelText('服务地址'), 'http://127.0.0.1:8001/v1');
   await user.type(screen.getByLabelText('模型名称'), 'qwen3');
   await user.type(screen.getByLabelText('API 密钥（可选）'), 'sk-secret');
+  await user.type(screen.getByLabelText('上下文长度（tokens，可选）'), '131072');
+  await user.type(screen.getByLabelText('最大输出（tokens，可选）'), '8192');
   await user.click(screen.getByLabelText('设为默认'));
   await user.click(screen.getByRole('button', { name: '保存' }));
 
@@ -97,6 +101,8 @@ it('creates a profile from the chinese form fields', async () => {
     api_key: 'sk-secret',
     enabled: true,
     is_default: true,
+    context_length: 131072,
+    max_output_tokens: 8192,
   });
 });
 
@@ -115,6 +121,8 @@ it('keeps the existing api key when the edit form leaves the key field blank', a
     base_url: 'http://127.0.0.1:8001/v1',
     model_name: 'qwen3',
     is_default: true,
+    context_length: null,
+    max_output_tokens: null,
   });
 });
 
@@ -133,6 +141,8 @@ it('clears the api key only after an explicit clear request', async () => {
     model_name: 'qwen3',
     is_default: true,
     clear_api_key: true,
+    context_length: null,
+    max_output_tokens: null,
   });
 });
 
@@ -230,4 +240,96 @@ it('returns focus to the settings trigger after closing', async () => {
 
   await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   expect(screen.getByRole('button', { name: '模型设置' })).toHaveFocus();
+});
+
+it('backfills the token limits when editing and keeps them on save', async () => {
+  const user = userEvent.setup();
+  const profile = modelProfile({
+    context_length: 131072,
+    max_output_tokens: 8192,
+  });
+  const props = renderDialog([profile]);
+
+  await user.click(screen.getByRole('button', { name: '编辑' }));
+  expect(screen.getByLabelText('上下文长度（tokens，可选）')).toHaveValue('131072');
+  expect(screen.getByLabelText('最大输出（tokens，可选）')).toHaveValue('8192');
+
+  await user.click(screen.getByRole('button', { name: '保存' }));
+
+  expect(props.onUpdate).toHaveBeenCalledWith('qwen', 3, {
+    display_name: '本地 Qwen',
+    base_url: 'http://127.0.0.1:8001/v1',
+    model_name: 'qwen3',
+    is_default: true,
+    context_length: 131072,
+    max_output_tokens: 8192,
+  });
+});
+
+it('clears the token limits when the edit form leaves them empty', async () => {
+  const user = userEvent.setup();
+  const profile = modelProfile({
+    context_length: 131072,
+    max_output_tokens: 8192,
+  });
+  const props = renderDialog([profile]);
+
+  await user.click(screen.getByRole('button', { name: '编辑' }));
+  await user.clear(screen.getByLabelText('上下文长度（tokens，可选）'));
+  await user.clear(screen.getByLabelText('最大输出（tokens，可选）'));
+  await user.click(screen.getByRole('button', { name: '保存' }));
+
+  expect(props.onUpdate).toHaveBeenCalledWith('qwen', 3, {
+    display_name: '本地 Qwen',
+    base_url: 'http://127.0.0.1:8001/v1',
+    model_name: 'qwen3',
+    is_default: true,
+    context_length: null,
+    max_output_tokens: null,
+  });
+});
+
+it('rejects non-positive token limits before calling the API', async () => {
+  const user = userEvent.setup();
+  const props = renderDialog([]);
+
+  await user.click(screen.getByRole('button', { name: '新增模型档案' }));
+  await user.type(screen.getByLabelText('配置名称'), '本地 Qwen');
+  await user.type(screen.getByLabelText('服务地址'), 'http://127.0.0.1:8001/v1');
+  await user.type(screen.getByLabelText('模型名称'), 'qwen3');
+  await user.type(screen.getByLabelText('上下文长度（tokens，可选）'), '128k');
+  await user.click(screen.getByRole('button', { name: '保存' }));
+
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    '上下文长度与最大输出必须是正整数（tokens）。',
+  );
+  expect(props.onCreate).not.toHaveBeenCalled();
+});
+
+it('rejects an output cap at or above the context length', async () => {
+  const user = userEvent.setup();
+  const props = renderDialog([]);
+
+  await user.click(screen.getByRole('button', { name: '新增模型档案' }));
+  await user.type(screen.getByLabelText('配置名称'), '本地 Qwen');
+  await user.type(screen.getByLabelText('服务地址'), 'http://127.0.0.1:8001/v1');
+  await user.type(screen.getByLabelText('模型名称'), 'qwen3');
+  await user.type(screen.getByLabelText('上下文长度（tokens，可选）'), '8192');
+  await user.type(screen.getByLabelText('最大输出（tokens，可选）'), '8192');
+  await user.click(screen.getByRole('button', { name: '保存' }));
+
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    '最大输出 tokens 必须小于上下文长度。',
+  );
+  expect(props.onCreate).not.toHaveBeenCalled();
+});
+
+it('shows the configured token limits in the profile list', () => {
+  renderDialog([
+    modelProfile({ context_length: 131072, max_output_tokens: 8192 }),
+  ]);
+
+  expect(
+    screen.getByText('qwen3 · http://127.0.0.1:8001/v1 · 上下文 131072 · 输出 8192'),
+  ).toBeVisible();
 });

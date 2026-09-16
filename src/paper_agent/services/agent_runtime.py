@@ -20,6 +20,13 @@ from paper_agent.models import VllmToolCall, VllmToolCallingClient, VllmToolTurn
 from paper_agent.model_profiles import ModelSnapshot
 from paper_agent.services.agent_tools import AgentToolError, PaperToolRegistry
 from paper_agent.services.answer_format import ANSWER_FORMAT_INSTRUCTIONS
+from paper_agent.services.context_budget import (
+    ContextBudget,
+    compacted_messages,
+    drop_oldest_exchange,
+    partition_messages,
+    rebuilt_messages,
+)
 from paper_agent.services.citation_guard import (
     CitationGuard,
     CitationGuardError,
@@ -36,6 +43,13 @@ MAX_ANSWER_CHARS = 64_000
 _FINAL_ANSWER_INSTRUCTION = (
     "Tool calling is complete. Based on the evidence above, write the final "
     "answer now; do not call any more tools. " + ANSWER_FORMAT_INSTRUCTIONS
+)
+# The summary prompt keeps the compaction lossless where it matters: paper
+# topic, confirmed facts, collected evidence element IDs, and the task at hand.
+_COMPACTION_INSTRUCTION = (
+    "你是论文问答助手的上下文压缩器。请把下面的对话历史压缩成一段简明摘要，"
+    "必须保留：论文主题、已确认的事实与结论、已收集证据对应的元素 ID、"
+    "当前正在处理的任务。直接输出摘要正文。"
 )
 _PREREQUISITE_ERROR = "Paper agent prerequisites are not complete."
 _UNAVAILABLE_ERROR = "Reasoning model is not configured."
@@ -148,6 +162,7 @@ class PaperAgentRuntime:
         model_snapshot: ModelSnapshot,
         request_id: str,
         selection: TextAnchorDraft | None = None,
+        context_budget: ContextBudget | None = None,
     ) -> AgentTurn:
         with self._request_lock(paper_id, request_id):
             replay = self._replay_turn(paper_id, request_id)
@@ -161,6 +176,10 @@ class PaperAgentRuntime:
                 model_snapshot=model_snapshot,
                 request_id=request_id,
                 selection=selection,
+                context_budget=context_budget,
+            )
+            self._compact_if_needed(
+                prepared.messages, client=client, budget=context_budget
             )
             try:
                 text = client.complete_markdown_messages(
@@ -179,6 +198,7 @@ class PaperAgentRuntime:
         model_snapshot: ModelSnapshot,
         request_id: str,
         selection: TextAnchorDraft | None = None,
+        context_budget: ContextBudget | None = None,
     ) -> Iterator[AgentStreamEvent]:
         """Yield the answer as it streams, then persist it exactly once.
 
@@ -205,6 +225,7 @@ class PaperAgentRuntime:
                     model_snapshot=model_snapshot,
                     request_id=request_id,
                     selection=selection,
+                    context_budget=context_budget,
                 )
             except AgentRuntimeConflictError:
                 yield AgentStreamEvent("error", code="request_conflict")
@@ -227,6 +248,9 @@ class PaperAgentRuntime:
 
             parts: list[str] = []
             generated_chars = 0
+            self._compact_if_needed(
+                prepared.messages, client=client, budget=context_budget
+            )
             try:
                 for chunk in client.stream_final_answer(
                     messages=prepared.messages
@@ -281,6 +305,7 @@ class PaperAgentRuntime:
         model_snapshot: ModelSnapshot,
         request_id: str,
         selection: TextAnchorDraft | None,
+        context_budget: ContextBudget | None = None,
     ) -> _PreparedTurn:
         """Persist the user turn, run the tool loop, and collect the evidence."""
         partial_user = self.repository.get_agent_user_message_by_request(
@@ -385,6 +410,7 @@ class PaperAgentRuntime:
                 )
                 messages.append({'role':'system', 'content':'请用中文概括上方论文证据中的研究问题、方法和结论。只引用已给出的元素 ID；片段不足时说明范围，不要编造。'})
         for _ in range(0 if overview and allowed_evidence_ids else MAX_TOOL_TURNS):
+            self._compact_if_needed(messages, client=client, budget=context_budget)
             try:
                 turn = client.request_tool_turn(
                     messages=messages,
@@ -444,6 +470,59 @@ class PaperAgentRuntime:
             model_snapshot=model_snapshot,
             request_id=request_id,
         )
+
+    def _compact_if_needed(
+        self,
+        messages: list[dict[str, object]],
+        *,
+        client: VllmToolCallingClient,
+        budget: ContextBudget | None,
+    ) -> None:
+        """Fold overflowing history into a summary message, in place.
+
+        A budget of None (profile without context length) never compacts.
+        """
+        if budget is None or not budget.needs_compaction(messages):
+            return
+        parts = partition_messages(messages)
+        if not parts.middle:
+            # Everything present belongs to the current turn; nothing can be
+            # folded away without losing the request itself.
+            return
+        try:
+            summary = client.complete_markdown_messages(
+                messages=[
+                    {"role": "system", "content": _COMPACTION_INSTRUCTION},
+                    *parts.middle,
+                ]
+            )
+        except Exception as error:
+            # The turn must survive a failed summary; degrade to hard truncation.
+            logger.warning(
+                "context compaction summary failed with %s",
+                type(error).__name__,
+            )
+            self._hard_truncate(messages, budget)
+            return
+        messages[:] = compacted_messages(parts, summary)
+
+    def _hard_truncate(
+        self,
+        messages: list[dict[str, object]],
+        budget: ContextBudget,
+    ) -> None:
+        """Drop oldest complete exchanges in place until under 0.9x budget."""
+        parts = partition_messages(messages)
+        while (
+            budget.request_tokens(rebuilt_messages(parts))
+            > budget.hard_truncation_limit
+            and drop_oldest_exchange(parts.middle)
+        ):
+            logger.warning(
+                "context hard truncation dropped an exchange for a %d token budget",
+                budget.context_length,
+            )
+        messages[:] = rebuilt_messages(parts)
 
     def _finalize(self, prepared: _PreparedTurn, text: str) -> AgentTurn:
         """Parse the Markdown answer, persist it, and link its note memory."""

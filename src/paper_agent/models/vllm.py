@@ -14,6 +14,8 @@ class VllmModelConfig:
     base_url: str
     model: str
     api_key: str = "EMPTY"
+    context_length: int | None = None
+    max_output_tokens: int | None = None
 
 
 class VllmConfigurationError(ValueError):
@@ -22,6 +24,11 @@ class VllmConfigurationError(ValueError):
 
 class VllmResponseError(RuntimeError):
     """Raised when vLLM does not provide a valid structured response."""
+
+
+def _optional_max_tokens(max_output_tokens: int | None) -> dict[str, int]:
+    """Providers keep their own output cap when max_tokens is omitted."""
+    return {} if max_output_tokens is None else {"max_tokens": max_output_tokens}
 
 
 def _balanced_object(content: str, start: int) -> str | None:
@@ -75,7 +82,7 @@ def _extract_json_object(content: object, schema: dict[str, object]) -> dict | N
     return first_parsed
 
 
-def _json_completion(client, *, model, messages, schema_name, schema):
+def _json_completion(client, *, model, messages, schema_name, schema, max_output_tokens=None):
     """Prefer native schema mode; only negotiate on explicit unsupported-format errors."""
     from openai import BadRequestError
 
@@ -85,6 +92,7 @@ def _json_completion(client, *, model, messages, schema_name, schema):
             response_format={"type": "json_schema", "json_schema": {
                 "name": schema_name, "schema": schema, "strict": True,
             }},
+            **_optional_max_tokens(max_output_tokens),
         )
     except BadRequestError as error:
         detail = json.dumps(error.body, ensure_ascii=False).lower()
@@ -100,6 +108,7 @@ def _json_completion(client, *, model, messages, schema_name, schema):
             messages=[{"role": "system", "content":
                        "Return only a JSON object matching this JSON Schema: " + json.dumps(schema)}] + list(messages),
             response_format={"type": "json_object"},
+            **_optional_max_tokens(max_output_tokens),
         )
     result = _extract_json_object(response.choices[0].message.content, schema)
     if result is None:
@@ -108,10 +117,11 @@ def _json_completion(client, *, model, messages, schema_name, schema):
     return result
 
 
-def _plain_completion(client, *, model: str, messages: list) -> str:
+def _plain_completion(client, *, model: str, messages: list, max_output_tokens=None) -> str:
     """Return the assistant text of one non-streaming completion."""
     response = client.chat.completions.create(
         model=model, messages=messages, temperature=0,
+        **_optional_max_tokens(max_output_tokens),
     )
     content = response.choices[0].message.content
     if not isinstance(content, str) or not content.strip():
@@ -119,10 +129,11 @@ def _plain_completion(client, *, model: str, messages: list) -> str:
     return content
 
 
-def _streamed_completion(client, *, model: str, messages: list) -> Iterator[str]:
+def _streamed_completion(client, *, model: str, messages: list, max_output_tokens=None) -> Iterator[str]:
     """Yield the text deltas of one streaming completion."""
     stream = client.chat.completions.create(
         model=model, messages=messages, temperature=0, stream=True,
+        **_optional_max_tokens(max_output_tokens),
     )
     yielded_text = False
     for chunk in stream:
@@ -163,7 +174,8 @@ class VllmChatClient:
         content: str = ""
         try:
             content = _plain_completion(
-                self.client, model=self.config.model, messages=messages
+                self.client, model=self.config.model, messages=messages,
+                max_output_tokens=self.config.max_output_tokens,
             )
         except Exception:
             failed = True
@@ -177,7 +189,8 @@ class VllmChatClient:
         failed = False
         try:
             for delta in _streamed_completion(
-                self.client, model=self.config.model, messages=messages
+                self.client, model=self.config.model, messages=messages,
+                max_output_tokens=self.config.max_output_tokens,
             ):
                 yield delta
         except Exception:
@@ -234,6 +247,7 @@ class VllmStructuredClient:
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
+                max_output_tokens=self.config.max_output_tokens,
             )
         except Exception:
             failed = True
@@ -274,6 +288,7 @@ class VllmToolCallingClient:
                 tool_choice=tool_choice,
                 parallel_tool_calls=False,
                 temperature=0,
+                **_optional_max_tokens(self.config.max_output_tokens),
             )
             message = response.choices[0].message
             content = message.content
@@ -303,7 +318,8 @@ class VllmToolCallingClient:
         content = ""
         try:
             content = _plain_completion(
-                self.client, model=self.config.model, messages=messages
+                self.client, model=self.config.model, messages=messages,
+                max_output_tokens=self.config.max_output_tokens,
             )
         except Exception:
             failed = True
@@ -318,7 +334,8 @@ class VllmToolCallingClient:
         failed = False
         try:
             for delta in _streamed_completion(
-                self.client, model=self.config.model, messages=messages
+                self.client, model=self.config.model, messages=messages,
+                max_output_tokens=self.config.max_output_tokens,
             ):
                 yield delta
         except Exception:

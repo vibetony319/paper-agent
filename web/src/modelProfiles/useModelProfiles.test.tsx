@@ -16,6 +16,8 @@ const modelProfile = (overrides: Partial<ModelProfile> = {}): ModelProfile => ({
   revision: 3,
   has_api_key: false,
   api_key_mask: null,
+  context_length: null,
+  max_output_tokens: null,
   capabilities: {
     basic_chat: false,
     structured_output: false,

@@ -15,6 +15,8 @@ const modelProfileFixture = (overrides: Partial<ModelProfile> = {}): ModelProfil
   revision: 3,
   has_api_key: false,
   api_key_mask: null,
+  context_length: null,
+  max_output_tokens: null,
   capabilities: {
     basic_chat: true,
     structured_output: true,
