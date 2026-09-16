@@ -245,6 +245,7 @@ export function WorkspaceShell({
                   askAgent: workspace.askAgent,
                   streamingText: workspace.streaming?.text ?? '',
                   streamInterrupted: workspace.streaming?.interrupted ?? false,
+                  contextUsage: workspace.contextUsage,
                   attachment: currentComposerAttachment,
                   onAttachmentClear: (token) => setComposerAttachment((current) => (
                     current?.paperId === paper.id && current.token === token ? null : current

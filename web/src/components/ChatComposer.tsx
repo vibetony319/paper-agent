@@ -1,7 +1,8 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
-import type { AgentMessage, ModelProfile, TextAnchorDraft } from '../api/types';
+import type { AgentMessage, ContextUsage, ModelProfile, TextAnchorDraft } from '../api/types';
+import { ContextUsageBadge } from './ContextUsageBadge';
 import { MarkdownText } from './MarkdownText';
 import { ModelSelector } from './ModelSelector';
 
@@ -27,6 +28,7 @@ export interface ChatComposerProps {
   onSendStart?: () => void;
   streamingText?: string;
   streamInterrupted?: boolean;
+  contextUsage?: ContextUsage | null;
 }
 
 export function ChatComposer({
@@ -42,6 +44,7 @@ export function ChatComposer({
   onSendStart,
   streamingText = '',
   streamInterrupted = false,
+  contextUsage = null,
 }: ChatComposerProps) {
   const [content, setContent] = useState('');
   const [pending, setPending] = useState(false);
@@ -177,7 +180,10 @@ export function ChatComposer({
         </button>
       </div>
       {unavailable && <p className="chat-composer__guidance">请先在当前模型中选择可用模型，再发送问题。</p>}
-      <p className="chat-composer__hint">Enter 发送，Shift+Enter 换行</p>
+      <div className="chat-composer__hint-row">
+        <p className="chat-composer__hint">Enter 发送，Shift+Enter 换行</p>
+        {contextUsage !== null && <ContextUsageBadge usage={contextUsage} />}
+      </div>
       {messageTarget ? createPortal(feedback, messageTarget) : feedback}
       {errorMessage !== null && <p className="chat-composer__error" role="alert">{errorMessage}</p>}
     </form>

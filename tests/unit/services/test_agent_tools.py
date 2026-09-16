@@ -142,3 +142,92 @@ def test_search_paper_uses_unicode_normalized_substrings_and_filters_unlocated_e
     ]
     assert unlocated_result.evidence_element_ids == ()
 
+
+class _StubSearch:
+    def __init__(self, hits, error=None):
+        self.hits = hits
+        self.error = error
+        self.queries: list[tuple[str, str, int]] = []
+
+    def search(self, paper_id, query, *, limit):
+        self.queries.append((paper_id, query, limit))
+        if self.error is not None:
+            raise self.error
+        return self.hits
+
+
+def test_search_paper_merges_semantic_hits_after_substring_matches(repository):
+    from paper_agent.services.agent_tools import PaperToolRegistry
+
+    """Breaks if semantic hits replace or shadow deterministic substring matches."""
+    from paper_agent.services.paper_search import SearchHit
+
+    paper, _, located, unlocated = _paper_with_document(repository, "merge")
+    other_paper, _, other_element, _ = _paper_with_document(repository, "other")
+    stub = _StubSearch(
+        (
+            SearchHit(element_id=unlocated.id, score=0.8),
+            SearchHit(element_id=other_element.id, score=0.7),
+        )
+    )
+    tools = PaperToolRegistry(repository, search=stub)
+
+    result = tools.execute(
+        paper_id=paper.id,
+        name="search_paper",
+        arguments={"query": "tokens", "limit": 5},
+    )
+
+    # Substring match first, semantic hits appended, cross-paper IDs dropped.
+    assert [element["id"] for element in result.content["elements"]] == [
+        located.id,
+        unlocated.id,
+    ]
+    modes = [element["search_mode"] for element in result.content["elements"]]
+    assert modes == ["substring", "semantic"]
+    assert result.content["elements"][0]["search_score"] == 1.0
+    assert result.content["elements"][1]["search_score"] == 0.8
+    # Only located elements become citable evidence.
+    assert result.evidence_element_ids == (located.id,)
+    assert stub.queries == [(paper.id, "tokens", 10)]
+
+
+def test_search_paper_truncates_to_the_requested_limit(repository):
+    from paper_agent.services.agent_tools import PaperToolRegistry
+
+    from paper_agent.services.paper_search import SearchHit
+
+    paper, _, located, unlocated = _paper_with_document(repository, "truncate")
+    stub = _StubSearch(
+        (
+            SearchHit(element_id=located.id, score=0.9),
+            SearchHit(element_id=unlocated.id, score=0.8),
+        )
+    )
+    tools = PaperToolRegistry(repository, search=stub)
+
+    result = tools.execute(
+        paper_id=paper.id,
+        name="search_paper",
+        arguments={"query": "router", "limit": 1},
+    )
+
+    assert [element["id"] for element in result.content["elements"]] == [located.id]
+
+
+def test_search_paper_survives_semantic_service_failure(repository):
+    from paper_agent.services.agent_tools import PaperToolRegistry
+
+    paper, _, located, _ = _paper_with_document(repository, "failing")
+    stub = _StubSearch((), error=RuntimeError("embedding backend down"))
+    tools = PaperToolRegistry(repository, search=stub)
+
+    result = tools.execute(
+        paper_id=paper.id,
+        name="search_paper",
+        arguments={"query": "tokens", "limit": 5},
+    )
+
+    assert [element["id"] for element in result.content["elements"]] == [located.id]
+    assert result.content["elements"][0]["search_mode"] == "substring"
+

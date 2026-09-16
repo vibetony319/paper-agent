@@ -1,6 +1,7 @@
 import type {
   AgentMessage,
   BoundingBox,
+  ContextUsage,
   Highlight,
   Note,
   TextAnchor,
@@ -31,6 +32,8 @@ export type WorkspaceState = {
   messages: AgentMessage[];
   exchanges: AgentExchange[];
   streaming: AgentStream | null;
+  /** Estimated context occupancy of the conversation's next request. */
+  contextUsage: ContextUsage | null;
   errorMessage: string | null;
   notesErrorMessage: string | null;
 };

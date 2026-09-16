@@ -41,6 +41,7 @@
 - `max_output_tokens` 配置后作为 `max_tokens` 下发到该档案的全部请求（结构化、普通、流式、工具调用）；未配置时省略参数，保留提供方自己的输出上限。
 - `context_length` 配置后启用 Agent 上下文压缩：有效预算为 `context_length − (max_output_tokens 或 8192 预留)`；请求估算（CJK ≈1 token/字、其余 ≈4 字符/token，另加 1000 token 工具定义开销）超过 0.75× 预算时，把系统提示与当前问题之间的会话历史折叠为一条摘要 system 消息，摘要由同一模型非流式生成；工具循环中途压缩会原样保留末尾的 assistant(tool_calls)+tool 消息对。摘要失败时降级为丢弃最旧完整对话轮的硬截断（至 0.9× 以下），不让整轮失败。
 - 压缩与截断是请求组装层的瞬态行为：不落库、不进入模型快照、不影响 `request_id` 幂等重放。设计取舍见 [ADR 0004](adr/0004-context-compaction.md)。
+- **上下文占用指示**：前端对话区右下角显示"下一次请求"的估算占用（与压缩同一估算器与预算口径）。每轮回答通过非流式响应的 `context_usage` 字段或流式 `completed` 事件返回；`GET /api/papers/{paper_id}/agent/conversations/{conversation_id}/context-usage?model_profile_id=...` 供会话建立或切换档案时刷新。未配置 `context_length` 的档案只报 `used_tokens`，上限字段为 null。
 - 修改两个 token 字段不清空能力探测结果（不属于 material configuration），但会递增修订号使客户端缓存重建。
 
 ## 档案 API 示例

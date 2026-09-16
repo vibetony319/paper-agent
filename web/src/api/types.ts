@@ -220,8 +220,17 @@ export interface AskAgentInput {
   selection?: TextAnchorDraft;
 }
 
+/** Estimated occupancy of the conversation's next model request. */
+export interface ContextUsage {
+  used_tokens: number;
+  context_length: number | null;
+  effective_limit: number | null;
+  compaction_threshold: number | null;
+  percent: number | null;
+}
+
 export type AgentStreamEvent =
   | { event: 'started'; data: { request_id: string } }
   | { event: 'delta'; data: { text: string } }
-  | { event: 'completed'; data: { message: AgentMessage } }
+  | { event: 'completed'; data: { message: AgentMessage; context_usage?: ContextUsage | null } }
   | { event: 'error'; data: { code: string; detail: string } };

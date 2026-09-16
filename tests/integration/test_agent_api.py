@@ -1,5 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 from pathlib import Path
 from threading import Event
@@ -28,6 +28,7 @@ from paper_agent.models import VllmToolCall, VllmToolCallingError, VllmToolTurn
 from paper_agent.model_profiles import ModelCapabilities, ModelProfile, ModelProfileChanges
 from paper_agent.routes import agent as agent_routes
 from paper_agent.services.agent_runtime import PaperAgentRuntime
+from paper_agent.services.agent_tools import PaperToolRegistry
 from paper_agent.services.model_profiles import ModelProfileService
 from paper_agent.services.reasoning_clients import ReasoningClientResolutionError
 
@@ -295,6 +296,9 @@ def _configure_fake_agent_models(
     app.state.model_profile_service = FakeDefaultModelService(
         next(iter(configured.values()), None)
     )
+    # Substring-only tools keep these tests deterministic: the semantic
+    # service would otherwise load a real embedding model on search_paper.
+    app.state.paper_tool_registry = PaperToolRegistry(app.state.paper_repository)
     app.state.paper_agent_runtime = PaperAgentRuntime(
         repository=app.state.paper_repository,
         tools=app.state.paper_tool_registry,
@@ -1418,3 +1422,86 @@ def test_agent_stream_keeps_request_errors_outside_the_event_stream(
     events = _stream_events(incomplete)
     assert [name for name, _ in events] == ["started", "error"]
     assert events[-1][1]["code"] == "agent_not_ready"
+
+
+def test_agent_stream_completed_event_carries_context_usage(
+    client: TestClient, uploaded_paper: UploadedPaper
+) -> None:
+    """The completed frame reports the next request's occupancy estimate."""
+    _configure_fake_agent_runtime(client.app, _grounded_tool_flow(uploaded_paper))
+
+    response = client.post(
+        f"/api/papers/{uploaded_paper.id}/agent/messages/stream",
+        json=_agent_payload("Explain the method."),
+    )
+
+    events = _stream_events(response)
+    completed = events[-1][1]
+    usage = completed["context_usage"]
+    assert usage["used_tokens"] > 0
+    # The fake profile sets no context length, so the limit fields stay unset.
+    assert usage["context_length"] is None
+    assert usage["effective_limit"] is None
+    assert usage["percent"] is None
+
+
+def test_context_usage_endpoint_reports_next_request_estimate(
+    client: TestClient, uploaded_paper: UploadedPaper
+) -> None:
+    """GET estimates the next request against the selected profile."""
+    limited = replace(
+        _model_profile(DEFAULT_PROFILE_ID),
+        context_length=8192,
+        max_output_tokens=1024,
+    )
+    _configure_fake_agent_models(
+        client.app,
+        {DEFAULT_PROFILE_ID: _grounded_tool_flow(uploaded_paper)},
+        profiles={DEFAULT_PROFILE_ID: limited},
+    )
+    asked = client.post(
+        f"/api/papers/{uploaded_paper.id}/agent/messages",
+        json=_agent_payload("Explain the method."),
+    )
+    assert asked.status_code == 200
+    body = asked.json()
+    assert body["context_usage"]["context_length"] == 8192
+    assert body["context_usage"]["effective_limit"] == 8192 - 1024
+    assert body["context_usage"]["percent"] is not None
+
+    usage = client.get(
+        f"/api/papers/{uploaded_paper.id}/agent/conversations"
+        f"/{body['conversation_id']}/context-usage",
+        params={"model_profile_id": DEFAULT_PROFILE_ID},
+    )
+    assert usage.status_code == 200
+    payload = usage.json()
+    assert payload == body["context_usage"]
+    assert payload["context_length"] == 8192
+    assert payload["compaction_threshold"] == int((8192 - 1024) * 0.75)
+    assert payload["used_tokens"] > 0
+
+
+def test_context_usage_endpoint_rejects_unknown_conversation_and_profile(
+    client: TestClient, uploaded_paper: UploadedPaper
+) -> None:
+    _configure_fake_agent_runtime(client.app, _grounded_tool_flow(uploaded_paper))
+    asked = client.post(
+        f"/api/papers/{uploaded_paper.id}/agent/messages",
+        json=_agent_payload("Explain the method."),
+    )
+    conversation_id = asked.json()["conversation_id"]
+
+    unknown_conversation = client.get(
+        f"/api/papers/{uploaded_paper.id}/agent/conversations"
+        f"/{uuid4()}/context-usage",
+        params={"model_profile_id": DEFAULT_PROFILE_ID},
+    )
+    unknown_profile = client.get(
+        f"/api/papers/{uploaded_paper.id}/agent/conversations"
+        f"/{conversation_id}/context-usage",
+        params={"model_profile_id": str(uuid4())},
+    )
+
+    assert unknown_conversation.status_code == 404
+    assert unknown_profile.status_code == 503

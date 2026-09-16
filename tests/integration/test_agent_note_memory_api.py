@@ -10,6 +10,9 @@ from paper_agent.database import conversations
 from paper_agent.app import create_app
 from paper_agent.config import Settings
 from paper_agent.models.vllm import VllmModelConfig, VllmToolCall, VllmToolTurn
+from paper_agent.services.agent_runtime import PaperAgentRuntime
+from paper_agent.services.agent_tools import PaperToolRegistry
+from paper_agent.services.note_memory import NoteMemoryService
 from paper_agent.services.reasoning_clients import ENVIRONMENT_FALLBACK_PROFILE_ID
 
 
@@ -58,7 +61,18 @@ def _configured_client(tmp_path: Path, monkeypatch) -> TestClient:
         "VllmToolCallingClient",
         lambda _config, client=None: FakeToolClient(),
     )
-    return TestClient(create_app(settings), raise_server_exceptions=False)
+    app = create_app(settings)
+    # Substring-only tools keep this test offline: the semantic service
+    # would otherwise load a real embedding model on search_paper.
+    app.state.paper_tool_registry = PaperToolRegistry(app.state.paper_repository)
+    app.state.paper_agent_runtime = PaperAgentRuntime(
+        repository=app.state.paper_repository,
+        tools=app.state.paper_tool_registry,
+        guard=app.state.citation_guard,
+        annotation_repository=app.state.annotation_repository,
+        note_memory=NoteMemoryService(app.state.annotation_repository),
+    )
+    return TestClient(app, raise_server_exceptions=False)
 
 
 def _upload(client: TestClient, sample_pdf: Path) -> str:

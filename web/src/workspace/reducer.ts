@@ -1,5 +1,6 @@
 import type {
   AgentMessage,
+  ContextUsage,
   DocumentElement,
   Highlight,
   Note,
@@ -25,6 +26,7 @@ export const initialWorkspaceState: WorkspaceState = {
   messages: [],
   exchanges: [],
   streaming: null,
+  contextUsage: null,
   errorMessage: null,
   notesErrorMessage: null,
 };
@@ -71,6 +73,12 @@ export type WorkspaceAction =
     text: string;
   }
   | { type: 'conversation/stream-failed'; paperId: string; loadRevision: number }
+  | {
+    type: 'context/usage-set';
+    paperId: string;
+    loadRevision: number;
+    usage: ContextUsage | null;
+  }
   | { type: 'notes/created'; paperId: string; loadRevision: number; mutationGeneration?: number; note: Note }
   | { type: 'notes/updated'; paperId: string; loadRevision: number; mutationGeneration?: number; note: Note }
   | { type: 'notes/deleted'; paperId: string; loadRevision: number; mutationGeneration?: number; noteId: string }
@@ -212,6 +220,10 @@ export function workspaceReducer(
             ? null
             : { ...state.streaming, interrupted: true },
         }
+        : state;
+    case 'context/usage-set':
+      return isCurrentLoad(state, action.paperId, action.loadRevision)
+        ? { ...state, contextUsage: action.usage }
         : state;
     case 'notes/created':
       return isCurrentLoad(state, action.paperId, action.loadRevision)

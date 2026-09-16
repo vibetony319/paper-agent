@@ -29,6 +29,7 @@ from paper_agent.model_profiles import ModelSnapshot
 
 if TYPE_CHECKING:
     from paper_agent.model_profiles import ModelCapabilities
+    from paper_agent.services.context_budget import ContextUsage
     from paper_agent.services.model_profiles import ModelProfileView
 
 
@@ -254,6 +255,24 @@ class NoteReferenceResponse(BaseModel):
         )
 
 
+class ContextUsageResponse(BaseModel):
+    used_tokens: int = Field(ge=0)
+    context_length: int | None = None
+    effective_limit: int | None = None
+    compaction_threshold: int | None = None
+    percent: float | None = None
+
+    @classmethod
+    def from_usage(cls, usage: "ContextUsage") -> "ContextUsageResponse":
+        return cls(
+            used_tokens=usage.used_tokens,
+            context_length=usage.context_length,
+            effective_limit=usage.effective_limit,
+            compaction_threshold=usage.compaction_threshold,
+            percent=usage.percent,
+        )
+
+
 class AgentMessageResponse(BaseModel):
     conversation_id: str
     message_id: str
@@ -263,6 +282,7 @@ class AgentMessageResponse(BaseModel):
     citations: list[CitationResponse]
     model: ModelSnapshotResponse | None
     note_references: list[NoteReferenceResponse]
+    context_usage: ContextUsageResponse | None = None
 
 
 class ConversationMessageResponse(BaseModel):

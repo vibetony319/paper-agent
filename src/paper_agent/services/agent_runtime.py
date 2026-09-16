@@ -22,7 +22,9 @@ from paper_agent.services.agent_tools import AgentToolError, PaperToolRegistry
 from paper_agent.services.answer_format import ANSWER_FORMAT_INSTRUCTIONS
 from paper_agent.services.context_budget import (
     ContextBudget,
+    ContextUsage,
     compacted_messages,
+    context_usage,
     drop_oldest_exchange,
     partition_messages,
     rebuilt_messages,
@@ -382,34 +384,7 @@ class PaperAgentRuntime:
             raise AgentRuntimeResponseError(_RESPONSE_ERROR) from None
 
         executed_calls = 0
-        # Overview questions often contain no literal terms from an English
-        # paper. Seed actual, located source excerpts rather than searching
-        # the Chinese question verbatim or weakening citation validation.
-        overview = any(term in question.content.lower() for term in (
-            '讲了什么', '主要内容', '概括', '总结', 'summarize', 'overview',
-        ))
-        if overview:
-            elements = [element for element in self.repository.get_elements(paper_id)
-                        if element.text.strip() and element.page_number is not None and element.bbox is not None]
-            candidates = elements[:3] + elements[-1:]
-            seen = set()
-            seeded_elements: list[dict[str, object]] = []
-            for element in candidates:
-                if element.id in seen:
-                    continue
-                seen.add(element.id)
-                execution = self.tools.execute(
-                    paper_id=paper_id, name='read_element', arguments={'element_id': element.id}
-                )
-                allowed_evidence_ids.update(execution.evidence_element_ids)
-                executed_calls += 1
-                seeded_elements.append(execution.content['element'])
-            if seeded_elements:
-                messages.append(
-                    {'role': 'system', 'content': _seeded_evidence_message(seeded_elements, allowed_evidence_ids)}
-                )
-                messages.append({'role':'system', 'content':'请用中文概括上方论文证据中的研究问题、方法和结论。只引用已给出的元素 ID；片段不足时说明范围，不要编造。'})
-        for _ in range(0 if overview and allowed_evidence_ids else MAX_TOOL_TURNS):
+        for _ in range(MAX_TOOL_TURNS):
             self._compact_if_needed(messages, client=client, budget=context_budget)
             try:
                 turn = client.request_tool_turn(
@@ -708,6 +683,34 @@ class PaperAgentRuntime:
             messages.append({"role": message.role.value, "content": content})
         return messages
 
+    def conversation_usage(
+        self,
+        *,
+        paper_id: str,
+        conversation_id: str,
+        budget: ContextBudget | None,
+    ) -> ContextUsage:
+        """Estimate the context occupancy of the conversation's next request.
+
+        The note-memory block and any selection arrive per question, so this
+        idle estimate covers the system prompt plus the trailing durable
+        history — the same inputs and estimator the compaction budget uses.
+        """
+        conversation = self.repository.get_conversation(paper_id, conversation_id)
+        if conversation is None:
+            raise AgentRuntimePrerequisiteError(_PREREQUISITE_ERROR)
+        durable_messages = self.repository.get_conversation_messages(
+            paper_id, conversation.id, limit=HISTORY_MESSAGE_LIMIT
+        )
+        messages: list[dict[str, object]] = [
+            {"role": "system", "content": _system_prompt()},
+            *(
+                {"role": message.role.value, "content": message.content}
+                for message in durable_messages
+            ),
+        ]
+        return context_usage(messages, budget)
+
     def _note_references_for_message(
         self, paper_id: str, message: ConversationMessage
     ) -> tuple[NoteMemoryReference, ...]:
@@ -748,28 +751,14 @@ def _system_prompt() -> str:
     return (
         "Use the provided paper tools when they help answer the user's "
         "question. Answer directly and naturally, including for general questions "
-        "and short greetings. "
+        "and short greetings. Use search_paper to retrieve relevant paper "
+        "content yourself: it matches by meaning as well as literal text, so "
+        "queries in the user's language work even for papers in another "
+        "language. For broad or summary questions (e.g. what the paper is "
+        "about), search for the key parts—such as the abstract, contributions, "
+        "and conclusions—and read what you need before answering. "
         "Tool evidence element IDs identify paper locations. "
         + ANSWER_FORMAT_INSTRUCTIONS
-    )
-
-
-def _seeded_evidence_message(
-    elements: list[dict[str, object]], allowed_evidence_ids: set[str]
-) -> str:
-    """Present pre-read excerpts as evidence without faking a model tool turn.
-
-    Thinking-mode providers reject replayed tool-call messages that the model
-    never produced, so the seeded reads travel as plain evidence text.
-    """
-    return json.dumps(
-        {
-            "content": {"elements": elements},
-            "evidence_element_ids": list(dict.fromkeys(allowed_evidence_ids)),
-        },
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
     )
 
 

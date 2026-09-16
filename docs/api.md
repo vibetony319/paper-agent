@@ -83,16 +83,17 @@
 
 | 方法与路径 | 用途与重要请求/响应字段 | 稳定错误 / 幂等 |
 | --- | --- | --- |
-| `POST /api/papers/{paper_id}/agent/messages` | [`AgentMessageRequest`](#schema-索引)：`content`、可选 `conversation_id`/`selection`、必填 `model_profile_id` 和 `request_id`。返回 [`AgentMessageResponse`](#schema-索引)：会话/消息 ID、`grounded|insufficient_evidence`、答案、引用、模型快照和实际注入笔记引用。 | `404` 论文/会话不存在；`409` 前置阶段不完整、工具调用能力不足、删除活跃或 request_id 与已存重试不一致；`422` 无效选区；`503` 模型未配置；`502` 模型或最终输出不能完成。相同论文和完全相同 request_id 已完成时重放保存的回合；部分用户消息的重试还必须匹配内容、会话、档案及不可变快照。 |
-| `POST /api/papers/{paper_id}/agent/messages/stream` | 同一请求体，`text/event-stream` 响应：`started`（`request_id`）、`delta`（`text`，增量 Markdown）、`completed`（`message`，与 `AgentMessageResponse` 同构）、`error`（`code`、`detail`）。 | 请求校验（`404`/`409`/`422`/`503`）仍在开流前以普通 JSON 错误返回，开流后的失败是 `error` 事件。整段回答到达前不写库，中断的流不会留下半条助手消息；已完成回合重放只发 `started` + `completed`。 |
+| `POST /api/papers/{paper_id}/agent/messages` | [`AgentMessageRequest`](#schema-索引)：`content`、可选 `conversation_id`/`selection`、必填 `model_profile_id` 和 `request_id`。返回 [`AgentMessageResponse`](#schema-索引)：会话/消息 ID、`grounded|insufficient_evidence`、答案、引用、模型快照、实际注入笔记引用，以及 `context_usage`（下一轮请求的估算上下文占用）。 | `404` 论文/会话不存在；`409` 前置阶段不完整、工具调用能力不足、删除活跃或 request_id 与已存重试不一致；`422` 无效选区；`503` 模型未配置；`502` 模型或最终输出不能完成。相同论文和完全相同 request_id 已完成时重放保存的回合；部分用户消息的重试还必须匹配内容、会话、档案及不可变快照。 |
+| `POST /api/papers/{paper_id}/agent/messages/stream` | 同一请求体，`text/event-stream` 响应：`started`（`request_id`）、`delta`（`text`，增量 Markdown）、`completed`（`message` 与 `AgentMessageResponse` 同构 + 可选 `context_usage`）、`error`（`code`、`detail`）。 | 请求校验（`404`/`409`/`422`/`503`）仍在开流前以普通 JSON 错误返回，开流后的失败是 `error` 事件。整段回答到达前不写库，中断的流不会留下半条助手消息；已完成回合重放只发 `started` + `completed`。 |
 | `GET /api/papers/{paper_id}/agent/conversations/{conversation_id}` | 返回 [`ConversationResponse`](#schema-索引)，含用户/助手消息、历史模型快照、引用和笔记引用可用性。 | 论文或会话不存在 `404`；只读。 |
+| `GET /api/papers/{paper_id}/agent/conversations/{conversation_id}/context-usage` | 查询参数 `model_profile_id` 必填。返回 [`ContextUsageResponse`](#schema-索引)：`used_tokens`（下一轮请求估算：系统提示 + 最近 6 条持久化消息 + 工具定义开销）、`context_length`/`effective_limit`/`compaction_threshold`/`percent`（档案未配置 `context_length` 时后四项为 `null`）。与自动压缩使用同一估算器。 | 论文或会话不存在 `404`；`model_profile_id` 无效 `422`；模型档案不可解析 `503`；只读。 |
 | `POST /api/agent/health` | 校验默认/环境回退模型的工具调用能力，返回 `AgentHealthResponse`（默认 `status: "ok"`）。 | `503` 工具调用不可用；只做能力探测，不写业务数据，可安全重复。 |
 
-模型正文会直接保存并返回；内联引用标记只是可选页面跳转，重复或无法定位的 ID 会被去重/忽略，不会改写回答。工具调用是 Agent 回合唯一必须通过的能力检测——`structured output` 现在只是模型档案里的展示信息，不再门禁聊天（Markdown 回答不需要 `response_format`）。档案配置了 `context_length` 时，Agent 请求组装会按估算做上下文压缩（详见[模型服务](model-services.md)与 [ADR 0004](adr/0004-context-compaction.md)）；压缩不改变本节任何请求/响应语义。
+模型正文会直接保存并返回；内联引用标记只是可选页面跳转，重复或无法定位的 ID 会被去重/忽略，不会改写回答。工具调用是 Agent 回合唯一必须通过的能力检测——`structured output` 现在只是模型档案里的展示信息，不再门禁聊天（Markdown 回答不需要 `response_format`）。档案配置了 `context_length` 时，Agent 请求组装会按估算做上下文压缩（详见[模型服务](model-services.md)与 [ADR 0004](adr/0004-context-compaction.md)）；压缩不改变本节任何请求/响应语义。`search_paper` 工具现按语义 + 子串合并检索（子串命中优先、语义补足），语义后端为 paperqa2 本地嵌入（详见 [ADR 0005](adr/0005-paperqa2-semantic-retrieval.md)）；不再对概括类问题预注入首末页摘录。
 
 ## Schema 索引
 
-以下 schema 均以运行时 OpenAPI 为准：`PaperSummaryResponse`、`PaperDocumentResponse`、`PaperDeleteRequest`、`TextAnchorDraftRequest`、`AnnotationBundleResponse`、`HighlightCreateRequest`、`HighlightResponse`、`NoteRequest`、`NoteUpdateRequest`、`NoteResponse`、`SelectionAssistRequest`、`ModelProfileCreateRequest`、`ModelProfilePatchRequest`、`ModelProfileResponse`、`ModelProfileErrorResponse`、`AgentMessageRequest`、`AgentMessageResponse`、`ConversationResponse`、`AgentHealthResponse`。
+以下 schema 均以运行时 OpenAPI 为准：`PaperSummaryResponse`、`PaperDocumentResponse`、`PaperDeleteRequest`、`TextAnchorDraftRequest`、`AnnotationBundleResponse`、`HighlightCreateRequest`、`HighlightResponse`、`NoteRequest`、`NoteUpdateRequest`、`NoteResponse`、`SelectionAssistRequest`、`ModelProfileCreateRequest`、`ModelProfilePatchRequest`、`ModelProfileResponse`、`ModelProfileErrorResponse`、`AgentMessageRequest`、`AgentMessageResponse`、`ContextUsageResponse`、`ConversationResponse`、`AgentHealthResponse`。
 
 重点响应字段：
 

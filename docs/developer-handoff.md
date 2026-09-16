@@ -4,6 +4,15 @@
 
 ## 最新进度（接手先读）
 
+### 上下文占用指示 + paperqa2 语义检索（2026-09-16 第二轮）
+
+- **上下文占用指示（对话区右下角）**：显示"下一次请求"的估算占用——系统提示 + 最近 6 条持久化消息 + 1000 token 工具定义开销，与自动压缩（ADR 0004）同一估算器。后端 `context_budget.py` 新增 `ContextUsage`/`context_usage()`；`agent_runtime.conversation_usage()` 复用历史组装逻辑。三条通道：非流式 `AgentMessageResponse.context_usage`、SSE `completed` 事件 payload 新增 `context_usage` 字段、新只读端点 `GET /api/papers/{paper_id}/agent/conversations/{conversation_id}/context-usage?model_profile_id=...`（前端在会话建立/切档案时刷新）。档案未配置 `context_length` 时四项上限字段为 null，前端显示「上下文 X（未设上限）」。前端 `ChatComposer` 提示行改 flex，右侧 `ContextUsageBadge`：≥75% 黄（压缩预警）、≥90% 红（硬截断）、title 说明估算口径与阈值。
+- **paperqa2 语义检索（设计见 [ADR 0005](adr/0005-paperqa2-semantic-retrieval.md)）**：`services/paper_search.py` 的 `SemanticPaperSearchService` 对全部元素文本批量嵌入（paperqa2 `embedding_model_factory` 的 `st-` 前缀 → sentence-transformers CPU 推理，默认 `st-paraphrase-multilingual-MiniLM-L12-v2`，`PAPER_AGENT_EMBEDDING_MODEL` 可覆盖），余弦 top-k。索引持久化到 `.paper-agent/search-indexes/{paper_id}.npz` + JSON sidecar（指纹=元素 ID/序/全文 SHA-256、模型名），惰性重建：指纹或模型不匹配即重建（首问多花数秒），进程内 LRU 缓存 4 篇，单锁串行嵌入调用。paperqa2/嵌入失败 → warning + 空结果，`search_paper` 回退纯子串。
+- **`search_paper` 合并检索**：子串命中优先（`search_mode: "substring"`、score 1.0）、语义补足（`search_mode: "semantic"`、score=余弦相似度）、去重、按 `limit` 截断；跨论文 ID 丢弃；`evidence_element_ids`（仅 located）契约不变。工具描述与系统提示更新为语义检索说明（含跨语言提示）。
+- **移除首末页固定投喂**：删除 `agent_runtime` 的 overview 关键词检测、`elements[:3] + elements[-1:]` 播种块与 `_seeded_evidence_message`；工具循环恒 `range(MAX_TOOL_TURNS)`。所有问题统一走"模型自己搜索→读→答"，中文概括类问题可经语义检索命中英文论文的摘要/结论。
+- **Windows 安装坑**：本机 `LongPathsEnabled=0` 且 worktree 路径深，`pip install "paper-qa[local]"` 在 litellm 深层文件上撞 MAX_PATH 失败。解法已写入 README：单独下载 litellm wheel，Python 以 `\\?\` 前缀解压进 site-packages，再重跑 pip（其余包路径浅，正常安装）。未改系统注册表。
+- 测试：集成测试的 fake runtime 注入 substring-only `PaperToolRegistry`（避免 CI 加载真实嵌入模型）；`test_paper_search.py` 以确定性假嵌入向量覆盖建索引/磁盘复用/指纹失效重建/模型切换/失败回退/空文本（6 项）；`test_agent_tools.py` 新增合并/截断/服务失败 3 项；overview 测试改写为"模型经 search_paper 自行检索后作答、无播种 system 消息"。上下文占用 3 个单元 + 3 个路由测试。
+
 ### 章节解析、弹窗交互与上下文管理（2026-09-16）
 
 - **章节解析重写（`parsers/pymupdf_stage1.py`）**：PDF 书签大纲（`get_toc`）有效条目 ≥3 时作为权威来源（标题、顺序、层级）；无大纲时的启发式修复——全大写只统计 ASCII 字母（中文行不再误判）、加粗按"加粗字符占比 ≥60%"（作者行/arXiv 水印/STEP/图注不再入列）、跳过旋转文本（侧边水印）、首页标题区横幅守卫、垃圾标题后置过滤。`Section` 新增 `level`（迁移 7），前端章节导航按层级缩进。实测 InfoGain-RAG 论文从 49 条（含大量垃圾）降为 21 条干净章节。**需重新上传论文才应用新解析**（无重新解析入口，避免破坏已有高亮/笔记挂接）。
