@@ -344,3 +344,51 @@ it('preserves the API location when selecting a located element', () => {
     bbox: { x0: 0.1, y0: 0.2, x1: 0.8, y1: 0.3 },
   });
 });
+
+it('appends streamed execution steps to the live agent stream', () => {
+  const base = readyWorkspace({ paperId: 'paper-a', conversationId: 'conversation-a' });
+  const started = workspaceReducer(base, {
+    type: 'conversation/stream-started',
+    paperId: 'paper-a',
+    loadRevision: 0,
+    question: '这篇论文讲了什么',
+  });
+  const withStep = workspaceReducer(started, {
+    type: 'conversation/stream-step',
+    paperId: 'paper-a',
+    loadRevision: 0,
+    step: { kind: 'round', round: 1 },
+  });
+  const withText = workspaceReducer(withStep, {
+    type: 'conversation/stream-delta',
+    paperId: 'paper-a',
+    loadRevision: 0,
+    text: '论文提出',
+  });
+
+  expect(withText.streaming).toEqual({
+    question: '这篇论文讲了什么',
+    text: '论文提出',
+    steps: [{ kind: 'round', round: 1 }],
+    interrupted: false,
+  });
+});
+
+it('drops stale execution steps from an older load revision', () => {
+  const base = readyWorkspace({ paperId: 'paper-a', conversationId: 'conversation-a' });
+  const started = workspaceReducer(base, {
+    type: 'conversation/stream-started',
+    paperId: 'paper-a',
+    loadRevision: 0,
+    question: '这篇论文讲了什么',
+  });
+
+  const updated = workspaceReducer(started, {
+    type: 'conversation/stream-step',
+    paperId: 'paper-a',
+    loadRevision: 1,
+    step: { kind: 'notes', count: 1 },
+  });
+
+  expect(updated.streaming?.steps).toEqual([]);
+});

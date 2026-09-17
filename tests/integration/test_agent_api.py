@@ -1301,10 +1301,15 @@ def test_agent_stream_emits_deltas_then_the_persisted_message(
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
     events = _stream_events(response)
-    assert [name for name, _ in events] == ["started", "delta", "completed"]
+    names = [name for name, _ in events]
+    assert [name for name in names if name != "step"] == [
+        "started",
+        "delta",
+        "completed",
+    ]
     assert events[0][1]["request_id"] == request_id
-    streamed = events[1][1]["text"]
-    message = events[2][1]["message"]
+    streamed = events[names.index("delta")][1]["text"]
+    message = events[names.index("completed")][1]["message"]
     assert message["paper_answer"] == streamed
     assert message["paper_answer"].endswith(f"[[{uploaded_paper.element_id}]]")
     assert message["status"] == "grounded"
@@ -1316,6 +1321,41 @@ def test_agent_stream_emits_deltas_then_the_persisted_message(
     assert [item["role"] for item in history["messages"]] == ["user", "assistant"]
     assert history["messages"][1]["content"] == message["paper_answer"]
     assert fake.final_requests == 1
+
+
+def test_agent_stream_emits_execution_steps(
+    client: TestClient, uploaded_paper: UploadedPaper
+) -> None:
+    """Breaks if the execution path is missing from the event stream."""
+    fake = _grounded_tool_flow(uploaded_paper)
+    fake.stream_chunks = None
+    _configure_fake_agent_runtime(client.app, fake)
+
+    response = client.post(
+        f"/api/papers/{uploaded_paper.id}/agent/messages/stream",
+        json=_agent_payload(
+            "Explain the method.",
+            request_id="20000000-0000-0000-0000-000000000042",
+        ),
+    )
+
+    assert response.status_code == 200
+    steps = [data for name, data in _stream_events(response) if name == "step"]
+    assert [step["kind"] for step in steps] == [
+        "notes",
+        "round",
+        "reasoning",
+        "tool_call",
+        "tool_result",
+        "round",
+        "final_answer",
+    ]
+    assert steps[0]["count"] == 0
+    assert steps[2]["text"] == "private tool planning"
+    assert steps[3]["tool_name"] == "read_element"
+    assert steps[3]["arguments"] == {"element_id": uploaded_paper.element_id}
+    assert steps[4]["evidence_count"] == 1
+    assert steps[5]["round"] == 2
 
 
 def test_agent_stream_replays_a_duplicate_request_without_calling_the_model(
@@ -1362,7 +1402,7 @@ def test_agent_stream_reports_a_provider_failure_as_an_error_event(
 
     assert response.status_code == 200
     events = _stream_events(response)
-    assert [name for name, _ in events] == ["started", "error"]
+    assert [name for name, _ in events if name != "step"] == ["started", "error"]
     assert events[-1][1]["code"] == "agent_failed"
     assert "raw-stream-provider-secret" not in response.text
     assert _chat_row_counts(client.app.state.paper_repository) == (1, 1)
@@ -1390,7 +1430,11 @@ def test_agent_stream_reports_an_unresolvable_citation_as_an_error_event(
 
     assert response.status_code == 200
     events = _stream_events(response)
-    assert [name for name, _ in events] == ["started", "delta", "error"]
+    assert [name for name, _ in events if name != "step"] == [
+        "started",
+        "delta",
+        "error",
+    ]
     assert events[-1][1]["code"] == "answer_unavailable"
     assert "Reasoning model could not complete the request." not in response.text
 

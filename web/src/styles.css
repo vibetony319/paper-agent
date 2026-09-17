@@ -1056,6 +1056,87 @@ textarea::placeholder {
   position: absolute;
 }
 
+/* PDF link annotations */
+
+.pdf-page-view__link-layer {
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+  z-index: 1;
+}
+.pdf-link-hitbox {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  border-radius: 2px;
+  margin: 0;
+  padding: 0;
+  pointer-events: auto;
+  position: absolute;
+  cursor: pointer;
+}
+.pdf-link-hitbox:hover,
+.pdf-link-hitbox:focus-visible {
+  background: rgb(30 92 70 / 14%);
+  outline: 1px solid rgb(30 92 70 / 55%);
+  outline-offset: -1px;
+}
+.pdf-link-preview {
+  background: var(--paper-raised);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgb(35 40 43 / 18%);
+  font-size: 12px;
+  max-width: 264px;
+  padding: 8px;
+  position: fixed;
+  z-index: 60;
+}
+.pdf-link-preview__label { font-weight: 600; margin: 0 0 6px; }
+.pdf-link-preview__canvas {
+  background: var(--desk-100);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  display: block;
+  height: auto;
+  width: 220px;
+}
+.pdf-link-preview__url { color: var(--ink-soft); margin: 0; word-break: break-all; }
+.pdf-reader__link-actions { display: inline-flex; gap: 8px; }
+.pdf-reader__link-toast {
+  align-items: center;
+  background: var(--ink);
+  border-radius: 999px;
+  bottom: 28px;
+  box-shadow: 0 10px 28px rgb(35 40 43 / 30%);
+  color: #fff;
+  display: inline-flex;
+  font-size: 12px;
+  gap: 10px;
+  left: 50%;
+  padding: 8px 14px;
+  position: fixed;
+  transform: translateX(-50%);
+  z-index: 55;
+}
+.pdf-reader__link-toast kbd {
+  background: rgb(255 255 255 / 16%);
+  border-radius: 4px;
+  font-family: inherit;
+  padding: 1px 5px;
+}
+.pdf-reader__link-toast button {
+  appearance: none;
+  background: rgb(255 255 255 / 16%);
+  border: 0;
+  border-radius: 999px;
+  color: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 4px 10px;
+}
+.pdf-reader__link-toast button:hover { background: rgb(255 255 255 / 26%); }
+
 /* Annotation highlights */
 
 .annotation-overlay {
@@ -1805,6 +1886,38 @@ textarea::placeholder {
 .chat-feedback__assistant p { margin: 0; }
 .chat-feedback__waiting { display: flex; align-items: center; gap: 12px; color: var(--ink-soft); }
 .chat-feedback__interrupted { color: var(--danger-strong); font-size: 12px; }
+.chat-feedback__steps { border: 1px solid var(--line); border-radius: 12px; background: var(--accent-softer); }
+.chat-feedback__steps > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--ink-soft);
+  padding: 6px 12px;
+  list-style: none;
+}
+.chat-feedback__steps > summary::before { content: '▸ '; color: var(--accent); }
+.chat-feedback__steps[open] > summary::before { content: '▾ '; }
+.chat-feedback__steps .agent-steps { padding: 0 12px 10px 14px; }
+.agent-steps { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; font-size: 12px; color: var(--ink-soft); }
+.agent-steps__item { display: flex; gap: 10px; align-items: flex-start; }
+.agent-steps__marker {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-top: 4px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+.agent-steps__body { flex: 1 1 auto; min-width: 0; }
+.agent-steps__body p { margin: 0; line-height: 1.7; }
+.agent-steps__thinking { border-left: 2px solid var(--line); padding-left: 10px; }
+.agent-steps__thinking summary { cursor: pointer; color: var(--ink-faint); font-size: 12px; user-select: none; }
+.agent-steps__thinking p { white-space: pre-wrap; max-height: 160px; overflow-y: auto; color: var(--ink-faint); background: var(--paper-raised); border-radius: 8px; padding: 8px 10px; margin-top: 6px; }
+.agent-steps__failure { color: var(--danger-strong); }
+.agent-steps__item[data-step-kind='reasoning'] .agent-steps__marker { box-shadow: inset 0 0 0 2px var(--line-strong); background: var(--desk-200); }
 .chat-typing { display: flex; gap: 4px; }
 .chat-typing i { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
 @media (prefers-reduced-motion: no-preference) {

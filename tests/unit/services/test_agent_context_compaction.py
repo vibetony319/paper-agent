@@ -230,11 +230,14 @@ def test_stream_ask_compacts_before_streaming_the_final_answer(repository):
         context_budget=ContextBudget(context_length=2_000, max_output_tokens=200),
     )
 
-    assert [event.event for event in events] == [
+    assert [event.event for event in events if event.event != "step"] == [
         "started",
         "delta",
         "delta",
         "completed",
+    ]
+    assert "compaction" in [
+        event.step.kind for event in events if event.event == "step"
     ]
     streamed_messages = client.final_requests[0]["messages"]
     assert not any("durable-2" in str(message) for message in streamed_messages)

@@ -12,8 +12,11 @@ interface StreamConfig {
 }
 
 const STREAM_EVENTS = new Set(['started', 'delta', 'completed', 'error']);
+// The agent stream additionally reports its execution path; selection
+// assists keep the strict base vocabulary.
+const AGENT_STREAM_EVENTS = new Set([...STREAM_EVENTS, 'step']);
 const ASSIST_STREAM: StreamConfig = { known: STREAM_EVENTS, label: 'Selection assist' };
-const AGENT_STREAM: StreamConfig = { known: STREAM_EVENTS, label: 'Paper agent' };
+const AGENT_STREAM: StreamConfig = { known: AGENT_STREAM_EVENTS, label: 'Paper agent' };
 
 function abortError(signal: AbortSignal): unknown {
   return signal.reason ?? new DOMException('The operation was aborted.', 'AbortError');

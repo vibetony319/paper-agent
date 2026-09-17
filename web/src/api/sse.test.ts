@@ -175,6 +175,8 @@ it('streams paper agent events from the stream endpoint', async () => {
     receivedBody = await request.json();
     return sseResponse([
       ['started', { request_id: 'request-a' }],
+      ['step', { kind: 'notes', count: 2 }],
+      ['step', { kind: 'round', round: 1 }],
       ['delta', { text: '论文提出' }],
       ['delta', { text: '路由损失。' }],
       ['completed', { message: { conversation_id: 'conversation-a' } }],
@@ -188,10 +190,23 @@ it('streams paper agent events from the stream endpoint', async () => {
   expect(receivedBody).toEqual(agentInput);
   expect(events).toEqual([
     { event: 'started', data: { request_id: 'request-a' } },
+    { event: 'step', data: { kind: 'notes', count: 2 } },
+    { event: 'step', data: { kind: 'round', round: 1 } },
     { event: 'delta', data: { text: '论文提出' } },
     { event: 'delta', data: { text: '路由损失。' } },
     { event: 'completed', data: { message: { conversation_id: 'conversation-a' } } },
   ]);
+});
+
+it('rejects step events on the selection assist stream', async () => {
+  server.use(http.post('/api/papers/paper-a/selection-assists', () => sseResponse([
+    ['started', { request_id: 'request-a' }],
+    ['step', { kind: 'notes', count: 0 }],
+  ])));
+
+  const controller = new AbortController();
+  await expect(collect(streamSelectionAssist('paper-a', assistInput, controller.signal)))
+    .rejects.toMatchObject({ code: 'unknown_event' });
 });
 
 it('surfaces a paper agent stream error event to the caller', async () => {

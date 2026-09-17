@@ -1,7 +1,8 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
-import type { AgentMessage, ContextUsage, ModelProfile, TextAnchorDraft } from '../api/types';
+import type { AgentMessage, AgentStreamStep, ContextUsage, ModelProfile, TextAnchorDraft } from '../api/types';
+import { AgentStepsTimeline } from './AgentStepsTimeline';
 import { ContextUsageBadge } from './ContextUsageBadge';
 import { MarkdownText } from './MarkdownText';
 import { ModelSelector } from './ModelSelector';
@@ -27,6 +28,7 @@ export interface ChatComposerProps {
   messageTarget?: HTMLDivElement | null;
   onSendStart?: () => void;
   streamingText?: string;
+  streamingSteps?: AgentStreamStep[];
   streamInterrupted?: boolean;
   contextUsage?: ContextUsage | null;
 }
@@ -43,6 +45,7 @@ export function ChatComposer({
   messageTarget = null,
   onSendStart,
   streamingText = '',
+  streamingSteps = [],
   streamInterrupted = false,
   contextUsage = null,
 }: ChatComposerProps) {
@@ -131,15 +134,24 @@ export function ChatComposer({
 
   const unavailable = selectedModelProfileId === null;
   const interruptedText = streamInterrupted ? streamingText : '';
+  const stepsDetails = streamingSteps.length > 0 && (
+    <details className="chat-feedback__steps">
+      <summary>执行过程</summary>
+      <AgentStepsTimeline steps={streamingSteps} active={streamingText === ''} />
+    </details>
+  );
   const feedback = (pending || greeting || interruptedText !== '') && <div ref={feedbackRef} className="chat-feedback">
     <p className="agent-panel__question">{sentQuestion}</p>
     <div className="chat-feedback__assistant" role="status">
       <span className="chat-feedback__name">论文助手</span>
       {greeting ? <p>你好！我可以帮你概括论文、解释方法或分析选中的段落。试试问“这篇论文讲了什么”。</p> : interruptedText !== '' ? <>
+        {stepsDetails}
         <div className="agent-panel__answer"><MarkdownText text={interruptedText} /></div>
         <p className="chat-feedback__interrupted" role="alert">回答已中断，以上为已生成的部分。</p>
         <button type="button" onClick={() => { void send(sentQuestion); }}>重新提问</button>
-      </> : streamingText === '' ? <p className="chat-feedback__waiting"><span className="chat-typing" aria-hidden="true"><i /><i /><i /></span>{elapsed >= 20 ? '模型还在处理，请稍候…' : '正在生成回答…'}</p> : <div className="agent-panel__answer"><MarkdownText text={streamingText} /></div>}
+      </> : streamingText === '' ? (
+        streamingSteps.length > 0 ? <AgentStepsTimeline steps={streamingSteps} active /> : <p className="chat-feedback__waiting"><span className="chat-typing" aria-hidden="true"><i /><i /><i /></span>{elapsed >= 20 ? '模型还在处理，请稍候…' : '正在生成回答…'}</p>
+      ) : <>{stepsDetails}<div className="agent-panel__answer"><MarkdownText text={streamingText} /></div></>}
     </div>
   </div>;
 

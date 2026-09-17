@@ -170,7 +170,7 @@ it('exposes streamed answer text until the turn is completed', async () => {
     pending = result.current.askAgent('问题', 'qwen');
   });
 
-  expect(result.current.streaming).toEqual({ question: '问题', text: '完整', interrupted: false });
+  expect(result.current.streaming).toEqual({ question: '问题', text: '完整', interrupted: false, steps: [] });
   expect(result.current.exchanges).toEqual([]);
 
   await act(async () => {
@@ -193,7 +193,7 @@ it('keeps the streamed answer and reports the API reason when the stream errors'
 
   await act(async () => { await result.current.askAgent('问题', 'qwen'); });
 
-  expect(result.current.streaming).toEqual({ question: '问题', text: '半截回答', interrupted: true });
+  expect(result.current.streaming).toEqual({ question: '问题', text: '半截回答', interrupted: true, steps: [] });
   expect(result.current.exchanges).toEqual([]);
   expect(result.current.errorMessage).toBe('模型未能完成有效回答，请重试或在模型设置中重新测试。');
 });

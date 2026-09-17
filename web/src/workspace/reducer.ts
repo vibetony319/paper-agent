@@ -1,5 +1,6 @@
 import type {
   AgentMessage,
+  AgentStreamStep,
   ContextUsage,
   DocumentElement,
   Highlight,
@@ -71,6 +72,12 @@ export type WorkspaceAction =
     paperId: string;
     loadRevision: number;
     text: string;
+  }
+  | {
+    type: 'conversation/stream-step';
+    paperId: string;
+    loadRevision: number;
+    step: AgentStreamStep;
   }
   | { type: 'conversation/stream-failed'; paperId: string; loadRevision: number }
   | {
@@ -201,7 +208,7 @@ export function workspaceReducer(
       return isCurrentLoad(state, action.paperId, action.loadRevision)
         ? {
           ...state,
-          streaming: { question: action.question, text: '', interrupted: false },
+          streaming: { question: action.question, text: '', steps: [], interrupted: false },
           errorMessage: null,
         }
         : state;
@@ -209,6 +216,11 @@ export function workspaceReducer(
       return isCurrentLoad(state, action.paperId, action.loadRevision)
         && state.streaming !== null
         ? { ...state, streaming: { ...state.streaming, text: state.streaming.text + action.text } }
+        : state;
+    case 'conversation/stream-step':
+      return isCurrentLoad(state, action.paperId, action.loadRevision)
+        && state.streaming !== null
+        ? { ...state, streaming: { ...state.streaming, steps: [...state.streaming.steps, action.step] } }
         : state;
     case 'conversation/stream-failed':
       // Keep whatever the model already produced: discarding it loses the

@@ -2,7 +2,7 @@ import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, expect, it, vi } from 'vitest';
 
-import type { AgentMessage, ModelProfile, TextAnchorDraft } from '../api/types';
+import type { AgentMessage, AgentStreamStep, ModelProfile, TextAnchorDraft } from '../api/types';
 import { ChatComposer } from './ChatComposer';
 
 const profiles: ModelProfile[] = [
@@ -226,4 +226,37 @@ it('uses the composer as the single model boundary and explains why sending is u
 
   await user.selectOptions(screen.getByLabelText('当前模型'), 'deepseek');
   expect(onSelectedModelProfileIdChange).toHaveBeenCalledWith('deepseek');
+});
+
+it('shows the execution steps while waiting and collapses them once the answer streams', async () => {
+  // Breaks if the agent works silently behind the generic waiting placeholder.
+  const user = userEvent.setup();
+  const pendingRequest = deferred<AgentMessage | null>();
+  const askAgent = vi.fn().mockReturnValue(pendingRequest.promise);
+  const steps: AgentStreamStep[] = [
+    { kind: 'notes', count: 2 },
+    { kind: 'round', round: 1 },
+    { kind: 'tool_call', round: 1, tool_name: 'search_paper', arguments: { query: 'router' } },
+  ];
+  const props = {
+    paperId: 'paper-a', profiles, selectedModelProfileId: 'qwen',
+    onSelectedModelProfileIdChange: vi.fn(), askAgent, attachment: null,
+    onAttachmentClear: vi.fn(), streamingSteps: steps,
+  };
+  const { rerender } = render(<ChatComposer {...props} />);
+
+  await user.type(screen.getByLabelText('向论文助手提问'), '这篇论文讲了什么');
+  await user.click(screen.getByRole('button', { name: '发送' }));
+
+  expect(screen.getByText('检索到 2 条相关笔记')).toBeVisible();
+  expect(screen.getByText('调用检索论文内容：router')).toBeVisible();
+  expect(screen.queryByText(/正在生成回答/)).not.toBeInTheDocument();
+
+  rerender(<ChatComposer {...props} streamingText="论文提出了" />);
+
+  expect(screen.getByText('论文提出了')).toBeVisible();
+  const details = screen.getByText('执行过程').closest('details');
+  expect(details).not.toBeNull();
+  expect(details).not.toHaveAttribute('open');
+  await act(async () => { pendingRequest.resolve(response); await pendingRequest.promise; });
 });
