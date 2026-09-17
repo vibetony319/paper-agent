@@ -101,6 +101,37 @@ class AgentTurn:
     note_references: tuple[NoteMemoryReference, ...] = ()
 
 
+# Reasoning text is presentation-only, so a runaway chain-of-thought must not
+# flood the event stream.
+_MAX_STEP_TEXT_CHARS = 4_000
+
+
+@dataclass(frozen=True)
+class AgentStep:
+    """One execution step of a streamed answer.
+
+    The transport stays machine-readable: the client maps ``kind`` and the
+    tool name to user-facing labels.
+    """
+
+    kind: Literal[
+        "notes",
+        "round",
+        "reasoning",
+        "tool_call",
+        "tool_result",
+        "compaction",
+        "final_answer",
+    ]
+    round: int | None = None
+    tool_name: str | None = None
+    arguments: dict[str, object] | None = None
+    evidence_count: int | None = None
+    error: str | None = None
+    text: str | None = None
+    count: int | None = None
+
+
 @dataclass(frozen=True)
 class AgentStreamEvent:
     """One step of a streamed answer.
@@ -109,10 +140,11 @@ class AgentStreamEvent:
     wording instead of leaking provider text.
     """
 
-    event: Literal["started", "delta", "completed", "error"]
+    event: Literal["started", "step", "delta", "completed", "error"]
     text: str = ""
     turn: AgentTurn | None = None
     code: str | None = None
+    step: AgentStep | None = None
 
 
 @dataclass(frozen=True)
@@ -126,6 +158,14 @@ class _PreparedTurn:
     note_context: NoteMemoryContext
     model_snapshot: ModelSnapshot
     request_id: str
+
+
+@dataclass(frozen=True)
+class _PrepareProgress:
+    """One yield from the preparation generator: a step or the final result."""
+
+    step: AgentStep | None = None
+    prepared: _PreparedTurn | None = None
 
 
 @dataclass
@@ -171,7 +211,7 @@ class PaperAgentRuntime:
             if replay is not None:
                 return replay
 
-            prepared = self._prepare_turn(
+            prepared = self._prepare_turn_sync(
                 paper_id=paper_id,
                 question=question,
                 client=client,
@@ -220,7 +260,8 @@ class PaperAgentRuntime:
 
             yield AgentStreamEvent("started")
             try:
-                prepared = self._prepare_turn(
+                prepared: _PreparedTurn | None = None
+                for progress in self._prepare_turn(
                     paper_id=paper_id,
                     question=question,
                     client=client,
@@ -228,7 +269,14 @@ class PaperAgentRuntime:
                     request_id=request_id,
                     selection=selection,
                     context_budget=context_budget,
-                )
+                ):
+                    if progress.step is not None:
+                        yield AgentStreamEvent("step", step=progress.step)
+                    if progress.prepared is not None:
+                        prepared = progress.prepared
+                        break
+                if prepared is None:
+                    raise AgentRuntimeResponseError(_RESPONSE_ERROR)
             except AgentRuntimeConflictError:
                 yield AgentStreamEvent("error", code="request_conflict")
                 return
@@ -250,10 +298,17 @@ class PaperAgentRuntime:
 
             parts: list[str] = []
             generated_chars = 0
+            if context_budget is not None and context_budget.needs_compaction(
+                prepared.messages
+            ):
+                yield AgentStreamEvent("step", step=AgentStep(kind="compaction"))
             self._compact_if_needed(
                 prepared.messages, client=client, budget=context_budget
             )
             try:
+                yield AgentStreamEvent(
+                    "step", step=AgentStep(kind="final_answer")
+                )
                 for chunk in client.stream_final_answer(
                     messages=prepared.messages
                 ):
@@ -308,8 +363,13 @@ class PaperAgentRuntime:
         request_id: str,
         selection: TextAnchorDraft | None,
         context_budget: ContextBudget | None = None,
-    ) -> _PreparedTurn:
-        """Persist the user turn, run the tool loop, and collect the evidence."""
+    ) -> Iterator[_PrepareProgress]:
+        """Persist the user turn, run the tool loop, and collect the evidence.
+
+        Yields a progress entry per visible step so the streaming transport can
+        show the execution path as it happens; the final yield carries the
+        prepared turn.
+        """
         partial_user = self.repository.get_agent_user_message_by_request(
             paper_id, request_id
         )
@@ -383,15 +443,45 @@ class PaperAgentRuntime:
         except Exception:
             raise AgentRuntimeResponseError(_RESPONSE_ERROR) from None
 
+        # Prerequisites are settled: from here on the request is really running,
+        # so its execution path becomes visible to the client.
+        yield _PrepareProgress(
+            step=AgentStep(kind="notes", count=len(note_context.references))
+        )
+
         executed_calls = 0
-        for _ in range(MAX_TOOL_TURNS):
+        for round_index in range(MAX_TOOL_TURNS):
+            if context_budget is not None and context_budget.needs_compaction(
+                messages
+            ):
+                yield _PrepareProgress(
+                    step=AgentStep(
+                        kind="compaction", round=round_index + 1
+                    )
+                )
             self._compact_if_needed(messages, client=client, budget=context_budget)
+            yield _PrepareProgress(
+                step=AgentStep(kind="round", round=round_index + 1)
+            )
             try:
                 turn = client.request_tool_turn(
                     messages=messages,
                     tools=tool_definitions,
                     tool_choice="auto",
                 )
+                thinking_text = "\n\n".join(
+                    part
+                    for part in (turn.reasoning_content, turn.content)
+                    if part
+                )
+                if thinking_text:
+                    yield _PrepareProgress(
+                        step=AgentStep(
+                            kind="reasoning",
+                            round=round_index + 1,
+                            text=thinking_text[:_MAX_STEP_TEXT_CHARS],
+                        )
+                    )
                 if not turn.tool_calls:
                     break
                 if len({call.id for call in turn.tool_calls}) != len(turn.tool_calls):
@@ -403,6 +493,14 @@ class PaperAgentRuntime:
                 assistant_message = None
                 tool_messages = []
                 for call in calls:
+                    yield _PrepareProgress(
+                        step=AgentStep(
+                            kind="tool_call",
+                            round=round_index + 1,
+                            tool_name=call.name,
+                            arguments=call.arguments,
+                        )
+                    )
                     try:
                         execution = self.tools.execute(
                             paper_id=paper_id, name=call.name, arguments=call.arguments,
@@ -412,10 +510,26 @@ class PaperAgentRuntime:
                         # is feedback for the model, not a failed turn.
                         content: dict[str, object] = {"error": str(error)}
                         evidence_ids: tuple[str, ...] = ()
+                        yield _PrepareProgress(
+                            step=AgentStep(
+                                kind="tool_result",
+                                round=round_index + 1,
+                                tool_name=call.name,
+                                error=str(error),
+                            )
+                        )
                     else:
                         content = execution.content
                         evidence_ids = execution.evidence_element_ids
                         allowed_evidence_ids.update(evidence_ids)
+                        yield _PrepareProgress(
+                            step=AgentStep(
+                                kind="tool_result",
+                                round=round_index + 1,
+                                tool_name=call.name,
+                                evidence_count=len(evidence_ids),
+                            )
+                        )
                     assistant, tool_message = _tool_result_messages(
                         turn, call, content, evidence_ids
                     )
@@ -436,15 +550,42 @@ class PaperAgentRuntime:
             messages.append(
                 {"role": "system", "content": _FINAL_ANSWER_INSTRUCTION}
             )
-        return _PreparedTurn(
-            conversation=conversation,
-            user_message=user_message,
-            messages=messages,
-            allowed_evidence_ids=allowed_evidence_ids,
-            note_context=note_context,
+        yield _PrepareProgress(
+            prepared=_PreparedTurn(
+                conversation=conversation,
+                user_message=user_message,
+                messages=messages,
+                allowed_evidence_ids=allowed_evidence_ids,
+                note_context=note_context,
+                model_snapshot=model_snapshot,
+                request_id=request_id,
+            )
+        )
+
+    def _prepare_turn_sync(
+        self,
+        *,
+        paper_id: str,
+        question: AgentQuestion,
+        client: VllmToolCallingClient,
+        model_snapshot: ModelSnapshot,
+        request_id: str,
+        selection: TextAnchorDraft | None,
+        context_budget: ContextBudget | None = None,
+    ) -> _PreparedTurn:
+        """Drive the preparation generator without streaming its steps."""
+        for progress in self._prepare_turn(
+            paper_id=paper_id,
+            question=question,
+            client=client,
             model_snapshot=model_snapshot,
             request_id=request_id,
-        )
+            selection=selection,
+            context_budget=context_budget,
+        ):
+            if progress.prepared is not None:
+                return progress.prepared
+        raise AgentRuntimeResponseError(_RESPONSE_ERROR)
 
     def _compact_if_needed(
         self,

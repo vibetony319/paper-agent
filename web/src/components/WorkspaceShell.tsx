@@ -244,6 +244,7 @@ export function WorkspaceShell({
                   onSelectedModelProfileIdChange,
                   askAgent: workspace.askAgent,
                   streamingText: workspace.streaming?.text ?? '',
+                  streamingSteps: workspace.streaming?.steps ?? [],
                   streamInterrupted: workspace.streaming?.interrupted ?? false,
                   contextUsage: workspace.contextUsage,
                   attachment: currentComposerAttachment,

@@ -2,13 +2,21 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const pdf = vi.hoisted(() => {
-  const viewport = { width: 612, height: 792, scale: 1, userUnit: 2 };
+  const viewport = {
+    width: 612,
+    height: 792,
+    scale: 1,
+    userUnit: 2,
+    convertToViewportPoint: (x: number, y: number): [number, number] => [x, y],
+  };
   const render = vi.fn(() => ({ cancel: vi.fn(), promise: Promise.resolve() }));
   const getViewport = vi.fn<(args: { scale: number }) => typeof viewport>(() => viewport);
   const streamTextContent = vi.fn(() => ({ getReader: vi.fn() }));
+  const getAnnotations = vi.fn<() => Promise<unknown[]>>(() => Promise.resolve([]));
   const getPage = vi.fn(() => Promise.resolve({
     getViewport,
     render,
+    getAnnotations,
     streamTextContent,
   }));
   const textLayerRender = vi.fn(() => Promise.resolve());
@@ -20,6 +28,7 @@ const pdf = vi.hoisted(() => {
   return {
     TextLayer,
     getPage,
+    getAnnotations,
     getViewport,
     render,
     textLayerCancel,
@@ -83,7 +92,13 @@ it('keeps a non-empty TextLayer selectable with its viewport scale contract', as
       cancel: pdf.textLayerCancel,
     };
   });
-  const narrowViewport = { width: 306, height: 396, scale: 0.5, userUnit: 2 };
+  const narrowViewport = {
+    width: 306,
+    height: 396,
+    scale: 0.5,
+    userUnit: 2,
+    convertToViewportPoint: (x: number, y: number): [number, number] => [x, y],
+  };
   pdf.getViewport.mockImplementation(({ scale }) => scale === 0.5 ? narrowViewport : pdf.viewport);
   vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(function clientWidth(this: HTMLElement) {
     if (this.classList.contains('pdf-reader__page-shell')) return 306;
@@ -137,7 +152,13 @@ it('recreates the shared viewport after its container narrows', async () => {
 });
 
 it('uses the page shell width instead of a self-sized surface for its viewport', async () => {
-  const narrowViewport = { width: 306, height: 396, scale: 0.5, userUnit: 2 };
+  const narrowViewport = {
+    width: 306,
+    height: 396,
+    scale: 0.5,
+    userUnit: 2,
+    convertToViewportPoint: (x: number, y: number): [number, number] => [x, y],
+  };
   pdf.getViewport.mockImplementation(({ scale }) => scale === 0.5 ? narrowViewport : pdf.viewport);
   vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(function clientWidth(this: HTMLElement) {
     if (this.classList.contains('pdf-reader__page-shell')) return 306;
@@ -157,7 +178,13 @@ it('uses the page shell width instead of a self-sized surface for its viewport',
 });
 
 it('applies the zoom factor on top of the fit width scale', async () => {
-  const zoomedViewport = { width: 1224, height: 1584, scale: 2, userUnit: 2 };
+  const zoomedViewport = {
+    width: 1224,
+    height: 1584,
+    scale: 2,
+    userUnit: 2,
+    convertToViewportPoint: (x: number, y: number): [number, number] => [x, y],
+  };
   pdf.getViewport.mockImplementation(({ scale }) => (scale === 2 ? zoomedViewport : pdf.viewport));
   vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(function clientWidth(this: HTMLElement) {
     if (this.classList.contains('pdf-reader__page-shell')) return 612;
@@ -181,6 +208,21 @@ it('keeps the canvas visible when the page has no selectable text', async () => 
 
   expect(await screen.findByText('该页无法选择文字')).toBeVisible();
   expect(screen.getByRole('img', { name: 'PDF 第 1 页' })).toBeVisible();
+});
+
+it('renders annotation link hitboxes over the rendered page', async () => {
+  pdf.getAnnotations.mockReturnValueOnce(Promise.resolve([
+    { subtype: 'Link', rect: [10, 20, 110, 40], url: 'https://example.com/citation' },
+  ]));
+
+  render(<PdfPageView document={document as never} page={page} active overlays={[]} />);
+
+  const link = await screen.findByTestId('pdf-link-external');
+  expect(link).toHaveAttribute('href', 'https://example.com/citation');
+  expect(link).toHaveAttribute('target', '_blank');
+  expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+  expect(link).toHaveStyle({ left: '10px', top: '20px', width: '100px', height: '20px' });
+  expect(screen.getByTestId('pdf-link-layer-1')).toBeInTheDocument();
 });
 
 it('shows a public-safe error when the canvas is unavailable', async () => {

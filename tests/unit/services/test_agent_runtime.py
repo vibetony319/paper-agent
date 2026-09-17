@@ -1412,7 +1412,15 @@ def test_stream_ask_yields_deltas_then_persists_exactly_one_answer(repository):
         question=AgentQuestion(content="Explain routing."),
     )
 
-    assert [event.event for event in events] == [
+    assert [event.step.kind for event in events if event.event == "step"] == [
+        "notes",
+        "round",
+        "tool_call",
+        "tool_result",
+        "round",
+        "final_answer",
+    ]
+    assert [event.event for event in events if event.event != "step"] == [
         "started",
         "delta",
         "delta",
@@ -1430,6 +1438,50 @@ def test_stream_ask_yields_deltas_then_persists_exactly_one_answer(repository):
     assert len(client.final_requests) == 1
 
 
+def test_stream_ask_surfaces_the_execution_path_with_reasoning(repository):
+    """Breaks if tool calls or per-round reasoning are dropped from the stream."""
+    paper = _paper_with_stage1_document(repository)
+    client = FakeAgentClient(
+        turns=(
+            VllmToolTurn(
+                content="planning narration",
+                reasoning_content="I should search the paper first.",
+                tool_calls=(
+                    _tool_call("search_paper", {"query": "router", "limit": 5}),
+                ),
+            ),
+            VllmToolTurn(content=None, tool_calls=()),
+        ),
+        stream_chunks=("answer",),
+    )
+
+    events = _runtime(repository, client).stream_ask(
+        paper_id=paper.id,
+        question=AgentQuestion(content="Explain routing."),
+    )
+
+    steps = [event.step for event in events if event.event == "step"]
+    assert [step.kind for step in steps] == [
+        "notes",
+        "round",
+        "reasoning",
+        "tool_call",
+        "tool_result",
+        "round",
+        "final_answer",
+    ]
+    assert steps[0].count == 0
+    assert steps[1].round == 1
+    assert steps[2].text == (
+        "I should search the paper first.\n\nplanning narration"
+    )
+    assert steps[3].tool_name == "search_paper"
+    assert steps[3].arguments == {"query": "router", "limit": 5}
+    assert steps[4].round == 1
+    assert steps[4].evidence_count is not None
+    assert steps[6].kind == "final_answer"
+
+
 def test_stream_ask_persists_nothing_when_the_stream_breaks_mid_answer(repository):
     """Breaks if an interrupted stream leaves a half-written assistant message."""
     paper = _paper_with_stage1_document(repository)
@@ -1445,7 +1497,11 @@ def test_stream_ask_persists_nothing_when_the_stream_breaks_mid_answer(repositor
         request_id=request_id,
     )
 
-    assert [event.event for event in events] == ["started", "delta", "error"]
+    assert [event.event for event in events if event.event != "step"] == [
+        "started",
+        "delta",
+        "error",
+    ]
     assert events[-1].code == "agent_failed"
     assert _all_durable_rows(repository) == [("user", "Explain routing.")]
 
@@ -1469,7 +1525,10 @@ def test_stream_ask_does_not_expose_raw_provider_text_on_failure(repository):
         question=AgentQuestion(content="Explain routing."),
     )
 
-    assert [event.event for event in events] == ["started", "error"]
+    assert [event.event for event in events if event.event != "step"] == [
+        "started",
+        "error",
+    ]
     assert events[-1].code == "agent_failed"
     assert "raw-provider-secret" not in repr(events)
     assert _all_durable_rows(repository) == [("user", "Explain routing.")]
@@ -1547,7 +1606,10 @@ def test_stream_ask_stops_an_over_long_answer_without_persisting_it(repository):
         question=AgentQuestion(content="Question"),
     )
 
-    assert [event.event for event in events] == ["started", "error"]
+    assert [event.event for event in events if event.event != "step"] == [
+        "started",
+        "error",
+    ]
     assert events[-1].code == "answer_too_long"
     assert _all_durable_rows(repository) == [("user", "Question")]
 

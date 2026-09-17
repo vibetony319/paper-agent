@@ -1,3 +1,4 @@
+from dataclasses import asdict
 import logging
 from uuid import UUID
 
@@ -25,6 +26,7 @@ from paper_agent.services.agent_runtime import (
     AgentRuntimePrerequisiteError,
     AgentRuntimeResponseError,
     AgentRuntimeUnavailableError,
+    AgentStep,
     AgentStreamEvent,
     AgentTurn,
     PaperAgentRuntime,
@@ -434,6 +436,15 @@ def _stream_error_payload(code: str | None) -> dict[str, object]:
     return {"code": resolved, "detail": _STREAM_ERROR_DETAILS[resolved]}
 
 
+def _step_payload(step: AgentStep) -> dict[str, object]:
+    payload = {
+        key: value
+        for key, value in asdict(step).items()
+        if value is not None
+    }
+    return payload
+
+
 @router.post("/papers/{paper_id}/agent/messages/stream")
 def stream_paper_agent(
     paper_id: UUID, payload: AgentMessageRequest, request: Request
@@ -543,6 +554,8 @@ def stream_paper_agent(
                         )
                     elif event.event == "delta":
                         yield sse_frame("delta", {"text": event.text})
+                    elif event.event == "step":
+                        yield sse_frame("step", _step_payload(event.step))
                     else:
                         yield sse_frame("started", {"request_id": request_id})
 

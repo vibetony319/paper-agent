@@ -1,5 +1,6 @@
 import type {
   AgentMessage,
+  AgentStreamStep,
   BoundingBox,
   ContextUsage,
   Highlight,
@@ -46,6 +47,8 @@ export type AgentExchange = {
 export type AgentStream = {
   question: string;
   text: string;
+  /** Execution path reported by the backend while the answer is generated. */
+  steps: AgentStreamStep[];
   /** True once the request failed, so the partial text is kept but not final. */
   interrupted: boolean;
 };

@@ -1,22 +1,44 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const pdf = vi.hoisted(() => {
-  const viewport = { width: 612, height: 792 };
+  const viewport = {
+    width: 612,
+    height: 792,
+    convertToViewportPoint: (x: number, y: number): [number, number] => [x, y],
+  };
   const render = vi.fn(() => ({ cancel: vi.fn(), promise: Promise.resolve() }));
   const getViewport = vi.fn(() => viewport);
+  const getAnnotations = vi.fn<() => Promise<unknown[]>>(() => Promise.resolve([]));
   const getPage = vi.fn(() => Promise.resolve({
     getViewport,
     render,
+    getAnnotations,
     streamTextContent: vi.fn(() => ({ getReader: vi.fn() })),
+    view: [0, 0, 612, 792],
   }));
+  const getDestination = vi.fn<() => Promise<unknown[]>>(() => Promise.resolve([]));
+  const getPageIndex = vi.fn(() => Promise.resolve(0));
   const destroy = vi.fn(() => Promise.resolve());
-  const getDocument = vi.fn(() => ({ destroy, promise: Promise.resolve({ getPage }) }));
+  const getDocument = vi.fn(() => ({
+    destroy,
+    promise: Promise.resolve({ getPage, getDestination, getPageIndex }),
+  }));
   const TextLayer = vi.fn(function TextLayer() {
     return { render: vi.fn(() => Promise.resolve()), cancel: vi.fn() };
   });
 
-  return { TextLayer, destroy, getDocument, getPage, getViewport, render };
+  return {
+    TextLayer,
+    destroy,
+    getAnnotations,
+    getDestination,
+    getDocument,
+    getPage,
+    getPageIndex,
+    getViewport,
+    render,
+  };
 });
 
 vi.mock('pdfjs-dist', () => ({
@@ -62,6 +84,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -167,7 +190,11 @@ it('activates and scrolls an evidence target while retaining its overlay', async
 
 it('destroys a loading task when the selected paper changes', async () => {
   const staleDestroy = vi.fn(() => Promise.resolve());
-  let resolveStaleDocument: ((document: { getPage: typeof pdf.getPage }) => void) | undefined;
+  let resolveStaleDocument: ((document: {
+    getPage: typeof pdf.getPage;
+    getDestination: typeof pdf.getDestination;
+    getPageIndex: typeof pdf.getPageIndex;
+  }) => void) | undefined;
   pdf.getDocument.mockReturnValueOnce({
     destroy: staleDestroy,
     promise: new Promise((resolve) => { resolveStaleDocument = resolve; }),
@@ -183,7 +210,11 @@ it('destroys a loading task when the selected paper changes', async () => {
   );
 
   expect(staleDestroy).toHaveBeenCalledOnce();
-  resolveStaleDocument?.({ getPage: pdf.getPage });
+  resolveStaleDocument?.({
+    getPage: pdf.getPage,
+    getDestination: pdf.getDestination,
+    getPageIndex: pdf.getPageIndex,
+  });
   await waitFor(() => expect(pdf.getDocument).toHaveBeenCalledTimes(2));
 });
 
@@ -394,4 +425,85 @@ it('returns focus to the selected PDF page when Escape clears a temporary select
   expect(removeAllRanges).toHaveBeenCalledOnce();
   expect(clearSelection).toHaveBeenCalledOnce();
   expect(document.activeElement).toBe(page);
+});
+
+function stubCitationLinkToPageFour() {
+  pdf.getAnnotations.mockReturnValueOnce(Promise.resolve([
+    { subtype: 'Link', rect: [10, 700, 200, 720], dest: 'cite-4' },
+  ]));
+  pdf.getDestination.mockReturnValueOnce(Promise.resolve([
+    { num: 4 }, { type: 'XYZ' }, 72, 792, 0,
+  ]));
+  pdf.getPageIndex.mockReturnValueOnce(Promise.resolve(3));
+}
+
+it('navigates an internal link to its destination band and keeps a return shortcut', async () => {
+  stubCitationLinkToPageFour();
+  render(<PdfReader paperId="paper-a" pages={manyPages} activeSource={null} onSourceCleared={vi.fn()} />);
+
+  const link = await screen.findByTestId('pdf-link-internal');
+  expect(link).toHaveAccessibleName('跳转到第 4 页');
+
+  const scrollArea = document.querySelector('.pdf-reader__scroll-area') as HTMLElement;
+  const scrollTo = vi.fn();
+  Object.defineProperty(scrollArea, 'scrollTo', { value: scrollTo });
+  scrollArea.scrollTop = 250;
+  const shell = screen.getByTestId('pdf-page-shell-4');
+  Object.defineProperty(shell, 'getBoundingClientRect', {
+    configurable: true,
+    value: () => ({ top: 4000, bottom: 4800, left: 0, right: 600, width: 600, height: 800 }),
+  });
+
+  fireEvent.click(link);
+
+  // Lands near the destination band: shell top 4000, band offset 0, minus the
+  // 80px reading gutter, starting from scrollTop 250.
+  expect(scrollTo).toHaveBeenCalledWith({ top: 4170, behavior: 'smooth' });
+  expect(screen.getByRole('status'))
+    .toHaveTextContent('已跳转到第 4 页链接位置，按 Alt+← 返回原位');
+  expect(screen.getByRole('button', { name: '返回原位（Alt+←）' })).toBeVisible();
+  await waitFor(() => expect(screen.getByTestId('source-overlay-4'))
+    .toHaveStyle({ top: '0%', height: '2%' }));
+});
+
+it('returns to the previous scroll position with Alt + ArrowLeft after a link jump', async () => {
+  stubCitationLinkToPageFour();
+  render(<PdfReader paperId="paper-a" pages={manyPages} activeSource={null} onSourceCleared={vi.fn()} />);
+
+  const link = await screen.findByTestId('pdf-link-internal');
+  const scrollArea = document.querySelector('.pdf-reader__scroll-area') as HTMLElement;
+  const scrollTo = vi.fn();
+  Object.defineProperty(scrollArea, 'scrollTo', { value: scrollTo });
+  scrollArea.scrollTop = 250;
+  fireEvent.click(link);
+  expect(scrollTo).toHaveBeenCalledTimes(1);
+
+  fireEvent.keyDown(document, { key: 'ArrowLeft', altKey: true });
+
+  expect(scrollTo).toHaveBeenLastCalledWith({ top: 250, left: 0, behavior: 'smooth' });
+  expect(screen.queryByRole('button', { name: '清除链接定位' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('status')).not.toBeInTheDocument();
+});
+
+it('dismisses the link toast after three seconds but keeps the link marker', async () => {
+  vi.useFakeTimers();
+  stubCitationLinkToPageFour();
+  render(<PdfReader paperId="paper-a" pages={manyPages} activeSource={null} onSourceCleared={vi.fn()} />);
+
+  let link: HTMLElement | null = null;
+  for (let tick = 0; tick < 12 && link === null; tick += 1) {
+    await act(async () => { await vi.advanceTimersByTimeAsync(50); });
+    link = screen.queryByTestId('pdf-link-internal');
+  }
+  expect(link).not.toBeNull();
+  const scrollArea = document.querySelector('.pdf-reader__scroll-area') as HTMLElement;
+  Object.defineProperty(scrollArea, 'scrollTo', { value: vi.fn() });
+  fireEvent.click(link!);
+
+  expect(screen.getByRole('status')).toHaveTextContent('已跳转到第 4 页链接位置');
+
+  act(() => { vi.advanceTimersByTime(3_000); });
+
+  expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '清除链接定位' })).toBeVisible();
 });

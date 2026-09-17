@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import type { PDFDocumentProxy, PDFPageProxy, RenderTask } from 'pdfjs-dist';
+import type { PDFDocumentProxy, PDFPageProxy, PageViewport, RenderTask } from 'pdfjs-dist';
 
 import type { Highlight, HighlightColor, Page } from '../api/types';
 import { TextLayer } from '../pdfjs';
 import type { SourceTarget } from '../workspace/types';
+import { PdfLinkLayer, type PdfLinkTarget } from './PdfLinkLayer';
 import { sourceOverlayStyle } from './pdfGeometry';
 import { AnnotationOverlay } from './AnnotationOverlay';
 
@@ -14,6 +15,7 @@ type PdfPageViewProps = {
   overlays: SourceTarget[];
   highlights?: Highlight[];
   zoom?: number;
+  onLinkNavigate?: (target: PdfLinkTarget) => void;
   onHighlightNote?: (highlight: Highlight, rect: DOMRect) => void;
   onHighlightDeleted?: (highlightId: string) => void;
   onHighlightColorChange?: (highlightId: string, color: HighlightColor) => void;
@@ -46,7 +48,7 @@ function contentWidthOf(element: HTMLElement): number {
 }
 
 export function PdfPageView({
-  document, page, active, overlays, highlights = [], zoom = 1, onHighlightNote = () => undefined, onHighlightDeleted = () => undefined, onHighlightColorChange,
+  document, page, active, overlays, highlights = [], zoom = 1, onLinkNavigate = () => undefined, onHighlightNote = () => undefined, onHighlightDeleted = () => undefined, onHighlightColorChange,
 }: PdfPageViewProps) {
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -54,6 +56,7 @@ export function PdfPageView({
   const [containerWidth, setContainerWidth] = useState<number | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [hasSelectableText, setHasSelectableText] = useState(true);
+  const [linkLayer, setLinkLayer] = useState<{ pdfPage: PDFPageProxy; viewport: PageViewport } | null>(null);
 
   useEffect(() => {
     if (!active || typeof ResizeObserver === 'undefined') return undefined;
@@ -142,6 +145,7 @@ export function PdfPageView({
         setHasSelectableText(
           (textLayer.textContentItemsStr?.length ?? textContainer.childElementCount) > 0,
         );
+        setLinkLayer({ pdfPage, viewport });
 
       } catch (error) {
         if (mounted && !isRenderCancellation(error)) {
@@ -152,6 +156,7 @@ export function PdfPageView({
 
     setErrorMessage(null);
     setHasSelectableText(true);
+    setLinkLayer(null);
     void renderPage();
 
     return () => {
@@ -166,6 +171,15 @@ export function PdfPageView({
       <div ref={surfaceRef} className="pdf-page-view__surface">
         <canvas ref={canvasRef} role="img" aria-label={`PDF 第 ${page.number} 页`} />
         <div ref={textLayerRef} className="pdf-page-view__text-layer" data-testid={`pdf-text-layer-${page.number}`} />
+        {linkLayer !== null ? (
+          <PdfLinkLayer
+            document={document}
+            pdfPage={linkLayer.pdfPage}
+            viewport={linkLayer.viewport}
+            pageNumber={page.number}
+            onNavigate={onLinkNavigate}
+          />
+        ) : null}
         <AnnotationOverlay
           highlights={highlights}
           onAddNote={onHighlightNote}

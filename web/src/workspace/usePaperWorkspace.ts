@@ -210,6 +210,13 @@ export function usePaperWorkspace(
             loadRevision: requestLoadRevision,
             text: event.data.text,
           });
+        } else if (event.event === 'step') {
+          dispatch({
+            type: 'conversation/stream-step',
+            paperId,
+            loadRevision: requestLoadRevision,
+            step: event.data,
+          });
         } else if (event.event === 'completed') {
           message = event.data.message;
           contextUsage = event.data.context_usage ?? null;

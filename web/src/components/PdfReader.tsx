@@ -7,6 +7,7 @@ import type { Highlight, HighlightColor, Page, TextAnchorDraft } from '../api/ty
 import { getDocument } from '../pdfjs';
 import type { SourceTarget, WorkspaceState } from '../workspace/types';
 import { PdfPageView } from './PdfPageView';
+import type { PdfLinkTarget } from './PdfLinkLayer';
 import { selectionToAnchorDraft } from './pdfSelection';
 import { SelectionToolbar, type SelectionToolbarAction } from './SelectionToolbar';
 import { InlineAssistantPopover } from './InlineAssistantPopover';
@@ -41,6 +42,12 @@ type PdfReaderProps = {
 };
 
 type ReaderStatus = 'loading' | 'ready' | 'error';
+
+type LinkJump = PdfLinkTarget & { id: string };
+type ScrollPosition = { top: number; left: number };
+
+const MAX_RETURN_POSITIONS = 16;
+const LINK_TOAST_MS = 3_000;
 
 const ZOOM_STEPS = [0.5, 0.75, 1, 1.25, 1.5, 2, 2.5, 3] as const;
 const ZOOM_EPSILON = 1e-9;
@@ -104,11 +111,16 @@ export function PdfReader({
   const [zoom, setZoom] = useState(1);
   const [assistTarget, setAssistTarget] = useState<{ action: SelectionAssistAction; draft: TextAnchorDraft; rect: DOMRect; model: string | null; id: string } | null>(null);
   const [manualNoteTarget, setManualNoteTarget] = useState<{ draft: TextAnchorDraft; rect: DOMRect } | null>(null);
+  const [linkTarget, setLinkTarget] = useState<LinkJump | null>(null);
+  const [returnStack, setReturnStack] = useState<ScrollPosition[]>([]);
+  const [linkToast, setLinkToast] = useState<LinkJump | null>(null);
+  const toastTimer = useRef<number | null>(null);
   const [sectionsOpen, setSectionsOpen] = useState(false);
   const sectionsToggleRef = useRef<HTMLButtonElement | null>(null);
   const wasSectionsOpen = useRef(false);
   const pageShells = useRef(new Map<number, HTMLDivElement>());
   const readerRef = useRef<HTMLElement>(null);
+  const scrollAreaRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     // The handle remounts only after the collapse renders, so restore focus then.
@@ -124,6 +136,76 @@ export function PdfReader({
     const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     target.scrollIntoView({ block: 'start', behavior: reducedMotion ? 'auto' : 'smooth' });
   }, []);
+
+  const showLinkToast = useCallback((jump: LinkJump) => {
+    setLinkToast(jump);
+    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
+    toastTimer.current = window.setTimeout(() => setLinkToast(null), LINK_TOAST_MS);
+  }, []);
+
+  const handleLinkNavigate = useCallback((target: PdfLinkTarget) => {
+    const scrollArea = scrollAreaRef.current;
+    if (scrollArea !== null) {
+      // Remember where the reader stood before following the link.
+      setReturnStack((stack) => [
+        ...stack.slice(-(MAX_RETURN_POSITIONS - 1)),
+        { top: scrollArea.scrollTop, left: scrollArea.scrollLeft },
+      ]);
+    }
+    const jump: LinkJump = { ...target, id: `link-${target.pageNumber}-${Date.now().toString(36)}` };
+    setLinkTarget(jump);
+    showLinkToast(jump);
+    const shell = pageShells.current.get(target.pageNumber);
+    if (shell === undefined || scrollArea === null) return;
+    const shellRect = shell.getBoundingClientRect();
+    const areaRect = scrollArea.getBoundingClientRect();
+    // Land the destination band near the top of the viewport instead of
+    // snapping the whole page; shells keep their aspect-ratio height even
+    // before the virtualized page content renders.
+    const offsetY = target.bbox !== null ? target.bbox.y0 * shellRect.height : 0;
+    const top = Math.max(0, shellRect.top - areaRect.top + scrollArea.scrollTop + offsetY - 80);
+    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    scrollArea.scrollTo({ top, behavior: reducedMotion ? 'auto' : 'smooth' });
+  }, [showLinkToast]);
+
+  const popReturnPosition = useCallback(() => {
+    const position = returnStack[returnStack.length - 1];
+    if (position === undefined) return;
+    setReturnStack((stack) => stack.slice(0, -1));
+    setLinkTarget(null);
+    setLinkToast(null);
+    const scrollArea = scrollAreaRef.current;
+    if (scrollArea === null) return;
+    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    scrollArea.scrollTo({
+      top: position.top,
+      left: position.left,
+      behavior: reducedMotion ? 'auto' : 'smooth',
+    });
+  }, [returnStack]);
+
+  useEffect(() => () => {
+    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!event.altKey || event.key !== 'ArrowLeft' || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      if (event.isComposing) return;
+      const target = event.target;
+      if (
+        target instanceof HTMLElement
+        && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+      ) {
+        return;
+      }
+      if (returnStack.length === 0) return;
+      event.preventDefault();
+      popReturnPosition();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [popReturnPosition, returnStack.length]);
 
   const closeSections = useCallback(() => {
     setSectionsOpen(false);
@@ -242,7 +324,10 @@ export function PdfReader({
     target.scrollIntoView({ block: 'center', behavior: reducedMotion ? 'auto' : 'smooth' });
   }, [activeSource, pageNumbers]);
 
-  const forcedPages = activeSource === null ? new Set<number>() : new Set([activeSource.pageNumber]);
+  const forcedPages = new Set<number>([
+    ...(activeSource !== null ? [activeSource.pageNumber] : []),
+    ...(linkTarget !== null ? [linkTarget.pageNumber] : []),
+  ]);
   const activePages = addOverscan(pageNumbers, new Set([...visiblePages, ...forcedPages]));
 
   return (
@@ -256,6 +341,11 @@ export function PdfReader({
         if (event.key === 'Escape' && selection !== null) {
           event.preventDefault();
           clearTemporarySelection();
+          return;
+        }
+        if (event.key === 'Escape' && linkTarget !== null) {
+          event.preventDefault();
+          setLinkTarget(null);
           return;
         }
         if (event.ctrlKey || event.metaKey) {
@@ -325,10 +415,22 @@ export function PdfReader({
         </div>
       ) : null}
 
+      {linkTarget !== null ? (
+        <div className="pdf-reader__controls">
+          <span>已跳转到第 {linkTarget.pageNumber} 页链接位置</span>
+          <span className="pdf-reader__link-actions">
+            {returnStack.length > 0 ? (
+              <button type="button" onClick={popReturnPosition}>返回原位（Alt+←）</button>
+            ) : null}
+            <button type="button" onClick={() => setLinkTarget(null)}>清除链接定位</button>
+          </span>
+        </div>
+      ) : null}
+
       {orderedPages.length === 0 ? (
         <p className="pdf-reader__empty">这篇论文没有可用的页面。</p>
       ) : (
-        <div className="pdf-reader__scroll-area">
+        <div className="pdf-reader__scroll-area" ref={scrollAreaRef}>
           {sections.length > 0 ? (
             <div className="pdf-reader__section-rail">
               {sectionsOpen ? (
@@ -379,7 +481,11 @@ export function PdfReader({
           {status === 'error' ? <p className="pdf-reader__error" role="alert">{errorMessage}</p> : null}
           {orderedPages.map((page) => {
             const isActive = activePages.has(page.number);
-            const overlays = activeSource?.pageNumber === page.number ? [activeSource] : [];
+            const overlays: SourceTarget[] = [];
+            if (activeSource?.pageNumber === page.number) overlays.push(activeSource);
+            if (linkTarget?.pageNumber === page.number && linkTarget.bbox !== null) {
+              overlays.push({ id: linkTarget.id, kind: 'link', pageNumber: linkTarget.pageNumber, bbox: linkTarget.bbox });
+            }
             const pageHighlights = highlights.filter(({ anchor }) => anchor.page_number === page.number);
             return (
               <div
@@ -406,6 +512,7 @@ export function PdfReader({
                     overlays={overlays}
                     highlights={pageHighlights}
                     zoom={zoom}
+                    onLinkNavigate={handleLinkNavigate}
                     onHighlightNote={onCreateSelectionNote === undefined ? undefined : (highlight, rect) => {
                       setManualNoteTarget({ rect, draft: {
                         quote: highlight.anchor.quote,
@@ -424,6 +531,12 @@ export function PdfReader({
           </div>
         </div>
       )}
+      {linkToast !== null ? (
+        <div className="pdf-reader__link-toast" role="status">
+          <span>已跳转到第 {linkToast.pageNumber} 页链接位置，按 <kbd>Alt</kbd>+<kbd>←</kbd> 返回原位</span>
+          <button type="button" onClick={popReturnPosition}>返回原位</button>
+        </div>
+      ) : null}
       {selection !== null ? (
         <SelectionToolbar
           draft={selection.draft}

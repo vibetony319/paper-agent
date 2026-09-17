@@ -229,8 +229,25 @@ export interface ContextUsage {
   percent: number | null;
 }
 
+/** One execution step of a streamed agent answer. */
+export type AgentStreamStep =
+  | { kind: 'notes'; count: number }
+  | { kind: 'round'; round: number }
+  | { kind: 'reasoning'; round: number; text: string }
+  | { kind: 'tool_call'; round: number; tool_name: string; arguments?: Record<string, unknown> }
+  | {
+    kind: 'tool_result';
+    round: number;
+    tool_name: string;
+    evidence_count?: number;
+    error?: string;
+  }
+  | { kind: 'compaction' }
+  | { kind: 'final_answer' };
+
 export type AgentStreamEvent =
   | { event: 'started'; data: { request_id: string } }
+  | { event: 'step'; data: AgentStreamStep }
   | { event: 'delta'; data: { text: string } }
   | { event: 'completed'; data: { message: AgentMessage; context_usage?: ContextUsage | null } }
   | { event: 'error'; data: { code: string; detail: string } };
