@@ -119,6 +119,14 @@ class PaperIngestionService:
                 bbox=visual.bbox,
             )
             for visual in stage0.visual_elements
+        ) + tuple(
+            DocumentElement(
+                kind="table",
+                text=table.text,
+                page_number=table.page_number,
+                bbox=table.bbox,
+            )
+            for table in stage0.tables
         )
         try:
             self.repository.save_stage0_document(

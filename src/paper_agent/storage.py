@@ -802,6 +802,7 @@ class PaperRepository:
                     title=section.title,
                     page_number=section.page_number,
                     order_index=section.order,
+                    level=section.level,
                 )
             )
         return section

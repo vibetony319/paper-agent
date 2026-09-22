@@ -399,6 +399,55 @@ def test_ingestion_persists_sections_with_page_numbers_and_linked_paragraphs(
     assert [paragraph.page_number for paragraph in paragraphs] == [1, 2]
 
 
+def test_ingestion_persists_detected_tables_as_located_elements(
+    service: PaperIngestionService, table_pdf: Path
+) -> None:
+    """Breaks if detected tables never reach the document as table elements."""
+    paper = service.ingest(
+        UploadPayload(
+            filename="table.pdf",
+            content=table_pdf.read_bytes(),
+            media_type="application/pdf",
+        )
+    )
+
+    assert paper.status == ProcessingStatus.completed
+    document = service.get_document(paper.id)
+    tables = [element for element in document.elements if element.kind == "table"]
+    assert len(tables) == 1
+    table = tables[0]
+    assert table.location_status == "located"
+    assert table.page_number == 1
+    assert table.bbox is not None
+    assert table.text.startswith("Table 1: Expert utilization")
+    assert "| FFN-A | 12.4 |" in table.text
+
+
+def test_ingestion_locates_hyphen_broken_paragraphs(
+    service: PaperIngestionService, hyphenated_pdf: Path
+) -> None:
+    """Breaks if the two stages dehyphenate differently and lose citations."""
+    paper = service.ingest(
+        UploadPayload(
+            filename="hyphenated.pdf",
+            content=hyphenated_pdf.read_bytes(),
+            media_type="application/pdf",
+        )
+    )
+
+    assert paper.status == ProcessingStatus.completed
+    document = service.get_document(paper.id)
+    paragraph = next(
+        element
+        for element in document.elements
+        if element.kind == "paragraph" and "capabilities" in element.text
+    )
+    assert paragraph.text == "The model scales its capabilities across routed experts."
+    assert paragraph.location_status == "located"
+    assert paragraph.page_number == 1
+    assert paragraph.bbox is not None
+
+
 def test_stage1_failure_keeps_stage0_and_marks_paper_partial(
     service: PaperIngestionService,
     sample_pdf_bytes: bytes,

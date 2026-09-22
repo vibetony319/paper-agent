@@ -743,7 +743,7 @@ def test_runtime_sends_openai_tool_result_messages_with_returned_evidence_ids(re
     assert tool_result["tool_call_id"] == "call-1"
     result_payload = json.loads(tool_result["content"])
     assert result_payload["evidence_element_ids"] == [paper.element_id]
-    assert result_payload["content"]["elements"][0]["id"] == paper.element_id
+    assert result_payload["content"]["results"][0]["element_ids"] == [paper.element_id]
 
 
 def test_final_answer_request_is_closed_with_a_wrap_up_instruction_after_tools(

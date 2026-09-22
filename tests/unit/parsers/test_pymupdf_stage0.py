@@ -83,3 +83,29 @@ def test_stage0_rejects_authentication_required_pdf(encrypted_pdf):
     """Breaks if encrypted sources leak PyMuPDF authentication errors."""
     with pytest.raises(PdfParseError, match="requires authentication"):
         PyMuPdfStage0Parser().parse(encrypted_pdf)
+
+
+def test_stage0_extracts_ruled_tables_as_markdown_blocks(table_pdf):
+    """Breaks if detected tables lose their cells, caption, or geometry."""
+    result = PyMuPdfStage0Parser().parse(table_pdf)
+
+    assert len(result.tables) == 1
+    table = result.tables[0]
+    assert table.page_number == 1
+    # The nearby "Table 1" caption is joined onto the Markdown table.
+    assert table.text.startswith("Table 1: Expert utilization")
+    assert "| Expert | Tokens |" in table.text
+    assert "| --- | --- |" in table.text
+    assert "| FFN-A | 12.4 |" in table.text
+    assert "| FFN-B | 9.8 |" in table.text
+    assert table.bbox.x0 == pytest.approx(40 / 300)
+    assert table.bbox.y0 == pytest.approx(100 / 300)
+    assert table.bbox.x1 == pytest.approx(160 / 300)
+    assert table.bbox.y1 == pytest.approx(160 / 300)
+
+
+def test_stage0_reports_no_tables_for_unruled_text(sample_pdf):
+    """Breaks if plain prose hallucinates table extractions."""
+    result = PyMuPdfStage0Parser().parse(sample_pdf)
+
+    assert result.tables == ()

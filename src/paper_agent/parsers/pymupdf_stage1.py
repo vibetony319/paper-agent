@@ -18,6 +18,8 @@ from pathlib import Path
 import pymupdf
 
 from paper_agent.domain import Section
+from paper_agent.parsers.base import detect_tables
+from paper_agent.parsers.text_utils import dehyphenate
 
 
 class Stage1ParseError(Exception):
@@ -29,6 +31,7 @@ class Stage1Paragraph:
     text: str
     section_id: str | None = None
     order: int | None = None
+    kind: str = "paragraph"
 
 
 @dataclass(frozen=True)
@@ -104,6 +107,17 @@ _WRAPPED_WORD = re.compile(r"[A-Za-z]-$")
 _LEADIN_COLON = re.compile(r"[:：]\s*\S")
 _BULLET_PREFIX = re.compile(r"^[•·‣▪◦\-*]\s+")
 _NUMBERED_HEADING = re.compile(r"^(\d{1,2}(?:\.\d{1,2})*[.)]?)[ \t]+\S")
+# A real heading almost never ends on a stopword or a bare affiliation
+# superscript ("Yufei Ma1", "Zihan Wang1,*"), while author banners and
+# bold mid-sentence fragments do.
+_TRAILING_STOPWORD = re.compile(
+    r"\b(?:the|a|an|and|or|of|to|in|for|with|by|from|on|at|is|are|"
+    r"into|onto|over|under|where|when)\s*$",
+    re.IGNORECASE,
+)
+_AFFILIATION_SUFFIX = re.compile(r"[A-Za-z]\d[\d\s,;*]*$")
+_BOLD_HEADING_WORDS = 8
+_BOLD_HEADING_CHARS = 60
 _CJK_NUMBERED_HEADING = re.compile(
     r"^(?:第[一二三四五六七八九十\d]+[章节部分]"
     r"|[一二三四五六七八九十]+[、.．]"
@@ -159,9 +173,18 @@ def _page_gutter(page_width: float, line_extents: list[tuple[float, float]]) -> 
     return None if best is None else best[1]
 
 
+def _page_table_regions(page) -> list[tuple[float, float, float, float]]:
+    """Return table bounding boxes for the page, best effort."""
+    try:
+        return [tuple(table.bbox) for table in detect_tables(page)]
+    except Exception:
+        return []
+
+
 def _page_blocks(page, page_number: int) -> list[_Block]:
     raw_blocks: list[tuple[tuple[float, float, float, float], list[_Line]]] = []
     line_extents: list[tuple[float, float]] = []
+    table_regions = _page_table_regions(page)
     for block in page.get_text("dict", sort=True)["blocks"]:
         if block.get("type") != 0:
             continue
@@ -177,12 +200,22 @@ def _page_blocks(page, page_number: int) -> list[_Block]:
             )
             if not text:
                 continue
+            x0, y0, x1, _y1 = line["bbox"]
+            center_x = (x0 + x1) / 2
+            center_y = (y0 + _y1) / 2
+            if any(
+                region[0] <= center_x <= region[2]
+                and region[1] <= center_y <= region[3]
+                for region in table_regions
+            ):
+                # Table interiors are extracted as dedicated table elements
+                # by stage 0; their scrambled cell lines are not paragraphs.
+                continue
             visible = [span for span in spans if span["text"].strip()]
             visible_chars = sum(len(span["text"].strip()) for span in visible)
             bold_chars = sum(
                 len(span["text"].strip()) for span in visible if _is_bold(span)
             )
-            x0, y0, x1, _y1 = line["bbox"]
             lines.append(
                 _Line(
                     text=text,
@@ -254,9 +287,23 @@ def _is_heading_line(line: _Line, body_size: float) -> bool:
         return False
     if _BULLET_PREFIX.match(line.text):
         return False
+    if "@" in line.text:
+        # Email addresses and author contact lines are never headings.
+        return False
+    if _TRAILING_STOPWORD.search(line.text) or _AFFILIATION_SUFFIX.search(line.text):
+        # Mid-sentence bold fragments ("...To mitigate the") and author
+        # banners ("Yufei Ma1", "Zihan Wang1,*") end where headings do not.
+        return False
     if line.size >= body_size + _heading_size_margin(body_size):
         return True
-    if line.bold and _LEADIN_COLON.search(line.text) is None:
+    if _EXACT_HEADING_LABEL.fullmatch(line.text):
+        return True
+    if (
+        line.bold
+        and _LEADIN_COLON.search(line.text) is None
+        and len(line.text) <= _BOLD_HEADING_CHARS
+        and len(line.text.split()) <= _BOLD_HEADING_WORDS
+    ):
         return True
     if _cjk_chars(line.text) == 0:
         letters = [
@@ -317,6 +364,13 @@ def _is_explicit_heading_label(text: str) -> bool:
         _EXACT_HEADING_LABEL.fullmatch(text) is not None
         or _NUMBERED_HEADING.match(text) is not None
         or _CJK_NUMBERED_HEADING.match(text) is not None
+    )
+
+
+def _block_text(block: _Block) -> str:
+    """Join a block's lines with dehyphenation, matching stage 0's cleanup."""
+    return _collapse_spaces(
+        dehyphenate("\n".join(line.text for line in block.lines))
     )
 
 
@@ -407,6 +461,7 @@ class PyMuPdfStage1Parser:
             )
             for index, entry in enumerate(outline)
         )
+        section_by_id = {section.id: section for section in sections}
         gutters = {
             block.page_number: block.gutter
             for block in blocks
@@ -440,14 +495,31 @@ class PyMuPdfStage1Parser:
                 and starts[start_index][0] <= position
             ):
                 active_section_id = starts[start_index][1]
+                paragraphs.append(
+                    Stage1Paragraph(
+                        text=section_by_id[active_section_id].title,
+                        section_id=active_section_id,
+                        order=len(paragraphs),
+                        kind="heading",
+                    )
+                )
                 start_index += 1
             paragraphs.append(
                 Stage1Paragraph(
-                    text=_collapse_spaces(
-                        " ".join(line.text for line in block.lines)
-                    ),
+                    text=_block_text(block),
                     section_id=active_section_id,
                     order=len(paragraphs),
+                )
+            )
+        for _position, section_id in starts[start_index:]:
+            # Heading-only sections at the end of the document still deserve
+            # a retrievable heading element.
+            paragraphs.append(
+                Stage1Paragraph(
+                    text=section_by_id[section_id].title,
+                    section_id=section_id,
+                    order=len(paragraphs),
+                    kind="heading",
                 )
             )
         return Stage1Document(sections=sections, paragraphs=tuple(paragraphs))
@@ -462,7 +534,11 @@ class PyMuPdfStage1Parser:
 
         def flush() -> None:
             nonlocal buffer
-            text = " ".join(buffer).strip()
+            if not buffer:
+                return
+            text = _collapse_spaces(
+                dehyphenate("\n".join(buffer))
+            )
             buffer = []
             if text:
                 paragraphs.append(
@@ -496,6 +572,17 @@ class PyMuPdfStage1Parser:
                     )
                     sections.append(section)
                     current_section_id = section.id
+                    # The heading itself becomes a retrievable, citable
+                    # element of its own section instead of vanishing into
+                    # a section record no search can reach.
+                    paragraphs.append(
+                        Stage1Paragraph(
+                            text=title,
+                            section_id=section.id,
+                            order=len(paragraphs),
+                            kind="heading",
+                        )
+                    )
                 else:
                     buffer.extend(line.text for line in lines)
             flush()
