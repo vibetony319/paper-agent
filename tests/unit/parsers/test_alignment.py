@@ -79,6 +79,45 @@ def test_aligner_leaves_repeated_text_unlocated():
     assert element.bbox is None
 
 
+def test_aligner_requires_dehyphenation_on_both_sides():
+    """Breaks if one stage dehyphenates a word the other stage leaves split.
+
+    Alignment matches exact text; a hyphen-broken word that survives on
+    either side strands the paragraph without page or bounding box.
+    """
+    blocks = [
+        TextBlock(
+            text="The model scales its capa-\nbilities across routed experts.",
+            page_number=2,
+            bbox=BOX,
+            order=0,
+        )
+    ]
+    paragraphs = [
+        Stage1Paragraph(text="The model scales its capabilities across routed experts.")
+    ]
+
+    element = TextAligner().align(paragraphs, blocks)[0]
+
+    assert element.location_status == "unlocated"
+
+    # With both sides dehyphenated (as both parsers now do) the paragraph
+    # aligns and keeps its citation geometry.
+    aligned_blocks = [
+        TextBlock(
+            text="The model scales its capabilities across routed experts.",
+            page_number=2,
+            bbox=BOX,
+            order=0,
+        )
+    ]
+    element = TextAligner().align(paragraphs, aligned_blocks)[0]
+
+    assert element.location_status == "located"
+    assert element.page_number == 2
+    assert element.bbox == BOX
+
+
 def test_aligner_uses_a_unique_long_containment_match():
     """Breaks if a long semantic paragraph cannot align within one source block."""
     paragraph_text = (

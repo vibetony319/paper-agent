@@ -9,6 +9,9 @@ BACKGROUND_SEPARATOR = "---"
 
 ANSWER_FORMAT_INSTRUCTIONS = (
     "Answer in Markdown (headings, lists, bold text and inline code are fine). "
+    "Present tabular data as GitHub-flavored Markdown pipe tables. "
+    "Write math and formulas in LaTeX: $...$ for inline math and $$...$$ for "
+    "display math; keep LaTeX faithful to the paper's notation. "
     "Cite paper locations inline as [[element_id]], using only element IDs that "
     "appeared in the tool results. "
     "If you want to add helpful context that does not come from the paper, put "

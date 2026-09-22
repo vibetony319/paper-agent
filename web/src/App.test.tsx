@@ -373,7 +373,7 @@ it('routes Agent citations and note sources through one workspace selection', as
 
   await user.type(screen.getByLabelText('向论文助手提问'), 'How does routing work?');
   await user.click(screen.getByRole('button', { name: '发送' }));
-  await user.click(await screen.findByRole('button', { name: '论文：第 2 页 paragraph' }));
+  await user.click(await screen.findByRole('button', { name: '论文：第 2 页 段落' }));
   expect(screen.getByText('Reader page 2')).toBeVisible();
   expect(screen.getByTestId('source-overlay')).toBeVisible();
 

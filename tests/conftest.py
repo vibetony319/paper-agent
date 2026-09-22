@@ -84,3 +84,43 @@ def rotated_cropped_pdf(tmp_path: Path) -> Path:
     document.save(path)
     document.close()
     return path
+
+
+@pytest.fixture
+def table_pdf(tmp_path: Path) -> Path:
+    """A ruled 2x3 grid with a "Table 1" caption above it."""
+    path = tmp_path / "table.pdf"
+    document = pymupdf.open()
+    page = document.new_page(width=300, height=300)
+    page.insert_text((40, 84), "Table 1: Expert utilization", fontsize=10)
+    cells = [
+        ["Expert", "Tokens"],
+        ["FFN-A", "12.4"],
+        ["FFN-B", "9.8"],
+    ]
+    for row in range(3):
+        for column in range(2):
+            rect = pymupdf.Rect(
+                40 + column * 60,
+                100 + row * 20,
+                40 + (column + 1) * 60,
+                100 + (row + 1) * 20,
+            )
+            page.draw_rect(rect, color=(0, 0, 0), width=0.5)
+            page.insert_text((rect.x0 + 6, rect.y0 + 14), cells[row][column], fontsize=10)
+    document.save(path)
+    document.close()
+    return path
+
+
+@pytest.fixture
+def hyphenated_pdf(tmp_path: Path) -> Path:
+    """Body text with one word hyphen-broken across two rendered lines."""
+    path = tmp_path / "hyphenated.pdf"
+    document = pymupdf.open()
+    page = document.new_page(width=300, height=300)
+    page.insert_text((40, 100), "The model scales its capa-", fontsize=10)
+    page.insert_text((40, 115), "bilities across routed experts.", fontsize=10)
+    document.save(path)
+    document.close()
+    return path

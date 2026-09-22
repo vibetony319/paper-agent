@@ -179,10 +179,34 @@ PAPER_AGENT_REASONING_API_KEY=EMPTY
 
 ### 本地语义检索
 
-默认嵌入模型为 `st-paraphrase-multilingual-MiniLM-L12-v2`，支持中文问题检索英文等多语言论文内容。可在后端启动前通过 `PAPER_AGENT_EMBEDDING_MODEL` 改为兼容的嵌入模型标识；它独立于聊天框中的推理模型。
+语义检索的嵌入模型独立于聊天框中的推理模型，走 paperqa2（安装包 `paper-qa[local]`）的嵌入栈，对论文内容做余弦相似度检索。默认嵌入模型为 `st-paraphrase-multilingual-MiniLM-L12-v2`，支持中文问题检索英文等多语言论文内容。
 
-- 第一次检索可能需要下载模型权重并建立索引，因此比后续查询慢。
-- 索引持久化到本地；元素内容变化时按需重建，不需要手工安排上传后的索引任务。
+**配置方法**：在启动后端的终端中设置 `PAPER_AGENT_EMBEDDING_MODEL`，不设置即使用默认值。取值是 paperqa2 的嵌入标识，按下表书写：
+
+| 标识形式 | 含义 | 示例 |
+| --- | --- | --- |
+| `st-<模型名>` | 本地 Sentence Transformers 模型，按 HuggingFace 模型名在首次使用时下载权重 | `st-paraphrase-multilingual-MiniLM-L12-v2`（默认） |
+| `litellm-<模型名>` | 远程嵌入服务；模型名按 LiteLLM 约定书写，凭据使用对应提供方的环境变量（如 `OPENAI_API_KEY`） | `litellm-openai/text-embedding-3-small` |
+| `hybrid-<嵌入标识>` | 与稀疏向量混合检索，稠密侧递归按上表解析 | `hybrid-st-paraphrase-multilingual-MiniLM-L12-v2` |
+
+PowerShell，在启动后端前设置：
+
+```powershell
+$env:PAPER_AGENT_EMBEDDING_MODEL = "st-paraphrase-multilingual-MiniLM-L12-v2"
+.\.venv\Scripts\python.exe -m uvicorn paper_agent.app:create_app --factory --host 127.0.0.1 --port 8000 --reload
+```
+
+Linux / macOS：
+
+```bash
+PAPER_AGENT_EMBEDDING_MODEL=st-paraphrase-multilingual-MiniLM-L12-v2 \
+  .venv/bin/python -m uvicorn paper_agent.app:create_app --factory --host 127.0.0.1 --port 8000 --reload
+```
+
+运行行为：
+
+- 第一次语义检索会下载模型权重并建立索引，因此比后续查询慢；部分网络环境还会触发 paperqa2 内部的一次性价格表拉取，受限网络下可能多等数十秒。
+- 索引持久化到 `.paper-agent/search-indexes/`；元素内容变化时按内容指纹自动重建，不需要手工安排上传后的索引任务。更换嵌入模型后首次检索同样自动重建（索引记录了所用模型，不匹配即重建）。
 - 嵌入模型加载或运行失败时退回文本匹配，跨语言检索效果会下降。
 - `paper-qa[local]` 会带入本地推理依赖；运行时降级不能替代安装阶段缺失的依赖。
 

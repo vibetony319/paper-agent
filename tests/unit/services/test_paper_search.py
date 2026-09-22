@@ -37,50 +37,47 @@ def repository(tmp_path: Path) -> PaperRepository:
 
 
 def _paper_with_elements(repository: PaperRepository, name: str):
+    """One paper whose three sections each hold one paragraph.
+
+    Distinct sections keep the three paragraphs in distinct passages so
+    ranking, persistence, and rebuild behaviour are observable per passage.
+    """
     paper = repository.create_paper(
         original_filename=f"{name}.pdf", stored_filename=f"private-{name}.pdf"
     )
     repository.save_page(paper.id, Page(number=1, width=200, height=300))
-    section = repository.save_section(
-        paper.id, Section(id=f"{name}-section", title="Body", order=0, page_number=1)
+
+    def _section(title: str, order: int, element_id: str, text: str):
+        repository.save_section(
+            paper.id,
+            Section(id=f"{name}-s{order}", title=title, order=order, page_number=1),
+        )
+        return repository.save_element(
+            paper.id,
+            DocumentElement(
+                id=element_id,
+                kind="paragraph",
+                text=text,
+                page_number=1,
+                bbox=BoundingBox(0, order * 0.2, 1, order * 0.2 + 0.2),
+                section_id=f"{name}-s{order}",
+            ),
+        )
+
+    router = _section("Router", 0, f"{name}-router", "The router sends tokens onward.")
+    experts = _section(
+        "Experts", 1, f"{name}-experts", "Experts specialize in different domains."
     )
-    router = repository.save_element(
-        paper.id,
-        DocumentElement(
-            id=f"{name}-router",
-            kind="paragraph",
-            text="The router sends tokens onward.",
-            page_number=1,
-            bbox=BoundingBox(0, 0, 1, 0.2),
-            section_id=section.id,
-        ),
-    )
-    experts = repository.save_element(
-        paper.id,
-        DocumentElement(
-            id=f"{name}-experts",
-            kind="paragraph",
-            text="Experts specialize in different domains.",
-            page_number=1,
-            bbox=BoundingBox(0, 0.2, 1, 0.4),
-            section_id=section.id,
-        ),
-    )
-    conclusion = repository.save_element(
-        paper.id,
-        DocumentElement(
-            id=f"{name}-conclusion",
-            kind="paragraph",
-            text="We conclude that dispatching improves efficiency.",
-            page_number=1,
-            bbox=BoundingBox(0, 0.4, 1, 0.6),
-            section_id=section.id,
-        ),
+    conclusion = _section(
+        "Conclusion",
+        2,
+        f"{name}-conclusion",
+        "We conclude that dispatching improves efficiency.",
     )
     return paper, router, experts, conclusion
 
 
-def test_search_ranks_semantically_matching_elements_first(repository, tmp_path):
+def test_search_ranks_semantically_matching_passages_first(repository, tmp_path):
     paper, router, experts, _ = _paper_with_elements(repository, "rank")
     service = SemanticPaperSearchService(
         repository,
@@ -91,9 +88,58 @@ def test_search_ranks_semantically_matching_elements_first(repository, tmp_path)
 
     hits = service.search(paper.id, "router", limit=2)
 
-    assert [hit.element_id for hit in hits] == [router.id, experts.id]
+    # Hits are keyed by passage (the passage's first element id).
+    assert [hit.passage_key for hit in hits] == [router.id, experts.id]
     assert hits[0].score == pytest.approx(1.0)
     assert hits[1].score == pytest.approx(0.0)
+
+
+def test_index_embeds_passages_with_their_section_breadcrumbs(repository, tmp_path):
+    paper, router, _, _ = _paper_with_elements(repository, "crumb")
+    embedder = CountingEmbedder({"router": 0})
+    service = SemanticPaperSearchService(
+        repository,
+        index_dir=tmp_path / "indexes",
+        embedding_model="st-fake",
+        embedder=embedder,
+    )
+
+    assert service.search(paper.id, "router", limit=1)
+
+    # Each embedded text is one passage: breadcrumb header plus body.
+    assert embedder.calls[0] == [
+        "Router\n\nThe router sends tokens onward.",
+        "Experts\n\nExperts specialize in different domains.",
+        "Conclusion\n\nWe conclude that dispatching improves efficiency.",
+    ]
+
+
+def test_stage0_elements_are_excluded_from_the_index(repository, tmp_path):
+    paper, router, experts, conclusion = _paper_with_elements(repository, "stage0")
+    repository.save_element(
+        paper.id,
+        DocumentElement(
+            id=f"{paper.id}-block",
+            kind="text_block",
+            text="The router sends tokens onward.",
+            page_number=1,
+            bbox=BoundingBox(0, 0, 1, 0.2),
+        ),
+    )
+    embedder = CountingEmbedder({"router": 0})
+    service = SemanticPaperSearchService(
+        repository,
+        index_dir=tmp_path / "indexes",
+        embedding_model="st-fake",
+        embedder=embedder,
+    )
+
+    hits = service.search(paper.id, "router", limit=5)
+
+    # The stage-0 text block duplicates the stage-1 paragraph and must not
+    # occupy index slots: only the three section passages are embedded.
+    assert [hit.passage_key for hit in hits] == [router.id, experts.id, conclusion.id]
+    assert len(embedder.calls[0]) == 3
 
 
 def test_index_persists_and_is_reused_by_later_services(repository, tmp_path):
@@ -107,7 +153,7 @@ def test_index_persists_and_is_reused_by_later_services(repository, tmp_path):
         embedder=first_embedder,
     )
     assert first.search(paper.id, "router", limit=1)
-    # One call embeds the elements, a second embeds the query.
+    # One call embeds the passages, a second embeds the query.
     assert len(first_embedder.calls[0]) == 3
     assert first_embedder.calls[1] == ["router"]
 
@@ -120,7 +166,7 @@ def test_index_persists_and_is_reused_by_later_services(repository, tmp_path):
     )
 
     assert len(second.search(paper.id, "router", limit=1)) == 1
-    # Only the query is embedded: the element index came from disk.
+    # Only the query is embedded: the passage index came from disk.
     assert second_embedder.calls == [["router"]]
 
 
@@ -147,9 +193,41 @@ def test_changed_elements_trigger_a_lazy_rebuild(repository, tmp_path):
     )
 
     hits = service.search(paper.id, "optimizer", limit=5)
-    assert [hit.element_id for hit in hits[:1]] == [f"{paper.id}-optimizer"]
+    assert [hit.passage_key for hit in hits[:1]] == [f"{paper.id}-optimizer"]
     # The whole index was re-embedded after the content fingerprint changed.
     assert len(embedder.calls[-2]) == 4
+
+
+def test_changed_sections_trigger_a_lazy_rebuild(repository, tmp_path):
+    paper, _, _, _ = _paper_with_elements(repository, "resection")
+    index_dir = tmp_path / "indexes"
+    first_embedder = CountingEmbedder({"router": 0})
+    first = SemanticPaperSearchService(
+        repository,
+        index_dir=index_dir,
+        embedding_model="st-fake",
+        embedder=first_embedder,
+    )
+    assert first.search(paper.id, "router", limit=1)
+
+    # A new section changes no element yet, only the section fingerprint
+    # (and with it the breadcrumb of every passage below it).
+    repository.save_section(
+        paper.id,
+        Section(id="resection-s3", title="Routing", order=3, page_number=1),
+    )
+
+    second_embedder = CountingEmbedder({"router": 0})
+    second = SemanticPaperSearchService(
+        repository,
+        index_dir=index_dir,
+        embedding_model="st-fake",
+        embedder=second_embedder,
+    )
+
+    assert second.search(paper.id, "router", limit=1)
+    # The persisted index no longer matches, so the passages re-embed.
+    assert len(second_embedder.calls[0]) == 3
 
 
 def test_index_for_a_different_embedding_model_is_ignored(repository, tmp_path):
@@ -172,7 +250,7 @@ def test_index_for_a_different_embedding_model_is_ignored(repository, tmp_path):
     )
 
     assert fresh.search(paper.id, "router", limit=1)
-    # The sidecar records the old model, so the elements are re-embedded.
+    # The sidecar records the old model, so the passages are re-embedded.
     assert len(fresh_embedder.calls[0]) == 3
 
 

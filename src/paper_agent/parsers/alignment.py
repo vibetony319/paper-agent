@@ -46,7 +46,8 @@ class TextAligner:
             if len(matches) == 1:
                 block = matches[0]
                 elements.append(
-                    DocumentElement.paragraph(
+                    DocumentElement(
+                        kind=paragraph.kind,
                         text=paragraph.text,
                         page_number=block.page_number,
                         bbox=block.bbox,
@@ -56,7 +57,8 @@ class TextAligner:
                 )
             else:
                 elements.append(
-                    DocumentElement.paragraph(
+                    DocumentElement(
+                        kind=paragraph.kind,
                         text=paragraph.text,
                         section_id=paragraph.section_id,
                         location_status="unlocated",

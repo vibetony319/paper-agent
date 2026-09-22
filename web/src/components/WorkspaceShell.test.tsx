@@ -130,7 +130,7 @@ it('shows submitted questions, immutable model badges, and routes paper and note
 
   expect(screen.getAllByText('本地 Qwen')[0]).toBeVisible();
   expect(screen.getByText('这个回答来自哪里？')).toBeVisible();
-  await user.click(screen.getByRole('button', { name: '论文：第 2 页 paragraph' }));
+  await user.click(screen.getByRole('button', { name: '论文：第 2 页 段落' }));
   expect(workspace.selectCitation).toHaveBeenCalledWith(expect.objectContaining({ id: 'element-a' }));
   await user.click(screen.getByRole('button', { name: '笔记：第 2 页' }));
   expect(workspace.selectAnchorSource).toHaveBeenCalledWith(expect.objectContaining({ id: 'anchor-a', kind: 'text_anchor' }));

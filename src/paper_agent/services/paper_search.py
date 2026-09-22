@@ -1,11 +1,12 @@
 """Semantic paper search backed by paperqa2's local embedding stack.
 
-The service embeds every parsed element of a paper once, keeps the vectors
-on disk, and answers queries by cosine similarity. Indexes are rebuilt
-lazily when the paper's element fingerprint changes (re-upload, re-parse),
-so ingestion never needs an explicit re-index step. When paperqa2 or the
-embedding model is unavailable, ``search`` returns no hits and callers
-fall back to substring matching.
+The service embeds every retrieval passage of a paper once (a passage is
+several consecutive same-section elements prefixed with the section
+breadcrumb), keeps the vectors on disk, and answers queries by cosine
+similarity. Indexes are rebuilt lazily when the paper's element or section
+fingerprint changes (re-upload, re-parse), so ingestion never needs an
+explicit re-index step. When paperqa2 or the embedding model is unavailable,
+``search`` returns no hits and callers fall back to substring matching.
 """
 
 from __future__ import annotations
@@ -24,12 +25,17 @@ from typing import Callable, Protocol
 
 import numpy as np
 
-from paper_agent.domain import DocumentElement
+from paper_agent.domain import DocumentElement, Section
+from paper_agent.services.passages import build_passages
 from paper_agent.storage import PaperRepository
 
 logger = logging.getLogger(__name__)
 
 _INDEX_CACHE_LIMIT = 4
+
+# Bumped whenever the embedded text format changes, so persisted indexes
+# from an older format rebuild instead of answering against stale vectors.
+_INDEX_FORMAT_VERSION = "passages-v1"
 
 
 class EmbeddingFunction(Protocol):
@@ -38,23 +44,38 @@ class EmbeddingFunction(Protocol):
 
 @dataclass(frozen=True)
 class SearchHit:
-    element_id: str
+    passage_key: str
     score: float
 
 
 @dataclass(frozen=True)
 class _PaperIndex:
-    element_ids: tuple[str, ...]
+    passage_keys: tuple[str, ...]
     matrix: np.ndarray
     fingerprint: str
 
 
-def _content_fingerprint(elements: tuple[DocumentElement, ...]) -> str:
+def _content_fingerprint(
+    elements: tuple[DocumentElement, ...], sections: tuple[Section, ...]
+) -> str:
     digest = hashlib.sha256()
+    digest.update(_INDEX_FORMAT_VERSION.encode("utf-8"))
+    digest.update(b"\x1e")
+    for section in sorted(sections, key=lambda item: item.order):
+        digest.update(section.id.encode("utf-8"))
+        digest.update(b"\x1f")
+        digest.update(str(section.order).encode("utf-8"))
+        digest.update(b"\x1f")
+        digest.update(str(section.level).encode("utf-8"))
+        digest.update(b"\x1f")
+        digest.update(section.title.encode("utf-8"))
+        digest.update(b"\x1e")
     for element in elements:
         digest.update(element.id.encode("utf-8"))
         digest.update(b"\x1f")
         digest.update(str(element.order).encode("utf-8"))
+        digest.update(b"\x1f")
+        digest.update(element.kind.encode("utf-8"))
         digest.update(b"\x1f")
         digest.update(element.text.encode("utf-8"))
         digest.update(b"\x1e")
@@ -83,7 +104,7 @@ def _paperqa_embedder(model_name: str) -> EmbeddingFunction | None:
 
 
 class SemanticPaperSearchService:
-    """Cosine top-k search over per-element embeddings with disk persistence."""
+    """Cosine top-k search over per-passage embeddings with disk persistence."""
 
     def __init__(
         self,
@@ -108,6 +129,9 @@ class SemanticPaperSearchService:
         self, paper_id: str, query: str, *, limit: int = 10
     ) -> tuple[SearchHit, ...]:
         """Return up to ``limit`` semantic hits, best match first.
+
+        Hits are keyed by passage (the passage's first element id); callers
+        rebuild the same passages to resolve the key into text.
 
         Embedding and index building are serialized by one lock: the
         underlying model is not safe for concurrent encode calls.
@@ -139,7 +163,10 @@ class SemanticPaperSearchService:
             # Stable sort keeps document order among equally-scored hits.
             best = np.argsort(-scores, kind="stable")[:count]
             return tuple(
-                SearchHit(element_id=index.element_ids[position], score=float(scores[position]))
+                SearchHit(
+                    passage_key=index.passage_keys[position],
+                    score=float(scores[position]),
+                )
                 for position in best
             )
 
@@ -152,7 +179,8 @@ class SemanticPaperSearchService:
 
     def _index_for(self, paper_id: str) -> _PaperIndex | None:
         elements = self.repository.get_elements(paper_id)
-        fingerprint = _content_fingerprint(elements)
+        sections = self.repository.get_sections(paper_id)
+        fingerprint = _content_fingerprint(elements, sections)
         cached = self._cache.get(paper_id)
         if cached is not None and cached.fingerprint == fingerprint:
             self._cache.move_to_end(paper_id)
@@ -161,7 +189,7 @@ class SemanticPaperSearchService:
         if loaded is not None and loaded.fingerprint == fingerprint:
             self._remember(paper_id, loaded)
             return loaded
-        index = self._build_index(paper_id, elements, fingerprint)
+        index = self._build_index(paper_id, elements, sections, fingerprint)
         if index is not None:
             self._remember(paper_id, index)
         return index
@@ -176,15 +204,20 @@ class SemanticPaperSearchService:
         self,
         paper_id: str,
         elements: tuple[DocumentElement, ...],
+        sections: tuple[Section, ...],
         fingerprint: str,
     ) -> _PaperIndex | None:
         embedder = self._resolve_embedder()
-        indexed = [element for element in elements if element.text.strip()]
-        if embedder is None or not indexed:
+        passages = [
+            passage
+            for passage in build_passages(elements, sections)
+            if passage.text.strip()
+        ]
+        if embedder is None or not passages:
             return None
         try:
             vectors = np.asarray(
-                embedder([element.text for element in indexed]), dtype=np.float32
+                embedder([passage.text for passage in passages]), dtype=np.float32
             )
         except Exception as error:
             logger.warning(
@@ -194,7 +227,7 @@ class SemanticPaperSearchService:
                 error,
             )
             return None
-        if vectors.ndim != 2 or vectors.shape[0] != len(indexed):
+        if vectors.ndim != 2 or vectors.shape[0] != len(passages):
             logger.warning(
                 "unexpected embedding shape for paper %s; "
                 "search_paper falls back to substring matching.",
@@ -204,7 +237,7 @@ class SemanticPaperSearchService:
         norms = np.linalg.norm(vectors, axis=1, keepdims=True)
         norms[norms == 0.0] = 1.0
         index = _PaperIndex(
-            element_ids=tuple(element.id for element in indexed),
+            passage_keys=tuple(passage.key for passage in passages),
             matrix=vectors / norms,
             fingerprint=fingerprint,
         )
@@ -223,7 +256,7 @@ class SemanticPaperSearchService:
                 np.savez(
                     handle,
                     matrix=index.matrix,
-                    element_ids=np.asarray(index.element_ids, dtype=np.str_),
+                    passage_keys=np.asarray(index.passage_keys, dtype=np.str_),
                 )
                 handle.close()
                 sidecar = tempfile.NamedTemporaryFile(
@@ -234,7 +267,7 @@ class SemanticPaperSearchService:
                         {
                             "fingerprint": index.fingerprint,
                             "embedding_model": self.embedding_model,
-                            "element_count": len(index.element_ids),
+                            "passage_count": len(index.passage_keys),
                         }
                     )
                     sidecar.write(payload.encode("utf-8"))
@@ -266,12 +299,14 @@ class SemanticPaperSearchService:
                 return None
             with np.load(matrix_path, allow_pickle=False) as archive:
                 matrix = archive["matrix"].astype(np.float32, copy=False)
-                element_ids = tuple(str(value) for value in archive["element_ids"])
+                passage_keys = tuple(
+                    str(value) for value in archive["passage_keys"]
+                )
             fingerprint = str(sidecar.get("fingerprint", ""))
         except (OSError, ValueError, KeyError):
             return None
-        if matrix.ndim != 2 or matrix.shape[0] != len(element_ids):
+        if matrix.ndim != 2 or matrix.shape[0] != len(passage_keys):
             return None
         return _PaperIndex(
-            element_ids=element_ids, matrix=matrix, fingerprint=fingerprint
+            passage_keys=passage_keys, matrix=matrix, fingerprint=fingerprint
         )

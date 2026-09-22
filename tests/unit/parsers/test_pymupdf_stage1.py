@@ -39,15 +39,26 @@ def test_parser_assigns_larger_font_lines_to_sections_with_page_numbers(tmp_path
         ("1. Introduction", 0, 1),
         ("2. Method", 1, 2),
     ]
+    # Headings become retrievable elements of their own sections.
     assert [paragraph.text for paragraph in result.paragraphs] == [
+        "1. Introduction",
         "We study routing for sparse experts.",
+        "2. Method",
         "Tokens are routed to experts.",
+    ]
+    assert [paragraph.kind for paragraph in result.paragraphs] == [
+        "heading",
+        "paragraph",
+        "heading",
+        "paragraph",
     ]
     assert [paragraph.section_id for paragraph in result.paragraphs] == [
         result.sections[0].id,
+        result.sections[0].id,
+        result.sections[1].id,
         result.sections[1].id,
     ]
-    assert [paragraph.order for paragraph in result.paragraphs] == [0, 1]
+    assert [paragraph.order for paragraph in result.paragraphs] == [0, 1, 2, 3]
 
 
 def test_parser_detects_bold_same_size_headings_and_known_labels(tmp_path: Path):
@@ -62,9 +73,19 @@ def test_parser_detects_bold_same_size_headings_and_known_labels(tmp_path: Path)
     result = PyMuPdfStage1Parser().parse(_write_pdf(tmp_path / "paper.pdf", [build]))
 
     assert [section.title for section in result.sections] == ["Related Work", "References"]
-    assert [paragraph.section_id for paragraph in result.paragraphs] == [
+    body_paragraphs = [
+        paragraph for paragraph in result.paragraphs if paragraph.kind == "paragraph"
+    ]
+    assert [paragraph.section_id for paragraph in body_paragraphs] == [
         None,
         result.sections[0].id,
+    ]
+    heading_paragraphs = [
+        paragraph for paragraph in result.paragraphs if paragraph.kind == "heading"
+    ]
+    assert [paragraph.text for paragraph in heading_paragraphs] == [
+        "Related Work",
+        "References",
     ]
 
 
@@ -144,3 +165,28 @@ def test_parser_raises_a_stage1_error_for_unreadable_files(tmp_path: Path):
 
     with pytest.raises(Stage1ParseError):
         PyMuPdfStage1Parser().parse(path)
+
+
+def test_parser_merges_hyphen_broken_words(tmp_path: Path):
+    """Breaks if stage 1 leaves line-break hyphens that block alignment."""
+
+    def build(page):
+        _body(page, 60, "The model scales its capa-")
+        _body(page, 75, "bilities across routed experts.")
+
+    result = PyMuPdfStage1Parser().parse(_write_pdf(tmp_path / "paper.pdf", [build]))
+
+    assert [paragraph.text for paragraph in result.paragraphs] == [
+        "The model scales its capabilities across routed experts."
+    ]
+
+
+def test_parser_skips_text_inside_detected_table_regions(table_pdf):
+    """Breaks if table cells are duplicated as scrambled stage-1 paragraphs."""
+    result = PyMuPdfStage1Parser().parse(table_pdf)
+
+    texts = [paragraph.text for paragraph in result.paragraphs]
+    assert all("FFN" not in text and "12.4" not in text for text in texts)
+    assert all("Expert" != text.strip() for text in texts)
+    # The caption sits outside the table region and stays a paragraph.
+    assert any("Table 1" in text for text in texts)

@@ -1878,6 +1878,26 @@ textarea::placeholder {
   cursor: pointer;
 }
 .markdown-citation:hover { background: var(--accent-softer); }
+.markdown-table-scroll { margin: 4px 0 12px; overflow-x: auto; }
+.markdown-table {
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 1.6;
+  min-width: 50%;
+}
+.markdown-table th,
+.markdown-table td {
+  border: 1px solid var(--line);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+.markdown-table thead th { background: var(--accent-soft); font-weight: 600; }
+.markdown-table tbody tr:nth-child(even) { background: var(--accent-softer); }
+.markdown-math { overflow-x: auto; overflow-y: hidden; max-width: 100%; }
+.markdown-math--display { display: block; margin: 4px 0; text-align: center; }
+.markdown-math-block { margin: 8px 0 12px; overflow-x: auto; text-align: center; }
+.markdown-math-block .katex-display { margin: 0; }
 .agent-panel__background .markdown-list { margin-bottom: 0; }
 .agent-panel__model-badge { border: 0; padding: 0; font-weight: 400; color: var(--ink-faint); }
 .chat-feedback__name { font-size: 12px; font-weight: 600; color: var(--ink-soft); }

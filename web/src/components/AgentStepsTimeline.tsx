@@ -4,6 +4,7 @@ const TOOL_LABELS: Record<string, string> = {
   search_paper: '检索论文内容',
   read_element: '阅读论文元素',
   read_section: '阅读章节',
+  list_sections: '查看章节目录',
 };
 
 const MAX_ARG_CHARS = 60;

@@ -47,3 +47,81 @@ it('keeps an unknown citation marker as plain text instead of a dead button', ()
   expect(screen.queryByRole('button')).not.toBeInTheDocument();
   expect(screen.getByText(/\[\[element-unknown\]\]/)).toBeVisible();
 });
+
+it('renders GitHub-flavored pipe tables with a header and data rows', () => {
+  const markdown = [
+    '各专家的负载如下：',
+    '',
+    '| Expert | Tokens |',
+    '| --- | --- |',
+    '| FFN-A | 12.4 |',
+    '| FFN-B | 9.8 |',
+    '',
+    '表格说明完毕。',
+  ].join('\n');
+
+  render(<MarkdownText text={markdown} />);
+
+  const table = screen.getByRole('table');
+  expect(table.querySelector('thead th')?.textContent).toBe('Expert');
+  const headers = screen.getAllByRole('columnheader').map((node) => node.textContent);
+  expect(headers).toEqual(['Expert', 'Tokens']);
+  const cells = screen.getAllByRole('cell').map((node) => node.textContent);
+  expect(cells).toEqual(['FFN-A', '12.4', 'FFN-B', '9.8']);
+  expect(screen.getByText('表格说明完毕。')).toBeVisible();
+});
+
+it('unescapes escaped pipes inside table cells', () => {
+  render(
+    <MarkdownText
+      text={'| 模型 | 说明 |\n| --- | --- |\n| A\\|B | 或语义 |'}
+    />,
+  );
+
+  const cells = screen.getAllByRole('cell').map((node) => node.textContent);
+  expect(cells).toEqual(['A|B', '或语义']);
+});
+
+it('falls back to a paragraph while a table is still streaming', () => {
+  // Only the header row has arrived: no separator yet, so no half-baked table.
+  render(<MarkdownText text={'| Expert | Tokens |'} />);
+
+  expect(screen.queryByRole('table')).not.toBeInTheDocument();
+  expect(screen.getByText('| Expert | Tokens |')).toBeVisible();
+});
+
+it('renders inline and display LaTeX math with KaTeX', () => {
+  render(<MarkdownText text={'损失为 $L_{total}$，推导如下。\n\n$$\\alpha + \\beta = 1$$'} />);
+
+  expect(document.querySelectorAll('.katex').length).toBeGreaterThanOrEqual(2);
+  expect(document.querySelector('.markdown-math-block .katex-display')).not.toBeNull();
+});
+
+it('renders a multi-line display math fence as one block', () => {
+  render(<MarkdownText text={'$$\nE = mc^2\n$$'} />);
+
+  expect(document.querySelector('.markdown-math-block .katex-display')).not.toBeNull();
+});
+
+it('keeps unclosed and currency dollars as literal text while streaming', () => {
+  render(<MarkdownText text={'价格是 $5，梯度尚未闭合 $\\alpha'} />);
+
+  expect(document.querySelector('.katex')).toBeNull();
+  expect(screen.getByText(/价格是 \$5/)).toBeVisible();
+});
+
+it('keeps rendering citations inside table cells', async () => {
+  const user = userEvent.setup();
+  const onSelectCitation = vi.fn();
+  render(
+    <MarkdownText
+      text={'| 结论 | 出处 |\n| --- | --- |\n| 路由有效 | [[element-a]] |'}
+      citations={[citation]}
+      onSelectCitation={onSelectCitation}
+    />,
+  );
+
+  await user.click(screen.getByRole('button', { name: '第 2 页' }));
+
+  expect(onSelectCitation).toHaveBeenCalledWith(citation);
+});
