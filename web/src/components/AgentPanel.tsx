@@ -1,6 +1,7 @@
 import type { AgentMessage, Citation } from '../api/types';
 import { useEffect, useRef } from 'react';
 import type { AgentExchange } from '../workspace/types';
+import { AgentStepsTimeline } from './AgentStepsTimeline';
 import { MarkdownText } from './MarkdownText';
 
 export interface AgentPanelProps {
@@ -24,13 +25,19 @@ export function AgentPanel({ paperId, exchanges, onSelectCitation, onSelectNoteR
         <p className="agent-panel__quiet-status">{paperId === null ? '请选择论文。' : '在下方输入问题。'}</p>
       </header>
       <div className="agent-panel__conversation" aria-live="polite">
-        {exchanges.length === 0 ? <div className="chat-welcome"><h2>一起读懂这篇论文</h2><p>可以提问，也可以选中原文后深入讨论。</p></div> : exchanges.map(({ question, message }) => (
+        {exchanges.length === 0 ? <div className="chat-welcome"><h2>一起读懂这篇论文</h2><p>可以提问，也可以选中原文后深入讨论。</p></div> : exchanges.map(({ question, message, steps }) => (
           <article className="agent-panel__exchange" key={message.message_id}>
             <p className="agent-panel__question">{question}</p>
             <div className="agent-panel__message-meta">
               <span className="chat-feedback__name">论文助手</span>
               <span className="agent-panel__model-badge" title={statusLabel(message.status)}>{message.model?.display_name ?? ''}</span>
             </div>
+            {steps.length > 0 && (
+              <details className="chat-feedback__steps">
+                <summary>执行过程</summary>
+                <AgentStepsTimeline steps={steps} />
+              </details>
+            )}
             {message.paper_answer !== '' && <div className="agent-panel__answer"><MarkdownText text={message.paper_answer} citations={message.citations} onSelectCitation={onSelectCitation} /></div>}
             {message.background_explanation !== null && <section className="agent-panel__background" aria-label="背景知识说明"><h3>背景知识</h3><MarkdownText text={message.background_explanation} /></section>}
             {message.citations.length > 0 && <div className="agent-panel__citations" aria-label="论文引用">{message.citations.map((citation) => <button key={`${message.message_id}-${citation.id}`} type="button" onClick={() => onSelectCitation(citation)}>论文：第 {citation.page_number} 页 {citation.kind}</button>)}</div>}

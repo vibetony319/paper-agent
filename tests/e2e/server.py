@@ -111,6 +111,11 @@ def create_e2e_app() -> FastAPI:
             ))
             wrapper.state = production.state
             production.state.reasoning_client_provider.client_factory = lambda _config: FakeOpenAI()
+            # Semantic search embeds through paperqa2, whose first use does a
+            # one-time LiteLLM cost-map fetch over the network — minutes on a
+            # blocked network and far past any e2e timeout. e2e stays offline:
+            # search_paper answers from deterministic substring matching only.
+            production.state.paper_tool_registry.search = None
             for index, (name, model) in enumerate((('测试 Qwen', 'e2e-qwen'), ('测试 DeepSeek', 'e2e-deepseek')), 1):
                 production.state.model_profile_repository.create(ModelProfile(
                     id=f'10000000-0000-0000-0000-{index:012d}', display_name=name,

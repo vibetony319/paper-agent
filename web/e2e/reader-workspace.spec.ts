@@ -67,11 +67,19 @@ test('选文、高亮、自动笔记、会话内换模型和永久删除', async
   expect(first.model.display_name).toBe('测试 Qwen');
   expect(first.note_references).toHaveLength(1);
   await expect(page.getByRole('button', { name: '笔记：第 1 页' })).toBeVisible();
+  // The 执行过程 collapse must survive the turn's completion, not vanish with
+  // the streaming feedback block.
+  const firstExchange = page.getByRole('article').first();
+  await expect(firstExchange.getByText('执行过程', { exact: true })).toBeVisible();
   await page.getByRole('combobox', { name: '当前模型' }).selectOption({ label: '测试 DeepSeek' });
   const second = await send();
   expect(second.conversation_id).toBe(first.conversation_id);
   expect(second.model.display_name).toBe('测试 DeepSeek');
   await expect(page.getByRole('tabpanel').getByText('测试 DeepSeek', { exact: true })).toBeVisible();
+  const secondExchange = page.getByRole('article').nth(1);
+  await expect(secondExchange.getByText('执行过程', { exact: true })).toBeVisible();
+  await secondExchange.getByText('执行过程', { exact: true }).click();
+  await expect(secondExchange.getByRole('list', { name: '执行过程' })).toBeVisible();
 
   // Use another passage so a persisted highlight does not intercept the drag.
   await selectText(page, /^Sparse expert models/);

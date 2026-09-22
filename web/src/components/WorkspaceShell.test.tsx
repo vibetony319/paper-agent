@@ -15,7 +15,7 @@ vi.mock('./ResizableSplit', () => ({
   ResizableSplit: ({ paper, tools }: { paper: React.ReactNode; tools: React.ReactNode }) => <div data-testid="workspace-split">{paper}{tools}</div>,
 }));
 
-import type { AgentMessage, ModelProfile, Note, PaperSummary, TextAnchor } from '../api/types';
+import type { AgentMessage, AgentStreamStep, ModelProfile, Note, PaperSummary, TextAnchor } from '../api/types';
 import { WorkspaceShell } from './WorkspaceShell';
 
 const profile: ModelProfile = {
@@ -34,7 +34,7 @@ function workspaceFixture() {
   return {
     activePaperId: 'paper-a', loadRevision: 1,
     document: { paper: { id: 'paper-a', original_filename: 'paper.pdf', status: 'completed' as const }, pages: [], sections: [], elements: [], notes: [] },
-    notes: [] as Note[], anchors: [] as TextAnchor[], highlights: [], selection: null, activeSource: null, messages: [] as AgentMessage[], exchanges: [] as Array<{ question: string; message: AgentMessage }>, errorMessage: null as string | null, notesErrorMessage: null as string | null,
+    notes: [] as Note[], anchors: [] as TextAnchor[], highlights: [], selection: null, activeSource: null, messages: [] as AgentMessage[], exchanges: [] as Array<{ question: string; message: AgentMessage; steps: AgentStreamStep[] }>, errorMessage: null as string | null, notesErrorMessage: null as string | null,
     clearActiveSource: vi.fn(), setSelection: vi.fn(), clearSelection: vi.fn(), createHighlight: vi.fn(), deleteHighlight: vi.fn(), runSelectionAssist: vi.fn(), saveNote: vi.fn(),
     selectCitation: vi.fn(), selectElementSource: vi.fn(), selectAnchorSource: vi.fn(), updateNote: vi.fn(), deleteNote: vi.fn(),
     askAgent: vi.fn(),
@@ -123,7 +123,7 @@ it('shows submitted questions, immutable model badges, and routes paper and note
     model: { profile_id: 'qwen', display_name: '本地 Qwen', base_url: 'http://localhost/v1', model_name: 'qwen3', revision: 1 },
     note_references: [{ note_id: 'note-a', note_type: 'manual', page_number: 2, available: true }],
   }];
-  workspace.exchanges = [{ question: '这个回答来自哪里？', message: workspace.messages[0] }];
+  workspace.exchanges = [{ question: '这个回答来自哪里？', message: workspace.messages[0], steps: [{ kind: 'round', round: 1 }] }];
   workspace.notes = [{ id: 'note-a', body: '笔记', element_id: null, page_number: 2, anchor_ids: ['anchor-a'] }];
   workspace.anchors = [{ id: 'anchor-a', quote: '持久原文', page_number: 2, element_id: null, rects: [{ order: 0, x0: 0.1, y0: 0.2, x1: 0.6, y1: 0.3 }] }];
   render(<WorkspaceShell paper={paper} workspace={workspace as never} onRetryPaperLoading={vi.fn()} onReturnToLibrary={vi.fn()} onOpenModelSettings={vi.fn()} onDeleteRequested={vi.fn()} modelProfiles={[profile]} selectedModelProfileId="qwen" onSelectedModelProfileIdChange={vi.fn()} />);

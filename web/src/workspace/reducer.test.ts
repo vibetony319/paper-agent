@@ -392,3 +392,51 @@ it('drops stale execution steps from an older load revision', () => {
 
   expect(updated.streaming?.steps).toEqual([]);
 });
+
+it('keeps the streamed execution steps on the finished exchange', () => {
+  const base = readyWorkspace({ paperId: 'paper-a', conversationId: 'conversation-a' });
+  let state = workspaceReducer(base, {
+    type: 'conversation/stream-started',
+    paperId: 'paper-a',
+    loadRevision: 0,
+    question: '这篇论文讲了什么',
+  });
+  state = workspaceReducer(state, {
+    type: 'conversation/stream-step',
+    paperId: 'paper-a',
+    loadRevision: 0,
+    step: { kind: 'round', round: 1 },
+  });
+  state = workspaceReducer(state, {
+    type: 'conversation/stream-step',
+    paperId: 'paper-a',
+    loadRevision: 0,
+    step: { kind: 'tool_call', round: 1, tool_name: 'search_paper', arguments: { query: '方法' } },
+  });
+
+  const next = workspaceReducer(state, {
+    type: 'conversation/set',
+    paperId: 'paper-a',
+    loadRevision: 0,
+    conversationId: 'conversation-a',
+    question: '这篇论文讲了什么',
+    message: {
+      conversation_id: 'conversation-a',
+      message_id: 'message-a',
+      status: 'grounded',
+      paper_answer: '论文提出……',
+      background_explanation: null,
+      citations: [],
+    },
+  });
+
+  expect(next.streaming).toBeNull();
+  expect(next.exchanges).toEqual([{
+    question: '这篇论文讲了什么',
+    steps: [
+      { kind: 'round', round: 1 },
+      { kind: 'tool_call', round: 1, tool_name: 'search_paper', arguments: { query: '方法' } },
+    ],
+    message: expect.objectContaining({ message_id: 'message-a' }),
+  }]);
+});

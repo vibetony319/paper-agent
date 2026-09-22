@@ -121,8 +121,8 @@ it('uses a fresh current-model payload for Agent calls without resetting the con
   expect(result.current.conversationId).toBe('conversation-a');
   expect(result.current.messages.map(({ message_id }) => message_id)).toEqual(['message-a', 'message-b']);
   expect(result.current.exchanges).toEqual([
-    { question: '第一个问题', message: first },
-    { question: '第二个问题', message: second },
+    { question: '第一个问题', message: first, steps: [] },
+    { question: '第二个问题', message: second, steps: [] },
   ]);
   expect(result.current.streaming).toBeNull();
 });
@@ -157,8 +157,10 @@ it('exposes streamed answer text until the turn is completed', async () => {
   const gate = new Promise<void>((resolve) => { release = resolve; });
   vi.mocked(streamAgentMessage).mockImplementationOnce(async function* () {
     yield { event: 'started', data: { request_id: 'agent-request-a' } };
+    yield { event: 'step', data: { kind: 'round', round: 1 } };
     yield { event: 'delta', data: { text: '完整' } };
     await gate;
+    yield { event: 'step', data: { kind: 'final_answer' } };
     yield { event: 'delta', data: { text: '回答' } };
     yield { event: 'completed', data: { message: answer } };
   });
@@ -170,7 +172,7 @@ it('exposes streamed answer text until the turn is completed', async () => {
     pending = result.current.askAgent('问题', 'qwen');
   });
 
-  expect(result.current.streaming).toEqual({ question: '问题', text: '完整', interrupted: false, steps: [] });
+  expect(result.current.streaming).toEqual({ question: '问题', text: '完整', interrupted: false, steps: [{ kind: 'round', round: 1 }] });
   expect(result.current.exchanges).toEqual([]);
 
   await act(async () => {
@@ -179,7 +181,12 @@ it('exposes streamed answer text until the turn is completed', async () => {
   });
 
   expect(result.current.streaming).toBeNull();
-  expect(result.current.exchanges).toEqual([{ question: '问题', message: answer }]);
+  // 执行过程 must survive the turn's completion, not only while streaming.
+  expect(result.current.exchanges).toEqual([{
+    question: '问题',
+    message: answer,
+    steps: [{ kind: 'round', round: 1 }, { kind: 'final_answer' }],
+  }]);
 });
 
 it('keeps the streamed answer and reports the API reason when the stream errors', async () => {
@@ -518,7 +525,7 @@ it('ignores a superseded stream failure so the newer answer stands', async () =>
 
   expect(result.current.errorMessage).toBeNull();
   expect(result.current.streaming).toBeNull();
-  expect(result.current.exchanges).toEqual([{ question: '第二个问题', message: answer }]);
+  expect(result.current.exchanges).toEqual([{ question: '第二个问题', message: answer, steps: [] }]);
 });
 
 it('ignores an old mutation failure after retrying the same paper', async () => {

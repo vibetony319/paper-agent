@@ -199,7 +199,13 @@ export function workspaceReducer(
           ...state,
           conversationId: action.conversationId,
           messages: [...state.messages, action.message],
-          exchanges: [...state.exchanges, { question: action.question, message: action.message }],
+          // The stream is cleared below, so capture its steps first — they
+          // are the only record of the execution path once streaming is gone.
+          exchanges: [...state.exchanges, {
+            question: action.question,
+            message: action.message,
+            steps: state.streaming?.steps ?? [],
+          }],
           streaming: null,
           errorMessage: null,
         }

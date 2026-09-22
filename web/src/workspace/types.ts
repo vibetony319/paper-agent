@@ -42,6 +42,8 @@ export type WorkspaceState = {
 export type AgentExchange = {
   question: string;
   message: AgentMessage;
+  /** Execution path captured from the stream, kept after the answer completes. */
+  steps: AgentStreamStep[];
 };
 
 export type AgentStream = {
