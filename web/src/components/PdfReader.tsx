@@ -82,6 +82,21 @@ function addOverscan(pageNumbers: number[], activePages: Set<number>): Set<numbe
   return result;
 }
 
+// The reader's own scroll area is a plain relative wrapper; the pane that
+// actually scrolls (today .resizable-split__paper) may change with layout.
+// Walk up to the nearest ancestor that really scrolls vertically.
+function resolveScrollContainer(from: HTMLElement | null): HTMLElement | null {
+  let node = from;
+  while (node !== null && node !== document.body) {
+    const { overflowY } = window.getComputedStyle(node);
+    if ((overflowY === 'auto' || overflowY === 'scroll') && node.scrollHeight > node.clientHeight) {
+      return node;
+    }
+    node = node.parentElement;
+  }
+  return from;
+}
+
 export function PdfReader({
   paperId,
   pages,
@@ -144,28 +159,28 @@ export function PdfReader({
   }, []);
 
   const handleLinkNavigate = useCallback((target: PdfLinkTarget) => {
-    const scrollArea = scrollAreaRef.current;
-    if (scrollArea !== null) {
+    const scrollContainer = resolveScrollContainer(scrollAreaRef.current);
+    if (scrollContainer !== null) {
       // Remember where the reader stood before following the link.
       setReturnStack((stack) => [
         ...stack.slice(-(MAX_RETURN_POSITIONS - 1)),
-        { top: scrollArea.scrollTop, left: scrollArea.scrollLeft },
+        { top: scrollContainer.scrollTop, left: scrollContainer.scrollLeft },
       ]);
     }
     const jump: LinkJump = { ...target, id: `link-${target.pageNumber}-${Date.now().toString(36)}` };
     setLinkTarget(jump);
     showLinkToast(jump);
     const shell = pageShells.current.get(target.pageNumber);
-    if (shell === undefined || scrollArea === null) return;
+    if (shell === undefined || scrollContainer === null) return;
     const shellRect = shell.getBoundingClientRect();
-    const areaRect = scrollArea.getBoundingClientRect();
+    const areaRect = scrollContainer.getBoundingClientRect();
     // Land the destination band near the top of the viewport instead of
     // snapping the whole page; shells keep their aspect-ratio height even
     // before the virtualized page content renders.
     const offsetY = target.bbox !== null ? target.bbox.y0 * shellRect.height : 0;
-    const top = Math.max(0, shellRect.top - areaRect.top + scrollArea.scrollTop + offsetY - 80);
+    const top = Math.max(0, shellRect.top - areaRect.top + scrollContainer.scrollTop + offsetY - 80);
     const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-    scrollArea.scrollTo({ top, behavior: reducedMotion ? 'auto' : 'smooth' });
+    scrollContainer.scrollTo({ top, behavior: reducedMotion ? 'auto' : 'smooth' });
   }, [showLinkToast]);
 
   const popReturnPosition = useCallback(() => {
@@ -174,10 +189,10 @@ export function PdfReader({
     setReturnStack((stack) => stack.slice(0, -1));
     setLinkTarget(null);
     setLinkToast(null);
-    const scrollArea = scrollAreaRef.current;
-    if (scrollArea === null) return;
+    const scrollContainer = resolveScrollContainer(scrollAreaRef.current);
+    if (scrollContainer === null) return;
     const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-    scrollArea.scrollTo({
+    scrollContainer.scrollTo({
       top: position.top,
       left: position.left,
       behavior: reducedMotion ? 'auto' : 'smooth',
@@ -499,9 +514,11 @@ export function PdfReader({
                 data-pdf-page-number={page.number}
                 style={{
                   aspectRatio: `${page.width} / ${page.height}`,
-                  // Reserve at most the rendered page width; a full-width shell
-                  // would blow the aspect-ratio height up on wide panes.
-                  minWidth: `min(100%, calc(${page.width}px + 2rem))`,
+                  // Reserve exactly the size the rendered surface will take:
+                  // min(baseWidth, availableWidth) * zoom + gutters, mirroring
+                  // the fitScale math in PdfPageView. A stable reservation keeps
+                  // the scroll position from jumping when virtualized pages mount.
+                  width: `calc(min(${page.width}px, 100% - var(--pdf-page-gutter) * 2) * ${zoom} + var(--pdf-page-gutter) * 2)`,
                 }}
               >
                 {pdfDocument !== null && isActive ? (

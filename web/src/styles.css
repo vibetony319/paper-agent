@@ -967,13 +967,14 @@ textarea::placeholder {
 }
 
 .pdf-reader__page-shell {
+  --pdf-page-gutter: clamp(0.4rem, 1.6vw, 1rem);
   align-items: center;
   background: transparent;
   display: flex;
   justify-content: center;
   min-height: 12rem;
   overflow: hidden;
-  padding: clamp(0.4rem, 1.6vw, 1rem);
+  padding: var(--pdf-page-gutter);
   position: relative;
   width: max-content;
 }
