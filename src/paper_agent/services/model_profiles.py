@@ -6,6 +6,8 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from threading import RLock
 
+import httpx
+
 from paper_agent.model_profile_storage import (
     ModelProfileRepository,
     ModelProfileRevisionError,
@@ -48,6 +50,10 @@ class ModelProfileInputError(ValueError):
 
 
 class ModelProfileInUseError(RuntimeError):
+    pass
+
+
+class ModelProfileConnectionError(RuntimeError):
     pass
 
 
@@ -257,25 +263,22 @@ class ModelProfileService:
 
     def test_profile(
         self, profile_id: str, *, expected_revision: int
-    ) -> ModelProfileView:
-        if profile_id != ENVIRONMENT_FALLBACK_PROFILE_ID:
-            self._require_current(profile_id, expected_revision)
-        resolved = self.provider.resolve(profile_id)
-        if resolved.profile.revision != expected_revision:
-            raise ModelProfileRevisionError()
-        has_api_key = self._profile_has_api_key(resolved.profile)
-        capabilities = self._probe_capabilities(resolved)
-        if self.provider.is_read_only_profile(resolved.profile.id):
-            return self._view_with_key_state(
-                replace(resolved.profile, capabilities=capabilities),
-                has_api_key=has_api_key,
-            )
-        updated = self.repository.update_capabilities(
-            resolved.profile.id,
-            expected_revision=resolved.profile.revision,
-            capabilities=capabilities,
-        )
-        return self._view_with_key_state(updated, has_api_key=has_api_key)
+    ) -> int:
+        if profile_id == ENVIRONMENT_FALLBACK_PROFILE_ID:
+            profile = self.provider.environment_fallback_profile()
+            if profile is None:
+                raise ModelProfileNotFoundError()
+            if profile.revision != expected_revision:
+                raise ModelProfileRevisionError()
+        else:
+            profile = self._require_current(profile_id, expected_revision)
+        try:
+            # Any HTTP response proves the address is reachable. HEAD neither
+            # generates model output nor sends the stored API key.
+            response = httpx.head(profile.base_url, timeout=3.0, follow_redirects=False)
+        except httpx.RequestError:
+            raise ModelProfileConnectionError() from None
+        return response.status_code
 
     def resolve_default_clients(self) -> ResolvedReasoningClients | None:
         profiles = self.repository.list_active()

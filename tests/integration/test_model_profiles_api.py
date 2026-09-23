@@ -413,14 +413,18 @@ class _CapabilityOpenAI:
         return SimpleNamespace(choices=[SimpleNamespace(message=message)])
 
 
-def test_capability_test_uses_provider_and_returns_revisioned_safe_profile(
-    client: TestClient,
+def test_connection_test_uses_head_without_model_generation_or_profile_mutation(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Breaks if probes bypass the provider, omit CAS, or expose credentials."""
+    """A connection check does not spend model tokens or expose credentials."""
     created = _create_profile(client, api_key="capability-secret")
-    client.app.state.reasoning_client_provider.client_factory = (
-        lambda _config: _CapabilityOpenAI()
-    )
+    calls: list[tuple[str, float, bool]] = []
+
+    def respond(url: str, *, timeout: float, follow_redirects: bool):
+        calls.append((url, timeout, follow_redirects))
+        return SimpleNamespace(status_code=405)
+
+    monkeypatch.setattr("paper_agent.services.model_profiles.httpx.head", respond)
 
     response = client.post(
         f"/api/model-profiles/{created['id']}/test",
@@ -428,14 +432,36 @@ def test_capability_test_uses_provider_and_returns_revisioned_safe_profile(
     )
 
     assert response.status_code == 200
-    tested = response.json()
-    assert tested["revision"] == created["revision"] + 1
-    assert tested["capabilities"]["basic_chat"] is True
-    assert tested["capabilities"]["structured_output"] is True
-    assert tested["capabilities"]["tool_calling"] is True
-    assert tested["capabilities"]["checked_at"] is not None
-    assert "api_key" not in tested
+    assert response.json() == {"reachable": True, "http_status": 405}
+    assert calls == [(created["base_url"], 3.0, False)]
+    assert client.get("/api/model-profiles").json() == [created]
     assert "capability-secret" not in response.text
+
+
+def test_connection_failure_is_fast_and_safe(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+
+    created = _create_profile(client)
+
+    def fail(_url: str, *, timeout: float, follow_redirects: bool):
+        assert timeout == 3.0
+        assert follow_redirects is False
+        raise httpx.ConnectError("private transport detail")
+
+    monkeypatch.setattr("paper_agent.services.model_profiles.httpx.head", fail)
+    response = client.post(
+        f"/api/model-profiles/{created['id']}/test",
+        headers={"If-Match": str(created["revision"])},
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "code": "connection_failed",
+        "detail": "无法连接模型服务地址。",
+    }
+    assert "private transport detail" not in response.text
 
 
 def test_openapi_response_and_application_wiring_are_secret_safe(

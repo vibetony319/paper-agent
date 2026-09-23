@@ -37,11 +37,35 @@ beforeEach(() => {
   vi.spyOn(paperApi, 'getDocument').mockImplementation(async (paperId) => documentFor(paperId));
   vi.spyOn(paperApi, 'getNotes').mockResolvedValue([]);
   vi.spyOn(paperApi, 'getAnnotations').mockResolvedValue({ highlights: [], notes: [] });
+  vi.spyOn(paperApi, 'listConversations').mockResolvedValue([]);
 });
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+});
+
+it('restores the latest paper conversation with its question, answer and background', async () => {
+  vi.mocked(paperApi.listConversations).mockResolvedValue([{ id: 'conversation-a', first_question: '方法是什么？' }]);
+  vi.spyOn(paperApi, 'getConversation').mockResolvedValue({
+    id: 'conversation-a', paper_id: 'paper-a', messages: [
+      { id: 'question-a', role: 'user', content: '方法是什么？', citations: [], model: null, note_references: [], background_explanation: null },
+      { id: 'answer-a', role: 'assistant', content: '论文使用路由方法。', citations: [], model: null, note_references: [], background_explanation: '路由用于选择专家。' },
+    ],
+  });
+  const { result } = renderHook(() => usePaperWorkspace('paper-a'));
+  await waitFor(() => expect(result.current.exchanges).toHaveLength(1));
+  expect(result.current.conversationId).toBe('conversation-a');
+  expect(result.current.exchanges[0].question).toBe('方法是什么？');
+  expect(result.current.exchanges[0].message.background_explanation).toBe('路由用于选择专家。');
+});
+
+it('uses the saved citation box when jumping from an answer', async () => {
+  const { result } = renderHook(() => usePaperWorkspace('paper-a'));
+  await waitFor(() => expect(result.current.document).not.toBeNull());
+  const citation = { id: 'source-a', kind: 'paragraph', page_number: 2, bbox: { x0: 0.2, y0: 0.3, x1: 0.4, y1: 0.35 } };
+  act(() => result.current.selectCitation(citation));
+  expect(result.current.activeSource).toEqual({ id: 'source-a', kind: 'paragraph', pageNumber: 2, bbox: citation.bbox });
 });
 
 it('shows a Chinese workspace fallback instead of raw transport or server errors', async () => {

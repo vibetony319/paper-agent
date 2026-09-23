@@ -1,5 +1,5 @@
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -406,9 +406,34 @@ class PaperRepository:
                     # Legacy NOT NULL column kept for existing databases; the
                     # answer-scope feature it stored has been removed.
                     mode="paper_only",
+                    created_at=datetime.now(timezone.utc).isoformat(),
                 )
             )
         return conversation
+
+    def list_conversations(self, paper_id: str) -> tuple[dict[str, object], ...]:
+        """List a paper's conversations with a short first-question preview."""
+        with self.engine.connect() as connection:
+            rows = connection.execute(
+                select(conversations.c.id, conversations.c.created_at)
+                .where(conversations.c.paper_id == paper_id)
+                .order_by(conversations.c.created_at.desc(), conversations.c.id.desc())
+            ).mappings().all()
+            summaries = []
+            for row in rows:
+                first_question = connection.execute(
+                    select(conversation_messages.c.content)
+                    .where(conversation_messages.c.paper_id == paper_id)
+                    .where(conversation_messages.c.conversation_id == row["id"])
+                    .where(conversation_messages.c.role == AgentMessageRole.user.value)
+                    .order_by(conversation_messages.c.sequence)
+                    .limit(1)
+                ).scalar_one_or_none()
+                summaries.append({
+                    "id": row["id"],
+                    "first_question": first_question[:120] if first_question else "新对话",
+                })
+        return tuple(summaries)
 
     def get_conversation(self, paper_id: str, conversation_id: str) -> Conversation | None:
         with self.engine.connect() as connection:

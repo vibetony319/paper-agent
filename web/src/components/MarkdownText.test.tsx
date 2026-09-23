@@ -41,11 +41,12 @@ it('turns known citation markers into readable page buttons', async () => {
   expect(screen.queryByText('[[element-a]]')).not.toBeInTheDocument();
 });
 
-it('keeps an unknown citation marker as plain text instead of a dead button', () => {
+it('shows an unavailable citation without exposing its raw identifier', () => {
   render(<MarkdownText text={'未知位置 [[element-unknown]] 的结论。'} citations={[citation]} />);
 
   expect(screen.queryByRole('button')).not.toBeInTheDocument();
-  expect(screen.getByText(/\[\[element-unknown\]\]/)).toBeVisible();
+  expect(screen.getByText('引用位置不可用')).toBeVisible();
+  expect(screen.queryByText(/\[\[element-unknown\]\]/)).not.toBeInTheDocument();
 });
 
 it('renders GitHub-flavored pipe tables with a header and data rows', () => {

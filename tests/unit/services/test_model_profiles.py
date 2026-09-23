@@ -417,10 +417,10 @@ def test_create_builds_response_from_known_key_state_without_read_back(
     assert repository.get(created.profile.id) == created.profile
 
 
-def test_profile_capability_view_preflights_secret_before_capability_commit(
-    repository, tmp_path
+def test_connection_test_does_not_read_secret_or_change_profile(
+    repository, tmp_path, monkeypatch
 ):
-    """Breaks if capability persistence commits before response key state is readable."""
+    """A network-only check works even when the stored key cannot be read."""
     real_store = ModelSecretStore(tmp_path / "secrets.json")
     profile = _profile()
     secret_ref = real_store.set(profile.id, "probe-secret")
@@ -439,10 +439,14 @@ def test_profile_capability_view_preflights_secret_before_capability_commit(
         store,
     )
 
-    with pytest.raises(ModelSecretStoreError):
-        service.test_profile(profile.id, expected_revision=profile.revision)
+    monkeypatch.setattr(
+        model_profile_services.httpx,
+        "head",
+        lambda *_args, **_kwargs: type("Response", (), {"status_code": 200})(),
+    )
+    assert service.test_profile(profile.id, expected_revision=profile.revision) == 200
 
-    assert store.get_calls == 1
+    assert store.get_calls == 0
     assert repository.get(profile.id) == profile
 
 

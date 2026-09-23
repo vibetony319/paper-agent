@@ -6,12 +6,14 @@ from fastapi import APIRouter, Header, Request, Response
 from paper_agent.model_profile_storage import ModelProfileRevisionError
 from paper_agent.model_profiles import UNCHANGED, ModelProfileChanges
 from paper_agent.schemas import (
+    ModelConnectionTestResponse,
     ModelProfileCreateRequest,
     ModelProfileErrorResponse,
     ModelProfilePatchRequest,
     ModelProfileResponse,
 )
 from paper_agent.services.model_profiles import (
+    ModelProfileConnectionError,
     ModelProfileInUseError,
     ModelProfileInputError,
     ModelProfileNotFoundError,
@@ -96,6 +98,10 @@ def _safe_http_error(error: Exception) -> ModelProfileHttpError:
             409,
             "profile_in_use",
             "模型档案正在被请求使用，请稍后重试。",
+        )
+    if isinstance(error, ModelProfileConnectionError):
+        return ModelProfileHttpError(
+            503, "connection_failed", "无法连接模型服务地址。"
         )
     if isinstance(error, ModelProfileRevisionError):
         return ModelProfileHttpError(
@@ -239,16 +245,17 @@ def set_default_model_profile(
 
 @router.post(
     "/{profile_id}/test",
-    response_model=ModelProfileResponse,
+    response_model=ModelConnectionTestResponse,
     responses=_ERROR_RESPONSES,
 )
 def test_model_profile(
     profile_id: UUID,
     request: Request,
     if_match: str | None = Header(default=None, alias="If-Match"),
-) -> ModelProfileResponse:
-    return _response(
+) -> ModelConnectionTestResponse:
+    status = _safe_errors(
         lambda: _service(request).test_profile(
             str(profile_id), expected_revision=_revision(if_match)
         )
     )
+    return ModelConnectionTestResponse(reachable=True, http_status=status)

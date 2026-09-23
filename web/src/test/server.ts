@@ -5,6 +5,7 @@ import { setupServer } from 'msw/node';
 // auxiliary reads the workspace fires on its own (like the context-usage
 // readout) never trip onUnhandledRequest in unrelated tests.
 export const server = setupServer(
+  http.get('/api/papers/:paperId/agent/conversations', () => HttpResponse.json([])),
   http.get('/api/papers/:paperId/agent/conversations/:conversationId/context-usage', () => HttpResponse.json({
     used_tokens: 1200,
     context_length: null,

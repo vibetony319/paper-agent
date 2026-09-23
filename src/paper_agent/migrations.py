@@ -1,6 +1,6 @@
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import text
 from sqlalchemy.engine import Connection, Engine
@@ -287,6 +287,24 @@ def _apply_section_levels(connection: Connection) -> None:
         )
 
 
+def _apply_conversation_created_at(connection: Connection) -> None:
+    _add_nullable_columns(connection, "conversations", {"created_at": "VARCHAR"})
+    if not connection.exec_driver_sql("PRAGMA table_info(conversations)").fetchone():
+        return
+    rows = connection.exec_driver_sql(
+        "SELECT id FROM conversations WHERE created_at IS NULL ORDER BY rowid"
+    ).fetchall()
+    started = datetime.now(UTC)
+    for index, row in enumerate(rows):
+        connection.execute(
+            text("UPDATE conversations SET created_at = :created_at WHERE id = :id"),
+            {
+                "created_at": (started + timedelta(microseconds=index)).isoformat(),
+                "id": row[0],
+            },
+        )
+
+
 MIGRATIONS = (
     Migration(
         version=1,
@@ -322,5 +340,10 @@ MIGRATIONS = (
         version=7,
         name="add_section_levels",
         apply=_apply_section_levels,
+    ),
+    Migration(
+        version=8,
+        name="add_conversation_created_at",
+        apply=_apply_conversation_created_at,
     ),
 )

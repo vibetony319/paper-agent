@@ -34,7 +34,7 @@ flowchart LR
 | `model_profile_repository` | 模型档案的数据库 CRUD、修订号比较、默认档案切换与软删除。 |
 | `model_secret_store` | 保存本地档案密钥并供后端按 `secret_ref` 读写；数据库只保存引用，API 只返回密钥存在状态与掩码。 |
 | `reasoning_client_provider` | 解析启用的档案或只读环境回退，按 `(profile_id, revision)` 缓存 chat、structured、tool 三类客户端，并生成不含密钥的模型快照。 |
-| `model_profile_service` | 档案输入约束、密钥与数据库变更的补偿、能力探测、`If-Match` 所需的并发语义，以及请求期间的 usage lease。 |
+| `model_profile_service` | 档案输入约束、密钥与数据库变更的补偿、快速连接检查、`If-Match` 所需的并发语义，以及请求期间的 usage lease。 |
 | `paper_repository` | 论文、解析阶段、页面/章节/元素、会话与消息的持久化和所有权校验；也保存 Agent 的请求重试记录。 |
 | `annotation_repository` | 锚点、高亮、笔记和选区辅助请求的持久化、同论文范围的校验、批注请求幂等和选区辅助状态。 |
 | `paper_operation_coordinator` | 单进程内论文操作与永久删除的互斥：普通写操作不能与删除并发。 |

@@ -44,7 +44,7 @@ function renderDialog(profiles: ModelProfile[], overrides: ActionOverrides = {})
     onCreate: vi.fn().mockResolvedValue(modelProfile()),
     onUpdate: vi.fn().mockResolvedValue(modelProfile()),
     onDelete: vi.fn().mockResolvedValue(undefined),
-    onTest: vi.fn().mockResolvedValue(modelProfile()),
+    onTest: vi.fn().mockResolvedValue({ reachable: true, http_status: 200 }),
     ...overrides,
   };
   render(<ModelSettingsDialog {...props} />);
@@ -53,7 +53,7 @@ function renderDialog(profiles: ModelProfile[], overrides: ActionOverrides = {})
 
 afterEach(cleanup);
 
-it('lists profiles with chinese capability states and the default badge', () => {
+it('lists profiles with the default badge and no capability checks', () => {
   renderDialog([
     modelProfile(),
     modelProfile({
@@ -72,12 +72,10 @@ it('lists profiles with chinese capability states and the default badge', () => 
   expect(screen.getByRole('dialog', { name: '模型设置' })).toBeVisible();
   const qwen = within(screen.getByRole('listitem', { name: '本地 Qwen' }));
   expect(qwen.getByText('默认')).toBeVisible();
-  expect(qwen.getByText('基础对话：未测试')).toBeVisible();
+  expect(qwen.queryByText(/基础对话|结构化输出|工具调用/)).not.toBeInTheDocument();
 
   const deepseek = within(screen.getByRole('listitem', { name: 'DeepSeek 远程' }));
-  expect(deepseek.getByText('基础对话：检测通过')).toBeVisible();
-  expect(deepseek.getByText('结构化输出：检测通过')).toBeVisible();
-  expect(deepseek.getByText('工具调用：检测未通过（可能是接口不兼容，请重新测试或检查服务配置）')).toBeVisible();
+  expect(deepseek.getByRole('button', { name: '测试连接' })).toBeVisible();
 });
 
 it('creates a profile from the chinese form fields', async () => {
@@ -146,25 +144,29 @@ it('clears the api key only after an explicit clear request', async () => {
   });
 });
 
-it('shows the three chinese capability results after a connection test', async () => {
+it('shows the HTTP response after a connection test', async () => {
   const user = userEvent.setup();
-  const onTest = vi.fn().mockResolvedValue(modelProfile({
-    revision: 4,
-    capabilities: {
-      basic_chat: true,
-      structured_output: true,
-      tool_calling: false,
-      checked_at: '2026-08-21T09:30:00Z',
-    },
-  }));
+  const onTest = vi.fn().mockResolvedValue({ reachable: true, http_status: 404 });
   renderDialog([modelProfile()], { onTest });
 
-  await user.click(screen.getByRole('button', { name: '测试能力' }));
+  await user.click(screen.getByRole('button', { name: '测试连接' }));
 
   expect(onTest).toHaveBeenCalledWith('qwen');
-  expect(await screen.findByText('基础对话：检测通过')).toBeVisible();
-  expect(screen.getByText('结构化输出：检测通过')).toBeVisible();
-  expect(screen.getByText('工具调用：检测未通过（可能是接口不兼容，请重新测试或检查服务配置）')).toBeVisible();
+  expect(await screen.findByRole('status')).toHaveTextContent('地址已响应（HTTP 404）');
+  expect(screen.getByRole('status')).toHaveTextContent('未验证密钥或模型调用');
+});
+
+it('explains when the service address cannot be reached', async () => {
+  const user = userEvent.setup();
+  const onTest = vi.fn().mockRejectedValue(
+    new ApiError(503, '请求失败，请稍后重试。', 'connection_failed'),
+  );
+  renderDialog([modelProfile()], { onTest });
+
+  await user.click(screen.getByRole('button', { name: '测试连接' }));
+
+  expect(await screen.findByRole('alert')).toHaveTextContent('无法连接服务地址');
+  expect(screen.queryByRole('status')).not.toBeInTheDocument();
 });
 
 it('refreshes the profile list after a revision conflict', async () => {
@@ -206,7 +208,7 @@ it('disables edit and delete for the read-only environment profile but keeps tes
   expect(item.getByText('只读')).toBeVisible();
   expect(item.getByRole('button', { name: '编辑' })).toBeDisabled();
   expect(item.getByRole('button', { name: '删除' })).toBeDisabled();
-  expect(item.getByRole('button', { name: '测试能力' })).toBeEnabled();
+  expect(item.getByRole('button', { name: '测试连接' })).toBeEnabled();
 });
 
 it('returns focus to the settings trigger after closing', async () => {
@@ -322,6 +324,36 @@ it('rejects an output cap at or above the context length', async () => {
     '最大输出 tokens 必须小于上下文长度。',
   );
   expect(props.onCreate).not.toHaveBeenCalled();
+});
+
+it('explains the server output limit before sending a model profile', async () => {
+  const user = userEvent.setup();
+  const props = renderDialog([]);
+
+  await user.click(screen.getByRole('button', { name: '新增模型档案' }));
+  await user.type(screen.getByLabelText('配置名称'), 'deepseek');
+  await user.type(screen.getByLabelText('服务地址'), 'https://api.deepseek.com');
+  await user.type(screen.getByLabelText('模型名称'), 'deepseek-flash');
+  await user.type(screen.getByLabelText('上下文长度（tokens，可选）'), '1000000');
+  await user.type(screen.getByLabelText('最大输出（tokens，可选）'), '384000');
+  await user.click(screen.getByRole('button', { name: '保存' }));
+
+  expect(await screen.findByRole('alert')).toHaveTextContent('最大输出不能超过 200000 tokens');
+  expect(props.onCreate).not.toHaveBeenCalled();
+});
+
+it('shows a useful message when the server rejects profile fields', async () => {
+  const user = userEvent.setup();
+  const onCreate = vi.fn().mockRejectedValue(new ApiError(422, '请求失败，请稍后重试。', 'validation_error'));
+  renderDialog([], { onCreate });
+
+  await user.click(screen.getByRole('button', { name: '新增模型档案' }));
+  await user.type(screen.getByLabelText('配置名称'), '测试');
+  await user.type(screen.getByLabelText('服务地址'), 'https://api.example.com');
+  await user.type(screen.getByLabelText('模型名称'), 'model');
+  await user.click(screen.getByRole('button', { name: '保存' }));
+
+  expect(await screen.findByRole('alert')).toHaveTextContent('模型档案信息未通过校验');
 });
 
 it('shows the configured token limits in the profile list', () => {

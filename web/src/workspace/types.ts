@@ -3,6 +3,7 @@ import type {
   AgentStreamStep,
   BoundingBox,
   ContextUsage,
+  ConversationSummary,
   Highlight,
   Note,
   TextAnchor,
@@ -15,6 +16,8 @@ export type SourceTarget = {
   kind: string;
   pageNumber: number;
   bbox: BoundingBox;
+  /** Internal PDF point destinations are expanded to their rendered text line. */
+  linkPoint?: boolean;
 };
 
 export type WorkspaceState = {
@@ -30,6 +33,8 @@ export type WorkspaceState = {
   selection: { draft: TextAnchorDraft; toolbarRect: DOMRect } | null;
   activeSource: SourceTarget | null;
   conversationId: string | null;
+  conversations: ConversationSummary[];
+  historyLoading: boolean;
   messages: AgentMessage[];
   exchanges: AgentExchange[];
   streaming: AgentStream | null;

@@ -199,6 +199,30 @@ export interface AgentMessage {
   note_references?: NoteReference[];
 }
 
+export interface ModelConnectionTestResult {
+  reachable: boolean;
+  http_status: number;
+}
+
+export interface ConversationSummary {
+  id: string;
+  first_question: string;
+}
+
+export interface StoredConversation {
+  id: string;
+  paper_id: string;
+  messages: Array<{
+    id: string;
+    role: 'user' | 'assistant';
+    content: string;
+    citations: Citation[];
+    model: ModelSnapshot | null;
+    note_references: NoteReference[];
+    background_explanation: string | null;
+  }>;
+}
+
 export interface CreateNoteInput {
   body: string;
   element_id?: string;

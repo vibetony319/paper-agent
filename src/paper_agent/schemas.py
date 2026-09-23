@@ -292,6 +292,7 @@ class ConversationMessageResponse(BaseModel):
     citations: list[CitationResponse]
     model: ModelSnapshotResponse | None
     note_references: list[NoteReferenceResponse]
+    background_explanation: str | None = None
 
     @classmethod
     def from_message(
@@ -311,7 +312,13 @@ class ConversationMessageResponse(BaseModel):
                 else ModelSnapshotResponse.from_snapshot(message.model_snapshot)
             ),
             note_references=note_references,
+            background_explanation=message.background_explanation,
         )
+
+
+class ConversationSummaryResponse(BaseModel):
+    id: str
+    first_question: str
 
 
 class ConversationResponse(BaseModel):
@@ -390,6 +397,11 @@ class ModelProfilePatchRequest(BaseModel):
         ):
             raise ValueError("profile fields cannot be null")
         return self
+
+
+class ModelConnectionTestResponse(BaseModel):
+    reachable: bool
+    http_status: int
 
 
 class ModelCapabilitiesResponse(BaseModel):

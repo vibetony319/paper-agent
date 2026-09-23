@@ -16,6 +16,7 @@ from paper_agent.schemas import (
     ContextUsageResponse,
     ConversationMessageResponse,
     ConversationResponse,
+    ConversationSummaryResponse,
     ModelSnapshotResponse,
     NoteReferenceResponse,
 )
@@ -112,14 +113,6 @@ def _resolve_agent_model(
         ) from None
     if expected_snapshot is not None and resolved.snapshot != expected_snapshot:
         raise _request_conflict()
-    capabilities = resolved.profile.capabilities
-    # The Markdown answer needs no structured response format, so tool calling
-    # is the only capability the agent turn actually depends on.
-    if not provider.is_read_only_profile(resolved.profile.id) and not capabilities.tool_calling:
-        raise HTTPException(
-            status_code=409,
-            detail="当前模型的工具调用检测未通过，请在模型设置中重新测试；仍失败时检查服务接口兼容性。",
-        )
     return resolved
 
 
@@ -564,6 +557,19 @@ def stream_paper_agent(
         media_type="text/event-stream",
         headers=headers,
     )
+
+
+@router.get(
+    "/papers/{paper_id}/agent/conversations",
+    response_model=list[ConversationSummaryResponse],
+)
+def list_conversations(paper_id: UUID, request: Request) -> list[ConversationSummaryResponse]:
+    repository = _repository(request)
+    _require_paper(repository, str(paper_id))
+    return [
+        ConversationSummaryResponse(**item)
+        for item in repository.list_conversations(str(paper_id))
+    ]
 
 
 @router.get(

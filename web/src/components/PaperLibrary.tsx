@@ -81,6 +81,8 @@ export function PaperLibrary({
   const [uploadingFilename, setUploadingFilename] = useState<string | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const dragDepth = useRef(0);
   const uploadInFlight = useRef(false);
 
   useEffect(() => {
@@ -125,6 +127,10 @@ export function PaperLibrary({
     if (uploadInFlight.current) {
       return;
     }
+    if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
+      setUploadError('请选择 PDF 文件。');
+      return;
+    }
 
     uploadInFlight.current = true;
     setUploadingFilename(file.name);
@@ -150,7 +156,12 @@ export function PaperLibrary({
         <p>在一个本地阅读视图中查看原始页面、证据关联和研究笔记。</p>
       </header>
 
-      <div className="paper-library__upload">
+      <div className={`paper-library__upload${dragging ? ' paper-library__upload--dragging' : ''}`}
+        onDragEnter={(event) => { if (!event.dataTransfer.types.includes('Files')) return; event.preventDefault(); dragDepth.current += 1; setDragging(true); }}
+        onDragOver={(event) => { if (!event.dataTransfer.types.includes('Files')) return; event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; }}
+        onDragLeave={(event) => { event.preventDefault(); dragDepth.current = Math.max(0, dragDepth.current - 1); if (dragDepth.current === 0) setDragging(false); }}
+        onDrop={(event) => { event.preventDefault(); dragDepth.current = 0; setDragging(false); const file = event.dataTransfer.files[0]; if (file !== undefined) void upload(file); }}
+      >
         <label htmlFor="paper-upload">上传 PDF</label>
         <input
           id="paper-upload"
@@ -165,7 +176,7 @@ export function PaperLibrary({
             }
           }}
         />
-        <p className="paper-library__upload-help">一次处理一篇 PDF。</p>
+        <p className="paper-library__upload-help">也可以将 PDF 拖到这里，一次处理一篇。</p>
       </div>
 
       {loading && (

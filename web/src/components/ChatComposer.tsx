@@ -31,6 +31,7 @@ export interface ChatComposerProps {
   streamingSteps?: AgentStreamStep[];
   streamInterrupted?: boolean;
   contextUsage?: ContextUsage | null;
+  conversationLoading?: boolean;
 }
 
 export function ChatComposer({
@@ -48,6 +49,7 @@ export function ChatComposer({
   streamingSteps = [],
   streamInterrupted = false,
   contextUsage = null,
+  conversationLoading = false,
 }: ChatComposerProps) {
   const [content, setContent] = useState('');
   const [pending, setPending] = useState(false);
@@ -89,7 +91,7 @@ export function ChatComposer({
   }, [paperId]);
 
   const send = async (question: string) => {
-    if (!question || pending || paperId === null || selectedModelProfileId === null) return;
+    if (!question || pending || conversationLoading || paperId === null || selectedModelProfileId === null) return;
     const requestId = ++requestVersion.current;
     const requestPaperId = paperId;
     const sentAttachment = attachment;
@@ -185,9 +187,9 @@ export function ChatComposer({
           }}
           value={content}
           onChange={(event) => setContent(event.target.value)}
-          disabled={pending || paperId === null || unavailable}
+          disabled={pending || conversationLoading || paperId === null || unavailable}
         />
-        <button type="submit" disabled={pending || !content.trim() || paperId === null || unavailable}>
+        <button type="submit" disabled={pending || conversationLoading || !content.trim() || paperId === null || unavailable}>
           {pending ? '发送中…' : '发送'}
         </button>
       </div>

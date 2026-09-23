@@ -216,6 +216,30 @@ def _upload_pdf(client: TestClient, sample_pdf: Path, filename: str = "paper.pdf
     return UploadedPaper(id=paper_id, element_id=document.json()["elements"][0]["id"])
 
 
+def test_lists_paper_conversations_and_restores_background(client: TestClient, sample_pdf: Path):
+    paper = _upload_pdf(client, sample_pdf)
+    repository = client.app.state.paper_repository
+    conversation = repository.create_conversation(Conversation(paper_id=paper.id))
+    repository.append_conversation_message(ConversationMessage(
+        conversation_id=conversation.id, paper_id=paper.id,
+        role=AgentMessageRole.user, content="方法是什么？",
+    ))
+    repository.append_conversation_message(ConversationMessage(
+        conversation_id=conversation.id, paper_id=paper.id,
+        role=AgentMessageRole.assistant, content="使用路由方法。",
+        background_explanation="路由用于选择专家。",
+    ))
+
+    listing = client.get(f"/api/papers/{paper.id}/agent/conversations")
+    assert listing.status_code == 200
+    assert listing.json() == [{"id": conversation.id, "first_question": "方法是什么？"}]
+    other_paper = _upload_pdf(client, sample_pdf, "other.pdf")
+    assert client.get(f"/api/papers/{other_paper.id}/agent/conversations").json() == []
+    detail = client.get(f"/api/papers/{paper.id}/agent/conversations/{conversation.id}")
+    assert detail.status_code == 200
+    assert detail.json()["messages"][1]["background_explanation"] == "路由用于选择专家。"
+
+
 @pytest.fixture
 def uploaded_paper(client: TestClient, sample_pdf: Path) -> UploadedPaper:
     return _upload_pdf(client, sample_pdf)
@@ -661,28 +685,24 @@ def test_complete_replay_and_history_hide_valid_but_mismatched_pair_provenance(
     assert provider.resolve_calls == [DEFAULT_PROFILE_ID]
 
 
-def test_agent_rejects_insufficient_capabilities_before_chat_write(
+def test_agent_runs_without_saved_capability_results(
     client: TestClient, uploaded_paper: UploadedPaper
 ) -> None:
-    """Breaks if an untested model writes a user row before Agent capability gating."""
+    """An untested profile is attempted directly, without a capability gate."""
     profile = _model_profile(DEFAULT_PROFILE_ID, tool_calling=False)
-    fake = FakeAgentClient()
     _configure_fake_agent_models(
         client.app,
-        {DEFAULT_PROFILE_ID: fake},
+        {DEFAULT_PROFILE_ID: _grounded_tool_flow(uploaded_paper)},
         profiles={DEFAULT_PROFILE_ID: profile},
     )
-    before = _chat_row_counts(client.app.state.paper_repository)
 
     response = client.post(
         f"/api/papers/{uploaded_paper.id}/agent/messages",
         json=_agent_payload(),
     )
 
-    assert response.status_code == 409
-    assert _chat_row_counts(client.app.state.paper_repository) == before
-    assert fake.tool_requests == 0
-    assert fake.final_requests == 0
+    assert response.status_code == 200
+    assert response.json()["status"] == "grounded"
 
 
 def test_agent_accepts_a_model_without_structured_output(

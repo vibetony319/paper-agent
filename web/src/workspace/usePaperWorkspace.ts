@@ -10,12 +10,41 @@ import type {
   HighlightColor,
   SelectionAssistAction,
   TextAnchorDraft,
+  StoredConversation,
 } from '../api/types';
 import {
   initialWorkspaceState,
   toSourceTarget,
   workspaceReducer,
 } from './reducer';
+import type { AgentExchange } from './types';
+
+function exchangesFromConversation(conversation: StoredConversation): AgentExchange[] {
+  const exchanges: AgentExchange[] = [];
+  let question = '';
+  for (const stored of conversation.messages) {
+    if (stored.role === 'user') {
+      question = stored.content;
+    } else {
+      exchanges.push({
+        question,
+        steps: [],
+        message: {
+          conversation_id: conversation.id,
+          message_id: stored.id,
+          status: stored.citations.length > 0 ? 'grounded' : 'insufficient_evidence',
+          paper_answer: stored.content,
+          background_explanation: stored.background_explanation ?? null,
+          citations: stored.citations,
+          model: stored.model,
+          note_references: stored.note_references,
+        },
+      });
+      question = '';
+    }
+  }
+  return exchanges;
+}
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === 'AbortError';
@@ -42,6 +71,8 @@ export function usePaperWorkspace(
   const anchorsMutationGeneration = useRef(0);
   const workspaceLifetimeController = useRef(new AbortController());
   const agentStreamController = useRef<AbortController | null>(null);
+  const historyController = useRef<AbortController | null>(null);
+  const conversationChoiceGeneration = useRef(0);
 
   const reportApiError = useCallback((
     paperId: string,
@@ -67,6 +98,8 @@ export function usePaperWorkspace(
     notesMutationGeneration.current = 0;
     anchorsMutationGeneration.current = 0;
     workspaceLifetimeController.current.abort();
+    historyController.current?.abort();
+    conversationChoiceGeneration.current += 1;
     const lifetimeController = new AbortController();
     workspaceLifetimeController.current = lifetimeController;
     const annotationsMutationGeneration = highlightsMutationGeneration.current;
@@ -122,6 +155,27 @@ export function usePaperWorkspace(
         });
       });
 
+    const choiceGeneration = conversationChoiceGeneration.current;
+    void paperApi.listConversations(activePaperId, { signal: controller.signal })
+      .then(async (conversations) => {
+        if (controller.signal.aborted) return;
+        dispatch({ type: 'conversation/list-loaded', paperId: activePaperId, loadRevision: loadGeneration, conversations });
+        const latest = conversations[0];
+        if (latest === undefined || conversationChoiceGeneration.current !== choiceGeneration) return;
+        dispatch({ type: 'conversation/select', paperId: activePaperId, loadRevision: loadGeneration, conversationId: latest.id });
+        try {
+          const history = await paperApi.getConversation(activePaperId, latest.id, { signal: controller.signal });
+          if (!controller.signal.aborted && conversationChoiceGeneration.current === choiceGeneration) {
+            dispatch({ type: 'conversation/history-loaded', paperId: activePaperId, loadRevision: loadGeneration, conversationId: latest.id, exchanges: exchangesFromConversation(history) });
+          }
+        } catch (error) {
+          if (!controller.signal.aborted && !isAbortError(error)) dispatch({ type: 'conversation/history-failed', paperId: activePaperId, loadRevision: loadGeneration, conversationId: latest.id, message: publicWorkspaceError(error, '对话记录暂时无法加载。') });
+        }
+      })
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted && !isAbortError(error)) reportApiError(activePaperId, loadGeneration, error, '对话记录暂时无法加载。');
+      });
+
     const anchorsLoadMutationGeneration = anchorsMutationGeneration.current;
     void paperApi.getAnnotations(activePaperId, { signal: controller.signal })
       .then(({ highlights, anchors = [] }) => {
@@ -146,7 +200,25 @@ export function usePaperWorkspace(
       controller.abort();
       lifetimeController.abort();
     };
-  }, [activePaperId, loadRevision]);
+  }, [activePaperId, loadRevision, reportApiError]);
+
+  const selectConversation = useCallback(async (conversationId: string | null) => {
+    if (state.activePaperId === null || (state.streaming !== null && !state.streaming.interrupted)) return;
+    conversationChoiceGeneration.current += 1;
+    historyController.current?.abort();
+    const paperId = state.activePaperId;
+    const revision = state.loadRevision;
+    dispatch({ type: 'conversation/select', paperId, loadRevision: revision, conversationId });
+    if (conversationId === null) return;
+    const controller = new AbortController();
+    historyController.current = controller;
+    try {
+      const history = await paperApi.getConversation(paperId, conversationId, { signal: controller.signal });
+      if (!controller.signal.aborted) dispatch({ type: 'conversation/history-loaded', paperId, loadRevision: revision, conversationId, exchanges: exchangesFromConversation(history) });
+    } catch (error) {
+      if (!controller.signal.aborted && !isAbortError(error)) dispatch({ type: 'conversation/history-failed', paperId, loadRevision: revision, conversationId, message: publicWorkspaceError(error, '对话记录暂时无法加载。') });
+    }
+  }, [state.activePaperId, state.loadRevision, state.streaming]);
 
   // The usage readout is auxiliary: a failed refresh leaves the last value.
   useEffect(() => {
@@ -182,6 +254,8 @@ export function usePaperWorkspace(
       return null;
     }
     const paperId = state.activePaperId;
+    conversationChoiceGeneration.current += 1;
+    historyController.current?.abort();
     const requestLoadRevision = state.loadRevision;
     const conversationId = state.conversationId;
     const controller = new AbortController();
@@ -273,8 +347,8 @@ export function usePaperWorkspace(
 
   const saveNote = useCallback(async (
     body: string,
-    elementId = state.activeSource?.id,
-    pageNumber = state.activeSource?.pageNumber,
+    elementId?: string,
+    pageNumber?: number,
     anchor?: TextAnchorDraft,
   ) => {
     if (state.activePaperId === null) {
@@ -315,7 +389,7 @@ export function usePaperWorkspace(
       }
       return null;
     }
-  }, [state.activePaperId, state.activeSource, state.loadRevision]);
+  }, [state.activePaperId, state.loadRevision]);
 
   const runSelectionAssist = useCallback(async (
     action: SelectionAssistAction,
@@ -369,9 +443,14 @@ export function usePaperWorkspace(
   }, [state.activePaperId, state.loadRevision]);
 
   const selectCitation = useCallback((citation: Citation) => {
-    const element = state.document?.elements.find(({ id }) => id === citation.id);
-    dispatch({ type: 'source/selected', source: element === undefined ? null : toSourceTarget(element) });
-  }, [state.document]);
+    const { x0, y0, x1, y1 } = citation.bbox;
+    const valid = Number.isInteger(citation.page_number) && citation.page_number > 0
+      && [x0, y0, x1, y1].every((value) => Number.isFinite(value) && value >= 0 && value <= 1)
+      && x0 < x1 && y0 < y1;
+    dispatch({ type: 'source/selected', source: valid ? {
+      id: citation.id, kind: citation.kind, pageNumber: citation.page_number, bbox: citation.bbox,
+    } : null });
+  }, []);
 
   const selectElementSource = useCallback((elementId: string) => {
     const element = state.document?.elements.find(({ id }) => id === elementId);
@@ -494,6 +573,7 @@ export function usePaperWorkspace(
   return {
     ...state,
     askAgent,
+    selectConversation,
     saveNote,
     selectCitation,
     selectElementSource,

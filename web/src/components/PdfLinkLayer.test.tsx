@@ -25,7 +25,7 @@ function makeDocument() {
     getPageIndex: vi.fn(() => Promise.resolve(2)),
     getPage: vi.fn(() => Promise.resolve({
       view: [0, 0, 612, 792],
-      getViewport: ({ scale }: { scale: number }) => ({ width: 612 * scale, height: 792 * scale }),
+      getViewport: ({ scale }: { scale: number }) => ({ width: 612 * scale, height: 792 * scale, convertToViewportPoint: (x: number, y: number) => [x * scale, (792 - y) * scale] }),
       render: vi.fn(() => ({ promise: Promise.resolve() })),
     })),
   };
@@ -83,11 +83,29 @@ it('resolves the destination and reports it when an internal link is clicked', a
   expect(pdfDocument.getDestination).toHaveBeenCalledWith('section-3');
   expect(onNavigate).toHaveBeenCalledWith({
     pageNumber: 3,
+    pointDestination: true,
     bbox: {
-      x0: expect.closeTo(0.0976, 3),
-      y0: expect.closeTo(0.1218, 3),
-      x1: expect.closeTo(0.4176, 3),
-      y1: expect.closeTo(0.2018, 3),
+      x0: expect.closeTo(0.1051, 3),
+      y0: expect.closeTo(0.1718, 3),
+      x1: expect.closeTo(0.1301, 3),
+      y1: expect.closeTo(0.1918, 3),
+    },
+  });
+});
+
+it('uses the exact PDF destination rectangle for FitR links', async () => {
+  const { onNavigate } = renderLayer({ annotations: [
+    { subtype: 'Link', rect: [10, 20, 80, 40], dest: [2, { name: 'FitR' }, 100, 200, 300, 400] },
+  ] });
+  fireEvent.click(await screen.findByTestId('pdf-link-internal'));
+  expect(onNavigate).toHaveBeenCalledWith({
+    pageNumber: 3,
+    pointDestination: false,
+    bbox: {
+      x0: expect.closeTo(100 / 612, 5),
+      y0: expect.closeTo(392 / 792, 5),
+      x1: expect.closeTo(300 / 612, 5),
+      y1: expect.closeTo(592 / 792, 5),
     },
   });
 });

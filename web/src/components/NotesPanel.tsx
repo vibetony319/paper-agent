@@ -4,6 +4,7 @@ import { ApiError } from '../api/client';
 import type { DocumentElement, Note, TextAnchor, TextAnchorDraft } from '../api/types';
 import { hasValidSourceLocation, toAnchorSourceTarget } from '../workspace/sourceTarget';
 import type { SourceTarget } from '../workspace/types';
+import { MarkdownText } from './MarkdownText';
 
 export interface NotesPanelProps {
   paperId: string | null;
@@ -72,7 +73,7 @@ export function NotesPanel({ paperId, activeSource, notes, anchors = [], documen
       const location = source ?? (element && hasValidSourceLocation(element) ? { id: element.id, kind: element.kind, pageNumber: element.page_number, bbox: element.bbox } : null);
       return <article className="notes-panel__note" key={note.id}>
         <button type="button" className="notes-panel__excerpt" aria-label={anchor?.quote ?? (location ? `定位到第 ${location.pageNumber} 页 ${location.kind}` : '原文位置不可用')} disabled={!location} onClick={() => { if (source) onSelectAnchor?.(source); else if (element) onSelectSource(element.id); }}>{anchor?.quote ?? (note.page_number ? `第 ${note.page_number} 页原文` : '未绑定原文')}</button>
-        {editing === note.id ? <textarea aria-label="编辑笔记" value={editBody} onChange={(event) => setEditBody(event.target.value)} /> : <p>{note.body}</p>}
+        {editing === note.id ? <textarea aria-label="编辑笔记" value={editBody} onChange={(event) => setEditBody(event.target.value)} /> : <div className="notes-panel__body"><MarkdownText text={note.body} /></div>}
         <small>第 {anchor?.page_number ?? note.page_number ?? '—'} 页 · {note.note_type === 'translation' ? '翻译' : note.note_type === 'explanation' ? '解释' : '我的笔记'} · {note.model?.display_name ?? '手写'} · {note.user_edited ? '用户已编辑' : note.ai_generated ? 'AI生成' : '手写'}</small>
         <div>{editing === note.id ? <><button type="button" onClick={() => { const version = ++requestVersion.current; void updateNote?.(note.id, editBody, note.updated_at).then((updated) => { if (version !== requestVersion.current) return; if (updated) { setLocalNotes((items) => [...items.filter(({ id }) => id !== note.id), updated]); setEditing(null); } }).catch((reason) => { if (version === requestVersion.current) setError(reason instanceof ApiError && reason.status === 409 ? '笔记已被更新，请刷新后再编辑。' : '笔记更新失败，请稍后重试。'); }); }}>保存修改</button><button type="button" onClick={() => setEditing(null)}>取消</button></> : <button type="button" onClick={() => { setEditing(note.id); setEditBody(note.body); }}>编辑</button>}<button type="button" onClick={() => { void navigator.clipboard?.writeText(note.body); }}>复制</button><button type="button" onClick={() => { void deleteNote?.(note.id).then((deleted) => { if (deleted) setLocalNotes((items) => items.filter(({ id }) => id !== note.id)); else setError('笔记删除失败，请稍后重试。'); }).catch(() => setError('笔记删除失败，请稍后重试。')); }}>删除</button></div>
       </article>;

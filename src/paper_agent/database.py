@@ -285,6 +285,7 @@ conversations = Table(
     Column("id", String(36), primary_key=True),
     Column("paper_id", String(36), ForeignKey("papers.id"), nullable=False),
     Column("mode", String(32), nullable=False),
+    Column("created_at", String),
     UniqueConstraint("paper_id", "id"),
 )
 

@@ -22,6 +22,12 @@ function deferred<T>() {
 
 afterEach(cleanup);
 
+it('renders saved Markdown notes with the same structured text as answers', () => {
+  render(<NotesPanel paperId="paper-a" activeSource={null} notes={[{ id: 'note-a', body: '## 结论\n\n- **关键发现**', element_id: null, page_number: null, note_type: 'manual', ai_generated: false, user_edited: false }]} anchors={[]} documentElements={[]} saveNote={vi.fn()} onSelectSource={vi.fn()} />);
+  expect(screen.getByRole('heading', { name: '结论' })).toBeVisible();
+  expect(screen.getByText('关键发现').tagName).toBe('STRONG');
+});
+
 it('filters translated notes and positions an anchored note from its persisted source', async () => {
   const onSelectAnchor = vi.fn();
   render(

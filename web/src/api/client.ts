@@ -1,15 +1,18 @@
 import type {
   AnnotationBundle,
   ContextUsage,
+  ConversationSummary,
   CreateHighlightInput,
   CreateNoteInput,
   Highlight,
   ModelProfile,
+  ModelConnectionTestResult,
   ModelProfileCreateInput,
   ModelProfileUpdateInput,
   Note,
   PaperDocument,
   PaperSummary,
+  StoredConversation,
   UpdateNoteInput,
   UpdateHighlightInput,
 } from './types';
@@ -142,6 +145,12 @@ export const paperApi = {
   getDocument: (paperId: string, init?: Pick<RequestInit, 'signal'>) =>
     request<PaperDocument>(`/api/papers/${encodeURIComponent(paperId)}/document`, init),
 
+  listConversations: (paperId: string, init?: Pick<RequestInit, 'signal'>) =>
+    request<ConversationSummary[]>(`/api/papers/${encodeURIComponent(paperId)}/agent/conversations`, init),
+
+  getConversation: (paperId: string, conversationId: string, init?: Pick<RequestInit, 'signal'>) =>
+    request<StoredConversation>(`/api/papers/${encodeURIComponent(paperId)}/agent/conversations/${encodeURIComponent(conversationId)}`, init),
+
   getContextUsage: (
     paperId: string,
     conversationId: string,
@@ -232,7 +241,7 @@ export const paperApi = {
     ),
 
   testModelProfile: (profileId: string, revision: number) =>
-    request<ModelProfile>(
+    request<ModelConnectionTestResult>(
       `/api/model-profiles/${encodeURIComponent(profileId)}/test`,
       jsonRequest('POST', undefined, revisionHeaders(revision)),
     ),

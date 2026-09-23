@@ -2,6 +2,7 @@ import type {
   AgentMessage,
   AgentStreamStep,
   ContextUsage,
+  ConversationSummary,
   DocumentElement,
   Highlight,
   Note,
@@ -24,6 +25,8 @@ export const initialWorkspaceState: WorkspaceState = {
   selection: null,
   activeSource: null,
   conversationId: null,
+  conversations: [],
+  historyLoading: false,
   messages: [],
   exchanges: [],
   streaming: null,
@@ -53,6 +56,10 @@ export type WorkspaceAction =
   | { type: 'anchor/created'; paperId: string; loadRevision: number; mutationGeneration?: number; anchor: TextAnchor }
   | { type: 'notes/failed'; paperId: string; loadRevision: number; message: string }
   | { type: 'source/selected'; source: SourceTarget | null }
+  | { type: 'conversation/list-loaded'; paperId: string; loadRevision: number; conversations: ConversationSummary[] }
+  | { type: 'conversation/select'; paperId: string; loadRevision: number; conversationId: string | null }
+  | { type: 'conversation/history-loaded'; paperId: string; loadRevision: number; conversationId: string; exchanges: import('./types').AgentExchange[] }
+  | { type: 'conversation/history-failed'; paperId: string; loadRevision: number; conversationId: string; message: string }
   | {
     type: 'conversation/set';
     paperId: string;
@@ -193,11 +200,34 @@ export function workspaceReducer(
         : state;
     case 'source/selected':
       return { ...state, activeSource: action.source };
+    case 'conversation/list-loaded':
+      return isCurrentLoad(state, action.paperId, action.loadRevision)
+        ? { ...state, conversations: [
+          ...state.conversations.filter(({ id }) => !action.conversations.some((item) => item.id === id)),
+          ...action.conversations,
+        ] }
+        : state;
+    case 'conversation/select':
+      return isCurrentLoad(state, action.paperId, action.loadRevision)
+        ? { ...state, conversationId: action.conversationId, messages: [], exchanges: [], streaming: null, contextUsage: null, historyLoading: action.conversationId !== null }
+        : state;
+    case 'conversation/history-loaded':
+      return isCurrentLoad(state, action.paperId, action.loadRevision) && state.conversationId === action.conversationId
+        ? { ...state, exchanges: action.exchanges, messages: action.exchanges.map(({ message }) => message), historyLoading: false, errorMessage: null }
+        : state;
+    case 'conversation/history-failed':
+      return isCurrentLoad(state, action.paperId, action.loadRevision) && state.conversationId === action.conversationId
+        ? { ...state, historyLoading: false, errorMessage: action.message }
+        : state;
     case 'conversation/set':
       return isCurrentLoad(state, action.paperId, action.loadRevision)
         ? {
           ...state,
           conversationId: action.conversationId,
+          historyLoading: false,
+          conversations: state.conversations.some(({ id }) => id === action.conversationId)
+            ? state.conversations
+            : [{ id: action.conversationId, first_question: action.question }, ...state.conversations],
           messages: [...state.messages, action.message],
           // The stream is cleared below, so capture its steps first — they
           // are the only record of the execution path once streaming is gone.
@@ -215,6 +245,7 @@ export function workspaceReducer(
         ? {
           ...state,
           streaming: { question: action.question, text: '', steps: [], interrupted: false },
+          historyLoading: false,
           errorMessage: null,
         }
         : state;

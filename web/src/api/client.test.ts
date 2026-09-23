@@ -172,22 +172,14 @@ it('sets the default model profile with the If-Match revision', async () => {
 });
 
 it('tests a model profile with the If-Match revision', async () => {
-  const profile = modelProfileFixture({
-    revision: 4,
-    capabilities: {
-      basic_chat: true,
-      structured_output: true,
-      tool_calling: true,
-      checked_at: '2026-08-21T09:30:00Z',
-    },
-  });
+  const result = { reachable: true, http_status: 405 };
   let receivedRevision: string | null = null;
   server.use(http.post('/api/model-profiles/profile-a/test', ({ request }) => {
     receivedRevision = request.headers.get('If-Match');
-    return HttpResponse.json(profile);
+    return HttpResponse.json(result);
   }));
 
-  await expect(paperApi.testModelProfile('profile-a', 3)).resolves.toEqual(profile);
+  await expect(paperApi.testModelProfile('profile-a', 3)).resolves.toEqual(result);
   expect(receivedRevision).toBe('3');
 });
 

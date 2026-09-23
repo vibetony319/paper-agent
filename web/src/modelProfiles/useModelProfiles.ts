@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, paperApi } from '../api/client';
 import type {
   ModelProfile,
+  ModelConnectionTestResult,
   ModelProfileCreateInput,
   ModelProfileUpdateInput,
 } from '../api/types';
@@ -30,7 +31,7 @@ export type ModelProfilesState = {
     input: ModelProfileUpdateInput,
   ): Promise<ModelProfile>;
   deleteProfile(id: string, revision: number): Promise<void>;
-  testProfile(id: string): Promise<ModelProfile>;
+  testProfile(id: string): Promise<ModelConnectionTestResult>;
 };
 
 function isUsable(profile: ModelProfile): boolean {
@@ -168,7 +169,6 @@ export function useModelProfiles(paperId: string | null): ModelProfilesState {
       throw new ApiError(404, '模型档案不存在。');
     }
     const tested = await paperApi.testModelProfile(id, profile.revision);
-    setProfiles((current) => upsertProfile(current, tested));
     return tested;
   }, []);
 

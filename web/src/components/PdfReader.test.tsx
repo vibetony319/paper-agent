@@ -5,7 +5,7 @@ const pdf = vi.hoisted(() => {
   const viewport = {
     width: 612,
     height: 792,
-    convertToViewportPoint: (x: number, y: number): [number, number] => [x, y],
+    convertToViewportPoint: (x: number, y: number): [number, number] => [x, 792 - y],
   };
   const render = vi.fn(() => ({ cancel: vi.fn(), promise: Promise.resolve() }));
   const getViewport = vi.fn(() => viewport);
@@ -318,6 +318,21 @@ it('passes the zoom factor into the rendered page viewport', async () => {
   await waitFor(() => expect(pdf.getViewport).toHaveBeenCalledWith({ scale: 1.25 }));
 });
 
+it('keeps the visible page location anchored when zooming', () => {
+  render(<PdfReader paperId="paper-a" pages={manyPages} activeSource={null} onSourceCleared={vi.fn()} />);
+  const scrollArea = document.querySelector('.pdf-reader__scroll-area') as HTMLElement;
+  scrollArea.scrollTop = 500;
+  scrollArea.getBoundingClientRect = () => new DOMRect(0, 0, 600, 600);
+  const shell = screen.getByTestId('pdf-page-shell-3');
+  shell.getBoundingClientRect = () => screen.getByRole('group', { name: '缩放控制' }).textContent?.includes('125%')
+    ? new DOMRect(0, 375, 600, 1000)
+    : new DOMRect(0, 300, 600, 800);
+
+  fireEvent.click(screen.getByRole('button', { name: '放大' }));
+
+  expect(scrollArea.scrollTop).toBeCloseTo(612.5, 2);
+});
+
 it('clears an active evidence target through the workspace callback', () => {
   const onSourceCleared = vi.fn();
   render(
@@ -463,7 +478,8 @@ it('navigates an internal link to its destination band and keeps a return shortc
     .toHaveTextContent('已跳转到第 4 页链接位置，按 Alt+← 返回原位');
   expect(screen.getByRole('button', { name: '返回原位（Alt+←）' })).toBeVisible();
   await waitFor(() => expect(screen.getByTestId('source-overlay-4'))
-    .toHaveStyle({ top: '0%', height: '2%' }));
+    .toHaveStyle({ top: '0%', height: '2.5%' }));
+  expect(Number.parseFloat(screen.getByTestId('source-overlay-4').style.width)).toBeGreaterThan(30);
 });
 
 it('returns to the previous scroll position with Alt + ArrowLeft after a link jump', async () => {
@@ -485,7 +501,22 @@ it('returns to the previous scroll position with Alt + ArrowLeft after a link ju
   expect(screen.queryByRole('status')).not.toBeInTheDocument();
 });
 
-it('dismisses the link toast after three seconds but keeps the link marker', async () => {
+it('dismisses the link rectangle when clicking elsewhere', async () => {
+  stubCitationLinkToPageFour();
+  render(<PdfReader paperId="paper-a" pages={manyPages} activeSource={null} onSourceCleared={vi.fn()} />);
+  const link = await screen.findByTestId('pdf-link-internal');
+  const scrollArea = document.querySelector('.pdf-reader__scroll-area') as HTMLElement;
+  Object.defineProperty(scrollArea, 'scrollTo', { value: vi.fn() });
+  fireEvent.click(link);
+  expect(await screen.findByTestId('source-overlay-4')).toBeVisible();
+
+  fireEvent.click(screen.getByRole('heading', { name: 'PDF 阅读' }));
+
+  expect(screen.queryByTestId('source-overlay-4')).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: '清除链接定位' })).not.toBeInTheDocument();
+});
+
+it('dismisses both the link toast and target rectangle after three seconds', async () => {
   vi.useFakeTimers();
   stubCitationLinkToPageFour();
   render(<PdfReader paperId="paper-a" pages={manyPages} activeSource={null} onSourceCleared={vi.fn()} />);
@@ -505,5 +536,6 @@ it('dismisses the link toast after three seconds but keeps the link marker', asy
   act(() => { vi.advanceTimersByTime(3_000); });
 
   expect(screen.queryByRole('status')).not.toBeInTheDocument();
-  expect(screen.getByRole('button', { name: '清除链接定位' })).toBeVisible();
+  expect(screen.queryByRole('button', { name: '清除链接定位' })).not.toBeInTheDocument();
+  expect(screen.queryByTestId('source-overlay-4')).not.toBeInTheDocument();
 });

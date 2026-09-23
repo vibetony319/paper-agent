@@ -188,7 +188,7 @@ function inlineNodes(
       const citation = citations.get(token.slice(2, -2).trim());
       nodes.push(
         citation === undefined ? (
-          token
+          <span key={`citation-${key}`} className="markdown-citation--unavailable" title="引用位置不可用">引用位置不可用</span>
         ) : (
           <button
             key={`citation-${key}`}

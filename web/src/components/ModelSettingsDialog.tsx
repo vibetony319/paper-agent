@@ -3,6 +3,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { ApiError } from '../api/client';
 import type {
   ModelProfile,
+  ModelConnectionTestResult,
   ModelProfileCreateInput,
   ModelProfileUpdateInput,
 } from '../api/types';
@@ -19,24 +20,19 @@ export interface ModelSettingsDialogProps {
     input: ModelProfileUpdateInput,
   ) => Promise<ModelProfile>;
   onDelete: (id: string, revision: number) => Promise<void>;
-  onTest: (id: string) => Promise<ModelProfile>;
+  onTest: (id: string) => Promise<ModelConnectionTestResult>;
 }
 
 type DialogView = 'list' | 'create' | 'edit';
-
-type CapabilityKey = 'basic_chat' | 'structured_output' | 'tool_calling';
-
-const CAPABILITY_LABELS: Array<{ key: CapabilityKey; label: string }> = [
-  { key: 'basic_chat', label: '基础对话' },
-  { key: 'structured_output', label: '结构化输出' },
-  { key: 'tool_calling', label: '工具调用' },
-];
 
 const ACTION_FAILED_MESSAGE = '操作失败，请重试。';
 const REVISION_CONFLICT_MESSAGE = '档案数据已被其他修改更新，列表已刷新，请重试。';
 const REQUIRED_FIELDS_MESSAGE = '请填写配置名称、服务地址和模型名称。';
 const TOKEN_LIMITS_MESSAGE = '上下文长度与最大输出必须是正整数（tokens）。';
+const CONTEXT_RANGE_MESSAGE = '上下文长度须在 1000 到 10000000 tokens 之间。';
+const OUTPUT_RANGE_MESSAGE = '最大输出不能超过 200000 tokens；也可以留空，由模型服务决定。';
 const OUTPUT_CAP_MESSAGE = '最大输出 tokens 必须小于上下文长度。';
+const INVALID_PROFILE_MESSAGE = '模型档案信息未通过校验，请检查服务地址和各字段填写范围。';
 
 function parseOptionalTokenLimit(raw: string): number | null | 'invalid' {
   const trimmed = raw.trim();
@@ -48,13 +44,6 @@ function parseOptionalTokenLimit(raw: string): number | null | 'invalid' {
   }
   const value = Number(trimmed);
   return Number.isSafeInteger(value) && value >= 1 ? value : 'invalid';
-}
-
-function capabilityText(capabilities: ModelProfile['capabilities'], key: CapabilityKey): string {
-  if (capabilities.checked_at === null) {
-    return '未测试';
-  }
-  return capabilities[key] ? '检测通过' : '检测未通过（可能是接口不兼容，请重新测试或检查服务配置）';
 }
 
 export function ModelSettingsDialog({
@@ -77,8 +66,8 @@ export function ModelSettingsDialog({
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
-  const [testedCapabilities, setTestedCapabilities] = useState<
-    Record<string, ModelProfile['capabilities']>
+  const [connectionResults, setConnectionResults] = useState<
+    Record<string, { revision: number; httpStatus: number }>
   >({});
 
   const [displayName, setDisplayName] = useState('');
@@ -145,6 +134,14 @@ export function ModelSettingsDialog({
       setErrorMessage(REVISION_CONFLICT_MESSAGE);
       return;
     }
+    if (cause instanceof ApiError && cause.status === 422) {
+      setErrorMessage(INVALID_PROFILE_MESSAGE);
+      return;
+    }
+    if (cause instanceof ApiError && cause.code === 'connection_failed') {
+      setErrorMessage('无法连接服务地址，请检查地址和网络后重试。');
+      return;
+    }
     setErrorMessage(cause instanceof ApiError ? cause.message : ACTION_FAILED_MESSAGE);
   };
 
@@ -183,6 +180,14 @@ export function ModelSettingsDialog({
     const parsedMaxOutputTokens = parseOptionalTokenLimit(maxOutputTokens);
     if (parsedContextLength === 'invalid' || parsedMaxOutputTokens === 'invalid') {
       setErrorMessage(TOKEN_LIMITS_MESSAGE);
+      return;
+    }
+    if (parsedContextLength !== null && (parsedContextLength < 1000 || parsedContextLength > 10_000_000)) {
+      setErrorMessage(CONTEXT_RANGE_MESSAGE);
+      return;
+    }
+    if (parsedMaxOutputTokens !== null && parsedMaxOutputTokens > 200_000) {
+      setErrorMessage(OUTPUT_RANGE_MESSAGE);
       return;
     }
     if (
@@ -240,11 +245,16 @@ export function ModelSettingsDialog({
   const runTest = async (profile: ModelProfile) => {
     setPending(true);
     setErrorMessage(null);
+    setConnectionResults((current) => {
+      const next = { ...current };
+      delete next[profile.id];
+      return next;
+    });
     try {
-      const tested = await onTest(profile.id);
-      setTestedCapabilities((current) => ({
+      const tested: ModelConnectionTestResult = await onTest(profile.id);
+      setConnectionResults((current) => ({
         ...current,
-        [profile.id]: tested.capabilities,
+        [profile.id]: { revision: profile.revision, httpStatus: tested.http_status },
       }));
     } catch (cause) {
       await handleActionError(cause);
@@ -291,7 +301,7 @@ export function ModelSettingsDialog({
           ) : (
             <ul className="model-settings__list">
               {profiles.map((profile) => {
-                const capabilities = testedCapabilities[profile.id] ?? profile.capabilities;
+                const connection = connectionResults[profile.id];
                 return (
                   <li key={profile.id} aria-label={profile.display_name}>
                     <div className="model-settings__item-header">
@@ -305,11 +315,9 @@ export function ModelSettingsDialog({
                       {profile.context_length !== null && ` · 上下文 ${profile.context_length}`}
                       {profile.max_output_tokens !== null && ` · 输出 ${profile.max_output_tokens}`}
                     </p>
-                    <ul className="model-settings__capabilities">
-                      {CAPABILITY_LABELS.map(({ key, label }) => (
-                        <li key={key}>{label}：{capabilityText(capabilities, key)}</li>
-                      ))}
-                    </ul>
+                    {connection?.revision === profile.revision && (
+                      <p role="status">地址已响应（HTTP {connection.httpStatus}）。仅确认网络连通，未验证密钥或模型调用。</p>
+                    )}
                     {confirmingDeleteId === profile.id ? (
                       <div className="model-settings__confirm">
                         <p>确认删除模型档案「{profile.display_name}」？历史记录中的模型快照会保留。</p>
@@ -335,7 +343,7 @@ export function ModelSettingsDialog({
                           disabled={pending}
                           onClick={() => void runTest(profile)}
                         >
-                          测试能力
+                          测试连接
                         </button>
                         <button
                           type="button"
@@ -414,6 +422,7 @@ export function ModelSettingsDialog({
               onChange={(event) => setMaxOutputTokens(event.target.value)}
               placeholder="如 8192，留空不限制"
             />
+            <small>最多 200000 tokens；留空时由模型服务决定。</small>
           </div>
           <div className="model-settings__field">
             <label htmlFor={`${fieldId}-api-key`}>API 密钥（可选）</label>

@@ -224,35 +224,25 @@ it('falls back to the default profile after deleting the selected profile', asyn
   await waitFor(() => expect(result.current.selectedProfileId).toBe('qwen'));
 });
 
-it('merges capability results after testing a profile', async () => {
+it('tests connectivity without changing the profile revision', async () => {
   useProfiles([modelProfile({ id: 'qwen', is_default: true })]);
-  const tested = modelProfile({
-    id: 'qwen',
-    is_default: true,
-    revision: 4,
-    capabilities: {
-      basic_chat: true,
-      structured_output: true,
-      tool_calling: false,
-      checked_at: '2026-08-21T09:30:00Z',
-    },
-  });
   let receivedRevision: string | null = null;
   server.use(http.post('/api/model-profiles/qwen/test', ({ request }) => {
     receivedRevision = request.headers.get('If-Match');
-    return HttpResponse.json(tested);
+    return HttpResponse.json({ reachable: true, http_status: 200 });
   }));
 
   const { result } = renderHook(() => useModelProfiles('paper-a'));
   await waitFor(() => expect(result.current.profiles).toHaveLength(1));
 
+  let connection: { reachable: boolean; http_status: number } | undefined;
   await act(async () => {
-    await result.current.testProfile('qwen');
+    connection = await result.current.testProfile('qwen');
   });
 
   expect(receivedRevision).toBe('3');
-  expect(result.current.profiles[0].capabilities.basic_chat).toBe(true);
-  expect(result.current.profiles[0].revision).toBe(4);
+  expect(connection).toEqual({ reachable: true, http_status: 200 });
+  expect(result.current.profiles[0].revision).toBe(3);
 });
 
 it('propagates api errors from profile actions to the caller', async () => {

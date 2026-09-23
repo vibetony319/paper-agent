@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 
 import { paperApi } from '../api/client';
@@ -45,6 +45,7 @@ type ReaderStatus = 'loading' | 'ready' | 'error';
 
 type LinkJump = PdfLinkTarget & { id: string };
 type ScrollPosition = { top: number; left: number };
+type ZoomAnchor = { pageNumber: number; fractionY: number; viewportOffsetY: number };
 
 const MAX_RETURN_POSITIONS = 16;
 const LINK_TOAST_MS = 3_000;
@@ -130,6 +131,7 @@ export function PdfReader({
   const [returnStack, setReturnStack] = useState<ScrollPosition[]>([]);
   const [linkToast, setLinkToast] = useState<LinkJump | null>(null);
   const toastTimer = useRef<number | null>(null);
+  const zoomAnchor = useRef<ZoomAnchor | null>(null);
   const [sectionsOpen, setSectionsOpen] = useState(false);
   const sectionsToggleRef = useRef<HTMLButtonElement | null>(null);
   const wasSectionsOpen = useRef(false);
@@ -155,7 +157,18 @@ export function PdfReader({
   const showLinkToast = useCallback((jump: LinkJump) => {
     setLinkToast(jump);
     if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
-    toastTimer.current = window.setTimeout(() => setLinkToast(null), LINK_TOAST_MS);
+    toastTimer.current = window.setTimeout(() => {
+      setLinkToast(null);
+      setLinkTarget(null);
+      toastTimer.current = null;
+    }, LINK_TOAST_MS);
+  }, []);
+
+  const dismissLinkTarget = useCallback(() => {
+    if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
+    toastTimer.current = null;
+    setLinkToast(null);
+    setLinkTarget(null);
   }, []);
 
   const handleLinkNavigate = useCallback((target: PdfLinkTarget) => {
@@ -177,7 +190,11 @@ export function PdfReader({
     // Land the destination band near the top of the viewport instead of
     // snapping the whole page; shells keep their aspect-ratio height even
     // before the virtualized page content renders.
-    const offsetY = target.bbox !== null ? target.bbox.y0 * shellRect.height : 0;
+    const shellStyle = window.getComputedStyle(shell);
+    const paddingTop = Number.parseFloat(shellStyle.paddingTop) || 0;
+    const paddingBottom = Number.parseFloat(shellStyle.paddingBottom) || 0;
+    const contentHeight = Math.max(0, shellRect.height - paddingTop - paddingBottom);
+    const offsetY = target.bbox !== null ? paddingTop + target.bbox.y0 * contentHeight : 0;
     const top = Math.max(0, shellRect.top - areaRect.top + scrollContainer.scrollTop + offsetY - 80);
     const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     scrollContainer.scrollTo({ top, behavior: reducedMotion ? 'auto' : 'smooth' });
@@ -187,8 +204,7 @@ export function PdfReader({
     const position = returnStack[returnStack.length - 1];
     if (position === undefined) return;
     setReturnStack((stack) => stack.slice(0, -1));
-    setLinkTarget(null);
-    setLinkToast(null);
+    dismissLinkTarget();
     const scrollContainer = resolveScrollContainer(scrollAreaRef.current);
     if (scrollContainer === null) return;
     const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
@@ -197,11 +213,22 @@ export function PdfReader({
       left: position.left,
       behavior: reducedMotion ? 'auto' : 'smooth',
     });
-  }, [returnStack]);
+  }, [dismissLinkTarget, returnStack]);
 
   useEffect(() => () => {
     if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
   }, []);
+
+  useEffect(() => {
+    if (linkTarget === null) return undefined;
+    const onClick = (event: MouseEvent) => {
+      const target = event.target;
+      if (target instanceof Element && target.closest('.pdf-link-hitbox, .pdf-reader__link-actions, .pdf-reader__link-toast')) return;
+      dismissLinkTarget();
+    };
+    document.addEventListener('click', onClick);
+    return () => document.removeEventListener('click', onClick);
+  }, [dismissLinkTarget, linkTarget]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -248,11 +275,76 @@ export function PdfReader({
     else onSelectionClear?.();
   }, [onSelectionClear, onSelectionSet]);
 
-  const shiftZoom = useCallback((direction: 1 | -1) => {
-    setZoom((current) => nextZoom(current, direction));
+  const captureZoomAnchor = useCallback((): ZoomAnchor | null => {
+    const scrollContainer = resolveScrollContainer(scrollAreaRef.current);
+    if (scrollContainer === null) return null;
+    const viewport = scrollContainer.getBoundingClientRect();
+    if (viewport.height <= 0) return null;
+    let best: { pageNumber: number; rect: DOMRect; visibleTop: number; visibleBottom: number } | null = null;
+    for (const [pageNumber, shell] of pageShells.current) {
+      const rect = shell.getBoundingClientRect();
+      if (rect.height <= 0) continue;
+      const visibleTop = Math.max(rect.top, viewport.top);
+      const visibleBottom = Math.min(rect.bottom, viewport.bottom);
+      if (visibleBottom <= visibleTop) continue;
+      if (best === null || visibleBottom - visibleTop > best.visibleBottom - best.visibleTop) {
+        best = { pageNumber, rect, visibleTop, visibleBottom };
+      }
+    }
+    if (best === null) return null;
+    const focusY = (best.visibleTop + best.visibleBottom) / 2;
+    return {
+      pageNumber: best.pageNumber,
+      fractionY: (focusY - best.rect.top) / best.rect.height,
+      viewportOffsetY: focusY - viewport.top,
+    };
   }, []);
 
-  const resetZoom = useCallback(() => setZoom(1), []);
+  const changeZoom = useCallback((next: number) => {
+    if (next === zoom) return;
+    zoomAnchor.current = captureZoomAnchor();
+    setZoom(next);
+  }, [captureZoomAnchor, zoom]);
+
+  const shiftZoom = useCallback((direction: 1 | -1) => {
+    changeZoom(nextZoom(zoom, direction));
+  }, [changeZoom, zoom]);
+
+  const resetZoom = useCallback(() => changeZoom(1), [changeZoom]);
+
+  useLayoutEffect(() => {
+    const anchor = zoomAnchor.current;
+    zoomAnchor.current = null;
+    if (anchor === null) return undefined;
+    const scrollContainer = resolveScrollContainer(scrollAreaRef.current);
+    const shell = pageShells.current.get(anchor.pageNumber);
+    if (scrollContainer === null || shell === undefined) return undefined;
+    let lastScrollTop = scrollContainer.scrollTop;
+    const restore = () => {
+      // Stop holding the anchor if the reader has deliberately scrolled again.
+      if (Math.abs(scrollContainer.scrollTop - lastScrollTop) > 2) return false;
+      const viewport = scrollContainer.getBoundingClientRect();
+      const pageRect = shell.getBoundingClientRect();
+      const anchorY = pageRect.top + anchor.fractionY * pageRect.height;
+      scrollContainer.scrollTop += anchorY - (viewport.top + anchor.viewportOffsetY);
+      lastScrollTop = scrollContainer.scrollTop;
+      return true;
+    };
+    restore();
+    // PDF.js resizes canvases after getPage resolves. Earlier page shells can
+    // then grow and move this page even though the initial zoom was anchored.
+    const pagesElement = scrollAreaRef.current?.querySelector<HTMLElement>('.pdf-reader__pages');
+    if (pagesElement === null || pagesElement === undefined || typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver(() => {
+      if (!restore()) observer.disconnect();
+    });
+    observer.observe(pagesElement);
+    const timeout = window.setTimeout(() => observer.disconnect(), 1_500);
+    return () => {
+      observer.disconnect();
+      window.clearTimeout(timeout);
+    };
+  }, [zoom]);
 
   useEffect(() => {
     const reader = readerRef.current;
@@ -260,11 +352,11 @@ export function PdfReader({
     const onWheel = (event: WheelEvent) => {
       if (!event.ctrlKey && !event.metaKey) return;
       event.preventDefault();
-      setZoom((current) => nextZoom(current, event.deltaY < 0 ? 1 : -1));
+      shiftZoom(event.deltaY < 0 ? 1 : -1);
     };
     reader.addEventListener('wheel', onWheel, { passive: false });
     return () => reader.removeEventListener('wheel', onWheel);
-  }, []);
+  }, [shiftZoom]);
 
   useEffect(() => {
     const onSelectionChange = () => captureSelection();
@@ -360,7 +452,7 @@ export function PdfReader({
         }
         if (event.key === 'Escape' && linkTarget !== null) {
           event.preventDefault();
-          setLinkTarget(null);
+          dismissLinkTarget();
           return;
         }
         if (event.ctrlKey || event.metaKey) {
@@ -437,7 +529,7 @@ export function PdfReader({
             {returnStack.length > 0 ? (
               <button type="button" onClick={popReturnPosition}>返回原位（Alt+←）</button>
             ) : null}
-            <button type="button" onClick={() => setLinkTarget(null)}>清除链接定位</button>
+            <button type="button" onClick={dismissLinkTarget}>清除链接定位</button>
           </span>
         </div>
       ) : null}
@@ -499,7 +591,7 @@ export function PdfReader({
             const overlays: SourceTarget[] = [];
             if (activeSource?.pageNumber === page.number) overlays.push(activeSource);
             if (linkTarget?.pageNumber === page.number && linkTarget.bbox !== null) {
-              overlays.push({ id: linkTarget.id, kind: 'link', pageNumber: linkTarget.pageNumber, bbox: linkTarget.bbox });
+              overlays.push({ id: linkTarget.id, kind: 'link', pageNumber: linkTarget.pageNumber, bbox: linkTarget.bbox, linkPoint: linkTarget.pointDestination });
             }
             const pageHighlights = highlights.filter(({ anchor }) => anchor.page_number === page.number);
             return (

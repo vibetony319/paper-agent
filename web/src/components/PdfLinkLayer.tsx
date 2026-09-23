@@ -9,6 +9,8 @@ import { PdfLinkPreview } from './PdfLinkPreview';
 export interface PdfLinkTarget {
   pageNumber: number;
   bbox: BoundingBox | null;
+  /** Point destinations need their nearby text line resolved after rendering. */
+  pointDestination: boolean;
 }
 
 type PdfLinkLayerProps = {
@@ -78,30 +80,57 @@ async function resolveDest(
   }
   if (pageNumber === null) return null;
 
-  // Explicit destinations are [page, type, left, top, zoom] in PDF user
-  // space (origin bottom-left). Synthesize a highlight band at the target.
-  const left = typeof explicit[2] === 'number' ? explicit[2] : null;
-  const top = typeof explicit[3] === 'number' ? explicit[3] : null;
+  // Destinations use PDF user coordinates. Convert them through PDF.js's
+  // viewport so crop boxes and page rotation match the rendered surface.
+  const destinationType = typeof explicit[1] === 'object' && explicit[1] !== null
+    ? ((explicit[1] as { name?: string; type?: string }).name ?? (explicit[1] as { type?: string }).type)
+    : null;
+  const left = typeof explicit[2] === 'number' && Number.isFinite(explicit[2]) ? explicit[2] : null;
+  const top = typeof explicit[3] === 'number' && Number.isFinite(explicit[3]) ? explicit[3] : null;
   let bbox: BoundingBox | null = null;
-  if (left !== null || top !== null) {
+  let pointDestination = false;
+  if ((destinationType === 'XYZ' || destinationType === 'FitH' || destinationType === 'FitBH' || destinationType === 'FitV' || destinationType === 'FitBV') && (left !== null || top !== null)) {
+    pointDestination = true;
     try {
       const page = await document.getPage(pageNumber);
-      const [x0, y0, x1, y1] = page.view as [number, number, number, number];
-      const width = Math.max(x1 - x0, 1);
-      const height = Math.max(y1 - y0, 1);
-      const normalizedLeft = left === null ? 0 : clamp01((left - x0) / width);
-      const normalizedTop = top === null ? 0 : clamp01((y1 - top) / height);
+      const viewport = page.getViewport({ scale: 1 });
+      const [viewX0, , , viewY1] = page.view as [number, number, number, number];
+      const x = destinationType === 'FitH' || destinationType === 'FitBH' ? viewX0 : left ?? viewX0;
+      const y = destinationType === 'FitV' || destinationType === 'FitBV' ? viewY1
+        : destinationType === 'FitH' || destinationType === 'FitBH' ? left ?? viewY1
+          : top ?? viewY1;
+      const [pointX, pointY] = viewport.convertToViewportPoint(x, y);
+      const normalizedLeft = clamp01(pointX / viewport.width);
+      const normalizedTop = clamp01(pointY / viewport.height);
+      const markerWidth = Math.min(0.025, 16 / viewport.width);
+      const markerHeight = Math.min(0.02, 16 / viewport.height);
       bbox = {
-        x0: left === null ? 0 : Math.max(0, normalizedLeft - 0.02),
-        y0: Math.max(0, normalizedTop - 0.06),
-        x1: left === null ? 1 : Math.min(1, normalizedLeft + 0.3),
-        y1: Math.min(1, normalizedTop + 0.02),
+        x0: Math.max(0, normalizedLeft - markerWidth / 2),
+        y0: Math.max(0, normalizedTop - markerHeight / 2),
+        x1: Math.min(1, normalizedLeft + markerWidth / 2),
+        y1: Math.min(1, normalizedTop + markerHeight / 2),
       };
     } catch {
       bbox = null;
     }
+  } else if (destinationType === 'FitR' && explicit.length >= 6 && explicit.slice(2, 6).every((value) => typeof value === 'number' && Number.isFinite(value))) {
+    try {
+      const page = await document.getPage(pageNumber);
+      const viewport = page.getViewport({ scale: 1 });
+      const [firstX, firstY] = viewport.convertToViewportPoint(explicit[2] as number, explicit[3] as number);
+      const [secondX, secondY] = viewport.convertToViewportPoint(explicit[4] as number, explicit[5] as number);
+      bbox = {
+        x0: clamp01(Math.min(firstX, secondX) / viewport.width),
+        y0: clamp01(Math.min(firstY, secondY) / viewport.height),
+        x1: clamp01(Math.max(firstX, secondX) / viewport.width),
+        y1: clamp01(Math.max(firstY, secondY) / viewport.height),
+      };
+      if (bbox.x0 >= bbox.x1 || bbox.y0 >= bbox.y1) bbox = null;
+    } catch {
+      bbox = null;
+    }
   }
-  return { pageNumber, bbox };
+  return { pageNumber, bbox, pointDestination };
 }
 
 function hitboxStyle(rect: number[], viewport: PageViewport): CSSProperties {

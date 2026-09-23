@@ -218,6 +218,12 @@ export function WorkspaceShell({
                 paperId={paper.id}
                 agent={{
                   exchanges: workspace.exchanges,
+                  conversations: workspace.conversations,
+                  conversationId: workspace.conversationId,
+                  historyLoading: workspace.historyLoading,
+                  conversationBusy: workspace.streaming !== null && !workspace.streaming.interrupted,
+                  onSelectConversation: workspace.selectConversation,
+                  onAddToNotes: (body) => workspace.saveNote(body),
                   onSelectCitation: workspace.selectCitation,
                   onSelectNoteReference: (noteId) => {
                     const note = workspace.notes.find((item) => item.id === noteId);
@@ -247,6 +253,7 @@ export function WorkspaceShell({
                   streamingSteps: workspace.streaming?.steps ?? [],
                   streamInterrupted: workspace.streaming?.interrupted ?? false,
                   contextUsage: workspace.contextUsage,
+                  conversationLoading: workspace.historyLoading,
                   attachment: currentComposerAttachment,
                   onAttachmentClear: (token) => setComposerAttachment((current) => (
                     current?.paperId === paper.id && current.token === token ? null : current

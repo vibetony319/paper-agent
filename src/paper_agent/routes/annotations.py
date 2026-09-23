@@ -78,14 +78,6 @@ def _resolve_chat_model(
         raise HTTPException(
             status_code=503, detail="Reasoning model is not configured."
         ) from None
-    capabilities = resolved.profile.capabilities
-    if not provider.is_read_only_profile(resolved.profile.id) and (
-        not capabilities.basic_chat
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail="Selected model does not support text generation.",
-        )
     return resolved
 
 

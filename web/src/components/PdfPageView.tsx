@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { PDFDocumentProxy, PDFPageProxy, PageViewport, RenderTask } from 'pdfjs-dist';
 
-import type { Highlight, HighlightColor, Page } from '../api/types';
+import type { BoundingBox, Highlight, HighlightColor, Page } from '../api/types';
 import { TextLayer } from '../pdfjs';
 import type { SourceTarget } from '../workspace/types';
 import { PdfLinkLayer, type PdfLinkTarget } from './PdfLinkLayer';
-import { sourceOverlayStyle } from './pdfGeometry';
+import { linkTextLineBox, sourceOverlayStyle } from './pdfGeometry';
 import { AnnotationOverlay } from './AnnotationOverlay';
 
 type PdfPageViewProps = {
@@ -57,6 +57,21 @@ export function PdfPageView({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [hasSelectableText, setHasSelectableText] = useState(true);
   const [linkLayer, setLinkLayer] = useState<{ pdfPage: PDFPageProxy; viewport: PageViewport } | null>(null);
+  const [resolvedLinkPoint, setResolvedLinkPoint] = useState<{ id: string; bbox: BoundingBox } | null>(null);
+  const pointOverlay = overlays.find((overlay) => overlay.kind === 'link' && overlay.linkPoint);
+
+  useLayoutEffect(() => {
+    const surface = surfaceRef.current;
+    const textLayer = textLayerRef.current;
+    if (pointOverlay === undefined || linkLayer === null || surface === null || textLayer === null) {
+      setResolvedLinkPoint(null);
+      return;
+    }
+    setResolvedLinkPoint({
+      id: pointOverlay.id,
+      bbox: linkTextLineBox(surface, textLayer, pointOverlay.bbox),
+    });
+  }, [linkLayer, pointOverlay?.id, pointOverlay?.bbox.x0, pointOverlay?.bbox.y0, pointOverlay?.bbox.x1, pointOverlay?.bbox.y1]);
 
   useEffect(() => {
     if (!active || typeof ResizeObserver === 'undefined') return undefined;
@@ -186,15 +201,22 @@ export function PdfPageView({
           onDeleteHighlight={onHighlightDeleted}
           onChangeColor={onHighlightColorChange}
         />
-        {overlays.map((overlay) => (
-          <div
-            key={overlay.id}
-            className="pdf-reader__overlay"
-            data-testid={`source-overlay-${page.number}`}
-            style={sourceOverlayStyle(overlay) ?? undefined}
-            aria-label="当前证据位置"
-          />
-        ))}
+        {overlays.map((overlay) => {
+          const bbox = overlay.linkPoint
+            ? (resolvedLinkPoint?.id === overlay.id ? resolvedLinkPoint.bbox : null)
+            : overlay.bbox;
+          if (bbox === null) return null;
+          return (
+            <div
+              key={overlay.id}
+              className="pdf-reader__overlay"
+              data-link-target={overlay.kind === 'link' ? 'true' : undefined}
+              data-testid={`source-overlay-${page.number}`}
+              style={sourceOverlayStyle({ ...overlay, bbox }) ?? undefined}
+              aria-label={overlay.kind === 'link' ? '当前链接位置' : '当前证据位置'}
+            />
+          );
+        })}
       </div>
       {!hasSelectableText ? <p className="pdf-page-view__no-text">该页无法选择文字</p> : null}
       {errorMessage !== null ? <p className="pdf-reader__error" role="alert">{errorMessage}</p> : null}

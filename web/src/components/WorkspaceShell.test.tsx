@@ -34,10 +34,10 @@ function workspaceFixture() {
   return {
     activePaperId: 'paper-a', loadRevision: 1,
     document: { paper: { id: 'paper-a', original_filename: 'paper.pdf', status: 'completed' as const }, pages: [], sections: [], elements: [], notes: [] },
-    notes: [] as Note[], anchors: [] as TextAnchor[], highlights: [], selection: null, activeSource: null, messages: [] as AgentMessage[], exchanges: [] as Array<{ question: string; message: AgentMessage; steps: AgentStreamStep[] }>, errorMessage: null as string | null, notesErrorMessage: null as string | null,
+    notes: [] as Note[], anchors: [] as TextAnchor[], highlights: [], selection: null, activeSource: null, messages: [] as AgentMessage[], exchanges: [] as Array<{ question: string; message: AgentMessage; steps: AgentStreamStep[] }>, conversations: [], conversationId: null, historyLoading: false, streaming: null, contextUsage: null, errorMessage: null as string | null, notesErrorMessage: null as string | null,
     clearActiveSource: vi.fn(), setSelection: vi.fn(), clearSelection: vi.fn(), createHighlight: vi.fn(), deleteHighlight: vi.fn(), runSelectionAssist: vi.fn(), saveNote: vi.fn(),
     selectCitation: vi.fn(), selectElementSource: vi.fn(), selectAnchorSource: vi.fn(), updateNote: vi.fn(), deleteNote: vi.fn(),
-    askAgent: vi.fn(),
+    askAgent: vi.fn(), selectConversation: vi.fn(),
   };
 }
 

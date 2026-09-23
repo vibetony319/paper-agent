@@ -962,6 +962,7 @@ textarea::placeholder {
   display: flex;
   flex-direction: column;
   gap: 1.1rem;
+  overflow-anchor: none;
   overflow-x: auto;
   padding-bottom: 1rem;
 }
@@ -1055,6 +1056,11 @@ textarea::placeholder {
   box-sizing: border-box;
   pointer-events: none;
   position: absolute;
+}
+
+.pdf-reader__overlay[data-link-target='true'] {
+  background: rgb(30 92 70 / 18%);
+  border-radius: 3px;
 }
 
 /* PDF link annotations */
@@ -1838,6 +1844,24 @@ textarea::placeholder {
 }
 .agent-panel { gap: 0; padding: 24px 20px 0; }
 .agent-panel__conversation { gap: 32px; }
+.agent-panel__history { display: flex; align-items: center; gap: 8px; padding: 12px 20px 0; flex-wrap: wrap; }
+.agent-panel__history label { color: var(--ink-soft); font-size: 12px; font-weight: 700; }
+.agent-panel__history select { flex: 1; min-width: 140px; max-width: 100%; }
+.agent-panel__history button, .agent-panel__actions button { font-size: 12px; padding: 5px 9px; }
+.agent-panel__index { margin: 8px 20px 16px; border: 1px solid var(--line); border-radius: var(--radius-control); padding: 8px 10px; font-size: 12px; }
+.agent-panel__index summary { cursor: pointer; color: var(--accent-strong); font-weight: 700; }
+.agent-panel__index ol { max-height: 180px; overflow-y: auto; margin: 8px 0 0; padding-left: 20px; }
+.agent-panel__index li + li { margin-top: 4px; }
+.agent-panel__index button { width: 100%; border: 0; background: transparent; text-align: left; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-panel__exchange { scroll-margin-top: 24px; }
+.agent-panel__actions { display: flex; align-items: center; gap: 8px; color: var(--danger-strong); font-size: 12px; }
+.notes-panel__body { font-family: inherit; font-size: 14px; line-height: 1.85; overflow-wrap: anywhere; }
+.notes-panel__body p { margin: 0 0 10px; }
+.notes-panel__body p:last-child { margin-bottom: 0; }
+.notes-panel__body h3, .notes-panel__body h4, .notes-panel__body h5 { font-size: 14px; font-weight: 700; margin: 16px 0 8px; }
+.notes-panel__body h3:first-child, .notes-panel__body h4:first-child, .notes-panel__body h5:first-child { margin-top: 0; }
+.markdown-citation--unavailable { color: var(--ink-soft); font-size: 12px; }
+.paper-library__upload--dragging { border-color: var(--accent); background: var(--accent-soft); box-shadow: 0 0 0 3px var(--accent-softer); }
 .agent-panel__exchange { border: 0; padding: 0; gap: 12px; min-width: 0; }
 .agent-panel__question {
   justify-self: end;

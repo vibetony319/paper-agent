@@ -68,9 +68,9 @@
 | `PATCH /api/model-profiles/{profile_id}` | 有 `If-Match`；部分更新档案字段和可选 `api_key`，返回新 revision。`context_length`/`max_output_tokens` 显式 `null` 表示清除（不压缩不限制），省略表示不变。 | `404 profile_not_found`、`409 profile_read_only` / `revision_conflict`、`422 validation_error`、`503 secret_store_unavailable`。相同 revision 的一次 compare-and-swap；重放旧 revision 可能冲突。 |
 | `DELETE /api/model-profiles/{profile_id}` | 有 `If-Match`；软删除并删除关联秘密，若删除默认档案会选另一启用档案为默认。 | 成功 `204`；`409 profile_in_use` 表示请求持有 usage lease，稍后重试；其余同 PATCH。不是删除幂等，已删除为 not found。 |
 | `POST /api/model-profiles/{profile_id}/default` | 有 `If-Match`；将启用档案设为默认，返回档案。 | `404 profile_not_found`、`409 profile_read_only` / `revision_conflict`、`422 validation_error`。compare-and-swap 语义。 |
-| `POST /api/model-profiles/{profile_id}/test` | 有 `If-Match`；探测 basic chat、structured output、tool calling，并在可写档案上保存能力结果及新 revision。 | `404 profile_not_found`、`409 revision_conflict` / `profile_read_only`、`503 model_unavailable`、`422 validation_error`。会探测外部模型，不能当作无副作用重试。 |
+| `POST /api/model-profiles/{profile_id}/test` | 有 `If-Match`；对服务地址发 HEAD 请求（3 秒超时），返回 `{reachable: true, http_status}`。不发送密钥、不生成回答、不修改档案。任意 HTTP 状态表示网络连通。 | `404 profile_not_found`、`409 revision_conflict`、`503 connection_failed`。可安全重试。 |
 
-## Agent 与会话（4 个操作）
+## Agent 与会话（5 个操作）
 
 主 Agent 的最终回答是 Markdown，不再使用结构化 JSON：服务完成工具循环后流式生成正文，再从正文里解析出可选的页面链接。两种传输共用同一套回合准备（前置校验、用户消息落库、笔记注入、工具循环、引用清洗），差别只在回答怎么返回。
 
@@ -83,9 +83,10 @@
 
 | 方法与路径 | 用途与重要请求/响应字段 | 稳定错误 / 幂等 |
 | --- | --- | --- |
-| `POST /api/papers/{paper_id}/agent/messages` | [`AgentMessageRequest`](#schema-索引)：`content`、可选 `conversation_id`/`selection`、必填 `model_profile_id` 和 `request_id`。返回 [`AgentMessageResponse`](#schema-索引)：会话/消息 ID、`grounded|insufficient_evidence`、答案、引用、模型快照、实际注入笔记引用，以及 `context_usage`（下一轮请求的估算上下文占用）。 | `404` 论文/会话不存在；`409` 前置阶段不完整、工具调用能力不足、删除活跃或 request_id 与已存重试不一致；`422` 无效选区；`503` 模型未配置；`502` 模型或最终输出不能完成。相同论文和完全相同 request_id 已完成时重放保存的回合；部分用户消息的重试还必须匹配内容、会话、档案及不可变快照。 |
+| `POST /api/papers/{paper_id}/agent/messages` | [`AgentMessageRequest`](#schema-索引)：`content`、可选 `conversation_id`/`selection`、必填 `model_profile_id` 和 `request_id`。返回 [`AgentMessageResponse`](#schema-索引)：会话/消息 ID、`grounded|insufficient_evidence`、答案、引用、模型快照、实际注入笔记引用，以及 `context_usage`（下一轮请求的估算上下文占用）。 | `404` 论文/会话不存在；`409` 前置阶段不完整、删除活跃或 request_id 与已存重试不一致；`422` 无效选区；`503` 模型未配置；`502` 模型或最终输出不能完成。相同论文和完全相同 request_id 已完成时重放保存的回合；部分用户消息的重试还必须匹配内容、会话、档案及不可变快照。 |
 | `POST /api/papers/{paper_id}/agent/messages/stream` | 同一请求体，`text/event-stream` 响应：`started`（`request_id`）、`delta`（`text`，增量 Markdown）、`completed`（`message` 与 `AgentMessageResponse` 同构 + 可选 `context_usage`）、`error`（`code`、`detail`）。 | 请求校验（`404`/`409`/`422`/`503`）仍在开流前以普通 JSON 错误返回，开流后的失败是 `error` 事件。整段回答到达前不写库，中断的流不会留下半条助手消息；已完成回合重放只发 `started` + `completed`。 |
-| `GET /api/papers/{paper_id}/agent/conversations/{conversation_id}` | 返回 [`ConversationResponse`](#schema-索引)，含用户/助手消息、历史模型快照、引用和笔记引用可用性。 | 论文或会话不存在 `404`；只读。 |
+| `GET /api/papers/{paper_id}/agent/conversations` | 返回该论文的会话列表，按创建时间倒序，每项包含 `id` 和第一轮问题 `first_question`。 | 论文不存在 `404`；只读。 |
+| `GET /api/papers/{paper_id}/agent/conversations/{conversation_id}` | 返回 [`ConversationResponse`](#schema-索引)，含用户/助手消息、历史模型快照、引用、背景知识和笔记引用可用性。 | 论文或会话不存在 `404`；只读。 |
 | `GET /api/papers/{paper_id}/agent/conversations/{conversation_id}/context-usage` | 查询参数 `model_profile_id` 必填。返回 [`ContextUsageResponse`](#schema-索引)：`used_tokens`（下一轮请求估算：系统提示 + 最近 6 条持久化消息 + 工具定义开销）、`context_length`/`effective_limit`/`compaction_threshold`/`percent`（档案未配置 `context_length` 时后四项为 `null`）。与自动压缩使用同一估算器。 | 论文或会话不存在 `404`；`model_profile_id` 无效 `422`；模型档案不可解析 `503`；只读。 |
 | `POST /api/agent/health` | 校验默认/环境回退模型的工具调用能力，返回 `AgentHealthResponse`（默认 `status: "ok"`）。 | `503` 工具调用不可用；只做能力探测，不写业务数据，可安全重复。 |
 
@@ -93,7 +94,7 @@
 
 ## Schema 索引
 
-以下 schema 均以运行时 OpenAPI 为准：`PaperSummaryResponse`、`PaperDocumentResponse`、`PaperDeleteRequest`、`TextAnchorDraftRequest`、`AnnotationBundleResponse`、`HighlightCreateRequest`、`HighlightResponse`、`NoteRequest`、`NoteUpdateRequest`、`NoteResponse`、`SelectionAssistRequest`、`ModelProfileCreateRequest`、`ModelProfilePatchRequest`、`ModelProfileResponse`、`ModelProfileErrorResponse`、`AgentMessageRequest`、`AgentMessageResponse`、`ContextUsageResponse`、`ConversationResponse`、`AgentHealthResponse`。
+以下 schema 均以运行时 OpenAPI 为准：`PaperSummaryResponse`、`PaperDocumentResponse`、`PaperDeleteRequest`、`TextAnchorDraftRequest`、`AnnotationBundleResponse`、`HighlightCreateRequest`、`HighlightResponse`、`NoteRequest`、`NoteUpdateRequest`、`NoteResponse`、`SelectionAssistRequest`、`ModelProfileCreateRequest`、`ModelProfilePatchRequest`、`ModelProfileResponse`、`ModelConnectionTestResponse`、`ModelProfileErrorResponse`、`AgentMessageRequest`、`AgentMessageResponse`、`ContextUsageResponse`、`ConversationSummaryResponse`、`ConversationResponse`、`AgentHealthResponse`。
 
 重点响应字段：
 

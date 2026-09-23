@@ -113,7 +113,7 @@ def test_selection_assist_without_model_is_safe_503(
     assert response.json() == {"detail": "Reasoning model is not configured."}
 
 
-def test_selection_assist_rejects_missing_basic_chat_capability(
+def test_selection_assist_runs_without_saved_capability_results(
     tmp_path: Path, sample_pdf: Path, monkeypatch
 ) -> None:
     client = _configured_client(tmp_path, monkeypatch)
@@ -134,7 +134,8 @@ def test_selection_assist_rejects_missing_basic_chat_capability(
             json=_payload(profile_id=profile["id"]),
         )
 
-        assert response.status_code == 409
+        assert response.status_code == 200
+        assert "event: completed" in response.text
         assert "profile-secret" not in response.text
     finally:
         client.close()
